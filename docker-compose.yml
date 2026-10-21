@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: testbed
+      POSTGRES_USER: testbed
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в файле .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testbed -d testbed"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Порт базы наружу не открыт: к ней обращается только приложение внутри Docker.
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://testbed:${POSTGRES_PASSWORD}@db:5432/testbed
+      PORT: 3000
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - ./import:/app/import:ro
+
+  # Доступ из интернета через Cloudflare Tunnel (необязательно).
+  # Запускается только командой: docker compose --profile tunnel up -d
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
