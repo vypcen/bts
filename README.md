@@ -1,4 +1,4 @@
-# Testbed QA
+# TestBol QA
 
 Система управления тестированием: проекты, тест-кейсы, тест-прогоны, баг-репорты и вложения. Изменения сразу видны всем участникам.
 
@@ -10,7 +10,7 @@
 **Стек:** Node.js 20 + Express, PostgreSQL 16, React 18 + TypeScript (сборка Vite), Docker Compose.
 
 ```
-testbed-qa/
+testbol-qa/
 ├── docker-compose.yml     # приложение + PostgreSQL (+ необязательный Cloudflare Tunnel)
 ├── Dockerfile             # образ приложения
 ├── .env.example           # шаблон настроек → скопировать в .env
@@ -55,20 +55,20 @@ git --version
 
 ### Шаг 2. Получить код
 
-**Вариант А — из архива.** Распакуйте `testbed-qa.zip` в удобную папку, например `C:\testbed-qa` или `~/testbed-qa`. В архиве уже есть git-репозиторий с первым коммитом.
+**Вариант А — из архива.** Распакуйте `testbol-qa.zip` в удобную папку, например `C:\testbol-qa` или `~/testbol-qa`. В архиве уже есть git-репозиторий с первым коммитом.
 
 **Вариант Б — через GitHub** (удобно, чтобы хранить код и обновлять его):
 
-1. На github.com создайте **приватный** репозиторий `testbed-qa` без README.
+1. На github.com создайте **приватный** репозиторий `testbol-qa` без README.
 2. На основном компьютере в распакованной папке выполните:
    ```sh
-   git remote add origin https://github.com/<ваш-логин>/testbed-qa.git
+   git remote add origin https://github.com/<ваш-логин>/testbol-qa.git
    git push -u origin main
    ```
 3. На втором компьютере:
    ```sh
-   git clone https://github.com/<ваш-логин>/testbed-qa.git
-   cd testbed-qa
+   git clone https://github.com/<ваш-логин>/testbol-qa.git
+   cd testbol-qa
    ```
 
 Файл `import/export.json` с данными из прошлой версии в репозиторий не попадает (в нём хэши паролей). Если нужен импорт, скопируйте его на второй компьютер в папку `import/` вручную.
@@ -108,7 +108,7 @@ docker compose ps
 docker compose logs app
 ```
 
-В логах должна быть строка `Testbed QA запущен: http://localhost:3000`.
+В логах должна быть строка `TestBol QA запущен: http://localhost:3000`.
 
 ### Шаг 5. Открыть приложение
 
@@ -143,15 +143,15 @@ powershell -ExecutionPolicy Bypass -File scripts\backup.ps1
 
 В папке `backups/` появятся дамп базы и архив вложений, хранятся последние 14 копий. Чтобы делать это каждую ночь:
 
-- **Linux/macOS:** `crontab -e` и строка `0 3 * * * cd /путь/к/testbed-qa && ./scripts/backup.sh`
-- **Windows:** Планировщик заданий → Создать простую задачу → Ежедневно → Запуск программы `powershell`, аргументы `-ExecutionPolicy Bypass -File C:\testbed-qa\scripts\backup.ps1`.
+- **Linux/macOS:** `crontab -e` и строка `0 3 * * * cd /путь/к/testbol-qa && ./scripts/backup.sh`
+- **Windows:** Планировщик заданий → Создать простую задачу → Ежедневно → Запуск программы `powershell`, аргументы `-ExecutionPolicy Bypass -File C:\testbol-qa\scripts\backup.ps1`.
 
 Хорошо бы время от времени копировать папку `backups/` на другой диск или в облако.
 
 Восстановление из копии:
 
 ```sh
-gunzip -c backups/testbed-ГГГГ-ММ-ДД_ЧЧ-ММ.sql.gz | docker compose exec -T db psql -U testbed testbed
+gunzip -c backups/testbol-ГГГГ-ММ-ДД_ЧЧ-ММ.sql.gz | docker compose exec -T db psql -U testbed testbed
 ```
 
 (на Windows: `Get-Content backups\файл.sql | docker compose exec -T db psql -U testbed testbed`). Восстанавливать лучше в пустую базу.
@@ -203,7 +203,7 @@ npm run dev:web                  # http://localhost:5173, запросы /api у
 2. **Разрешите входящие подключения на порт 3000:**
    - Windows (PowerShell от имени администратора):
      ```powershell
-     New-NetFirewallRule -DisplayName "Testbed QA" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow -Profile Private
+     New-NetFirewallRule -DisplayName "TestBol QA" -Direction Inbound -Protocol TCP -LocalPort 3000 -Action Allow -Profile Private
      ```
      Сеть в Windows должна быть отмечена как «Частная».
    - Linux с ufw: `sudo ufw allow 3000/tcp`
@@ -230,7 +230,7 @@ Tailscale создаёт приватную зашифрованную сеть 
 Подходит, если нужен обычный адрес вроде `https://qa.example.com`, который открывается в любом браузере без установки программ. Понадобится свой домен, подключённый к Cloudflare (бесплатный тариф Cloudflare подходит; домен покупается отдельно).
 
 1. Добавьте домен в [Cloudflare](https://dash.cloudflare.com) и смените у регистратора NS-серверы на те, что выдаст Cloudflare.
-2. Откройте **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel** → тип **Cloudflared**. Назовите туннель, например `testbed`.
+2. Откройте **Zero Trust** → **Networks** → **Tunnels** → **Create a tunnel** → тип **Cloudflared**. Назовите туннель, например `testbol`.
 3. На шаге установки выберите Docker и скопируйте из показанной команды **токен** (длинная строка после `--token`). Вставьте его в `.env`:
    ```
    CLOUDFLARE_TUNNEL_TOKEN=eyJh...

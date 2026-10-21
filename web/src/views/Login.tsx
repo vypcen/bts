@@ -45,7 +45,7 @@ export function Login() {
   return (
     <div className="wrap login">
       <form className="login-card" onSubmit={submit} noValidate>
-        <span className="brand"><span className="mark">TB</span>Testbed</span>
+        <span className="brand"><span className="mark">TB</span>TestBol</span>
         <div>
           <h1 style={{ fontSize: 22 }}>{reg ? "Создать аккаунт" : "Вход в систему"}</h1>
           <p className="muted" style={{ margin: "4px 0 0" }}>Тест-кейсы, прогоны и баги для вашей команды</p>

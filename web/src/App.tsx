@@ -14,9 +14,9 @@ export function App() {
     return (
       <div className="wrap login">
         <div className="login-card">
-          <span className="brand"><span className="mark">TB</span>Testbed</span>
+          <span className="brand"><span className="mark">TB</span>TestBol</span>
           <h1 style={{ fontSize: 22 }}>Сервер недоступен</h1>
-          <p className="muted" style={{ margin: 0 }}>Не удалось связаться с сервером Testbed. Проверьте, что он запущен, и обновите страницу.</p>
+          <p className="muted" style={{ margin: 0 }}>Не удалось связаться с сервером TestBol. Проверьте, что он запущен, и обновите страницу.</p>
         </div>
       </div>
     );
@@ -51,7 +51,7 @@ function Topbar({ projectName, projectKey }: { projectName?: string; projectKey?
   return (
     <div className="topbar">
       <div className="wrap">
-        <a className="brand" href={href()} style={{ color: "inherit", textDecoration: "none" }}><span className="mark">TB</span>Testbed</a>
+        <a className="brand" href={href()} style={{ color: "inherit", textDecoration: "none" }}><span className="mark">TB</span>TestBol</a>
         <div className="crumbs">
           <span>/</span>
           {projectName ? (

@@ -1,8 +1,8 @@
 {
-  "name": "testbed-qa",
+  "name": "testbol-qa",
   "version": "1.0.0",
   "private": true,
-  "description": "Testbed QA — MVP системы управления тест-кейсами",
+  "description": "TestBol QA — система управления тестированием: тест-кейсы, прогоны, баги",
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",

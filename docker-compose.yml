@@ -3,6 +3,8 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
+      # Имена базы и пользователя остались от прежнего названия проекта. Не меняйте их:
+      # PostgreSQL создаёт их только при первом запуске, и приложение потеряет доступ к уже созданной базе.
       POSTGRES_DB: testbed
       POSTGRES_USER: testbed
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в файле .env}
