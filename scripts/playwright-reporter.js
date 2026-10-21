@@ -6,10 +6,11 @@
 //   use: { screenshot: "only-on-failure", trace: "retain-on-failure" },
 //
 // Настройки — переменные окружения TESTBOL_URL, TESTBOL_TOKEN, TESTBOL_PROJECT (или опции репортера url, token, project).
-// Необязательные: TESTBOL_TITLE, TESTBOL_BUILD, TESTBOL_ENV, TESTBOL_BRANCH.
+// Необязательные: TESTBOL_TITLE, TESTBOL_BUILD, TESTBOL_ENV, TESTBOL_BRANCH,
+// TESTBOL_APP_URL — адрес тестируемого приложения (или опция appUrl; по умолчанию baseURL из конфига).
+// Шаги теста (test.step) уходят вместе с результатом: видно, какие шаги прошли и на каком тест упал.
 // Если настройки не заданы, репортер молча выключается и тесты работают как обычно.
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { execSync } = require("child_process");
 
@@ -19,6 +20,30 @@ const BATCH = 50;
 const FLUSH_MS = 2000;
 // Файлы крупнее не отправляем: сервер их всё равно не примет (MAX_UPLOAD_MB, по умолчанию 20 МБ)
 const MAX_FILE = Number(process.env.TESTBOL_MAX_FILE_MB || 20) * 1024 * 1024;
+const MAX_STEPS = 300;
+
+// Из дерева шагов Playwright берём только test.step. Хуки (beforeEach), фикстуры, действия и expect
+// не показываем, но test.step внутри них поднимаем на уровень выше
+function collectSteps(steps, budget = { left: MAX_STEPS }) {
+  const out = [];
+  for (const s of steps || []) {
+    if (budget.left <= 0) break;
+    if (s.category !== "test.step") {
+      out.push(...collectSteps(s.steps, budget));
+      continue;
+    }
+    budget.left--;
+    const skipped = s.annotations?.some((a) => a.type === "skip");
+    out.push({
+      title: clean(s.title).slice(0, 500),
+      status: s.error ? "failed" : skipped ? "skipped" : "passed",
+      durationMs: Math.max(0, Math.round(s.duration)),
+      error: s.error ? clean(s.error.message).split("\n").find(Boolean)?.slice(0, 2000) || "" : "",
+      steps: collectSteps(s.steps, budget),
+    });
+  }
+  return out;
+}
 
 function git(cmd) {
   try {
@@ -39,8 +64,10 @@ class TestbolReporter {
       build: options.build ?? env.TESTBOL_BUILD,
       env: options.env ?? env.TESTBOL_ENV,
       branch: options.branch ?? env.TESTBOL_BRANCH,
+      appUrl: options.appUrl ?? env.TESTBOL_APP_URL,
     };
-    this.enabled = Boolean(this.url && this.token && this.project);
+    // `--list` только показывает тесты, не запуская их: такой «запуск» в TestBol не нужен
+    this.enabled = Boolean(this.url && this.token && this.project) && !process.argv.includes("--list");
     this.queue = []; // результаты, ещё не отправленные на сервер
     this.reported = new Set(); // тесты с итоговым результатом
     this.chain = Promise.resolve(); // все обращения к серверу идут по очереди
@@ -78,14 +105,18 @@ class TestbolReporter {
     this.root = suite;
     this.rootDir = config.rootDir;
     if (!this.enabled) return;
-    const projects = config.projects.map((p) => p.name).filter(Boolean);
+    // только проекты, которые реально запускаются (с учётом --project), а не все из конфига
+    const running = suite.suites.filter((s) => s.allTests().length).map((s) => s.project());
+    const urls = [...new Set(running.map((p) => p?.use?.baseURL).filter(Boolean))];
     const branch = this.opts.branch ?? git("rev-parse --abbrev-ref HEAD");
     this.enqueue(async () => {
       this.run = await this.call("POST", "/autoruns", {
         title: this.opts.title || `Локальный запуск${branch ? ` ${branch}` : ""}`,
         build: this.opts.build ?? git("rev-parse --short HEAD"),
-        env: this.opts.env ?? [projects.join(", "), `${os.hostname()}, ${os.type()}`].filter(Boolean).join(" · "),
+        env: this.opts.env ?? "",
         branch,
+        scope: running.map((p) => p?.name).filter(Boolean).join(", "),
+        url: this.opts.appUrl ?? urls.join(", "),
       });
       this.log(`запуск ${this.run.id}: ${this.url}/#/p/${encodeURIComponent(this.project)}/auto/${this.run.num}`);
     });
@@ -132,6 +163,7 @@ class TestbolReporter {
       durationMs: result.duration,
       message: message.slice(0, 5000),
       details: details.slice(0, 50000),
+      steps: collectSteps(result.steps),
       attachments: status === "failed" || status === "broken" ? result.attachments : [],
     };
   }
@@ -193,6 +225,7 @@ class TestbolReporter {
         durationMs: 0,
         message: "Не выполнялся: запуск остановлен раньше",
         details: "",
+        steps: [],
         attachments: [],
       });
     }

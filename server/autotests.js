@@ -7,17 +7,46 @@ const { sha256, newApiToken } = require("./auth");
 const { wrap, str, num } = require("./util");
 
 const STATUSES = ["passed", "failed", "broken", "skipped"];
+const STEP_STATUSES = ["passed", "failed", "skipped"];
 const MAX_BATCH = 1000;
+const MAX_STEPS = 300; // на один тест, с вложенными
+const MAX_DEPTH = 8;
 const router = express.Router({ mergeParams: true });
 
 const findRun = async (db, key, n) =>
   (await db.query("SELECT id, state FROM auto_runs WHERE project_key=$1 AND num=$2", [key, n])).rows[0];
 
 function readRun(body) {
-  const r = { title: str(body.title, 300), build: str(body.build, 200), env: str(body.env, 500), branch: str(body.branch, 200) };
+  const r = {
+    title: str(body.title, 300), build: str(body.build, 200), env: str(body.env, 500), branch: str(body.branch, 200),
+    scope: str(body.scope, 500), url: str(body.url, 500),
+  };
   if (!r.title) return { error: "Укажите название запуска" };
   return { r };
 }
+
+// Дерево шагов из отчёта: лишнее отбрасываем, слишком глубокое и длинное обрезаем
+function readSteps(list, budget = { left: MAX_STEPS }, depth = 0) {
+  if (!Array.isArray(list) || depth >= MAX_DEPTH) return [];
+  const out = [];
+  for (const x of list) {
+    if (budget.left <= 0) break;
+    const title = x && typeof x === "object" ? str(x.title, 500) : "";
+    if (!title) continue;
+    budget.left--;
+    out.push({
+      title,
+      status: STEP_STATUSES.includes(x.status) ? x.status : "passed",
+      durationMs: Math.min(Math.max(Math.round(Number(x.durationMs) || 0), 0), 2e9),
+      error: str(x.error, 2000),
+      steps: readSteps(x.steps, budget, depth + 1),
+    });
+  }
+  return out;
+}
+
+// Для реестра нужны только названия шагов
+const stepTitles = (steps) => steps.map((s) => ({ title: s.title, steps: stepTitles(s.steps) }));
 
 function readResult(x) {
   if (!x || typeof x !== "object") return null;
@@ -29,6 +58,7 @@ function readResult(x) {
     duration: Math.min(Math.max(Math.round(Number(x.durationMs) || 0), 0), 2e9),
     message: str(x.message, 5000),
     details: str(x.details, 50000),
+    steps: readSteps(x.steps),
   };
   if (!t.name || !STATUSES.includes(t.status)) return null;
   // по этому ключу тест узнаётся в следующих запусках и не создаётся повторно
@@ -44,8 +74,9 @@ router.post("/autoruns", wrap(async (req, res) => {
     if (!seq.rows[0]) return null;
     const next = seq.rows[0].auto_seq;
     await db.query(
-      "INSERT INTO auto_runs(project_key, num, title, build, environment, branch, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      [req.params.key, next, r.title, r.build, r.env, r.branch, req.user.id]
+      `INSERT INTO auto_runs(project_key, num, title, build, environment, branch, scope, app_url, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [req.params.key, next, r.title, r.build, r.env, r.branch, r.scope, r.url, req.user.id]
     );
     return next;
   });
@@ -81,13 +112,29 @@ router.post("/autoruns/:num/results", wrap(async (req, res) => {
       uniq.map((t) => t.key),
     ]);
     const testId = new Map(tests.rows.map((t) => [t.test_key, t.id]));
+    // шаги в реестре: упавший тест прошёл не все шаги, поэтому он только заполняет пустой список,
+    // а заменяет его прошедший
+    const withSteps = uniq.filter((t) => t.steps.length);
+    if (withSteps.length) {
+      await db.query(
+        `UPDATE auto_tests t SET steps=u.steps FROM unnest($1::int[], $2::jsonb[], $3::bool[]) AS u(id, steps, passed)
+         WHERE t.id=u.id AND (u.passed OR t.steps='[]'::jsonb)`,
+        [
+          withSteps.map((t) => testId.get(t.key)), withSteps.map((t) => JSON.stringify(stepTitles(t.steps))),
+          withSteps.map((t) => t.status === "passed"),
+        ]
+      );
+    }
     const rows = await db.query(
-      `INSERT INTO auto_results(run_id, test_id, status, duration_ms, message, details)
-       SELECT $1::int, * FROM unnest($2::int[], $3::text[], $4::int[], $5::text[], $6::text[])
+      `INSERT INTO auto_results(run_id, test_id, status, duration_ms, message, details, steps)
+       SELECT $1::int, * FROM unnest($2::int[], $3::text[], $4::int[], $5::text[], $6::text[], $7::jsonb[])
        ON CONFLICT (run_id, test_id) DO UPDATE SET status=EXCLUDED.status, duration_ms=EXCLUDED.duration_ms,
-         message=EXCLUDED.message, details=EXCLUDED.details, created_at=now()
+         message=EXCLUDED.message, details=EXCLUDED.details, steps=EXCLUDED.steps, created_at=now()
        RETURNING id, test_id`,
-      [run.id, uniq.map((t) => testId.get(t.key)), uniq.map((t) => t.status), uniq.map((t) => t.duration), uniq.map((t) => t.message), uniq.map((t) => t.details)]
+      [
+        run.id, uniq.map((t) => testId.get(t.key)), uniq.map((t) => t.status), uniq.map((t) => t.duration),
+        uniq.map((t) => t.message), uniq.map((t) => t.details), uniq.map((t) => JSON.stringify(t.steps)),
+      ]
     );
     const resultId = new Map(rows.rows.map((r) => [r.test_id, r.id]));
     return parsed.map((t) => resultId.get(testId.get(t.key)));
@@ -100,7 +147,7 @@ router.post("/autoruns/:num/results", wrap(async (req, res) => {
 router.patch("/autoruns/:num", wrap(async (req, res) => {
   const n = num(req.params.num);
   const { rows } = await pool.query(
-    "SELECT title, build, environment AS env, branch, state FROM auto_runs WHERE project_key=$1 AND num=$2",
+    "SELECT title, build, environment AS env, branch, scope, app_url AS url, state FROM auto_runs WHERE project_key=$1 AND num=$2",
     [req.params.key, n]
   );
   if (!rows[0]) return res.status(404).json({ error: "Запуск не найден" });
@@ -109,10 +156,10 @@ router.patch("/autoruns/:num", wrap(async (req, res) => {
   const state = req.body.state === undefined ? rows[0].state : req.body.state;
   if (!["running", "finished"].includes(state)) return res.status(400).json({ error: "Неизвестное состояние запуска" });
   await pool.query(
-    `UPDATE auto_runs SET title=$1, build=$2, environment=$3, branch=$4, state=$5,
-       finished_at = CASE WHEN $5='finished' THEN COALESCE(finished_at, now()) ELSE NULL END
-     WHERE project_key=$6 AND num=$7`,
-    [r.title, r.build, r.env, r.branch, state, req.params.key, n]
+    `UPDATE auto_runs SET title=$1, build=$2, environment=$3, branch=$4, scope=$5, app_url=$6, state=$7,
+       finished_at = CASE WHEN $7='finished' THEN COALESCE(finished_at, now()) ELSE NULL END
+     WHERE project_key=$8 AND num=$9`,
+    [r.title, r.build, r.env, r.branch, r.scope, r.url, state, req.params.key, n]
   );
   broadcast("autoruns");
   res.json({ ok: true });
@@ -132,7 +179,7 @@ router.get("/autoruns/:num", wrap(async (req, res) => {
   if (!run) return res.status(404).json({ error: "Запуск не найден" });
   const [results, files] = await Promise.all([
     pool.query(
-      `SELECT ar.id, ar.test_id, t.suite, t.name, t.file, ar.status, ar.duration_ms, ar.message, ar.details,
+      `SELECT ar.id, ar.test_id, t.suite, t.name, t.file, ar.status, ar.duration_ms, ar.message, ar.details, ar.steps,
          prev.status AS prev_status, prev.num AS prev_num
        FROM auto_results ar JOIN auto_tests t ON t.id=ar.test_id
        LEFT JOIN LATERAL (
@@ -152,7 +199,7 @@ router.get("/autoruns/:num", wrap(async (req, res) => {
   res.json({
     results: results.rows.map((r) => ({
       id: r.id, testId: r.test_id, suite: r.suite, name: r.name, file: r.file, status: r.status, durationMs: r.duration_ms,
-      message: r.message, details: r.details, prev: r.prev_status ? { status: r.prev_status, runNum: r.prev_num } : null,
+      message: r.message, details: r.details, steps: r.steps, prev: r.prev_status ? { status: r.prev_status, runNum: r.prev_num } : null,
     })),
     attachments: files.rows.map((a) => ({
       id: a.id, pid: req.params.key, bugNum: null, resultId: null, autoResultId: a.auto_result_id, name: a.filename, mime: a.mime,
@@ -164,7 +211,7 @@ router.get("/autoruns/:num", wrap(async (req, res) => {
 // Реестр автотестов проекта с историей последних 10 запусков (сначала самый свежий)
 router.get("/autotests", wrap(async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT t.id, t.suite, t.name, t.file, t.created_at,
+    `SELECT t.id, t.suite, t.name, t.file, t.steps, t.created_at,
        ARRAY(SELECT ar.status || ':' || r.num FROM auto_results ar JOIN auto_runs r ON r.id=ar.run_id
              WHERE ar.test_id=t.id ORDER BY r.num DESC LIMIT 10) AS history
      FROM auto_tests t WHERE t.project_key=$1 ORDER BY t.suite, t.name`,
@@ -172,7 +219,7 @@ router.get("/autotests", wrap(async (req, res) => {
   );
   res.json({
     tests: rows.map((t) => ({
-      id: t.id, suite: t.suite, name: t.name, file: t.file, created: t.created_at.getTime(),
+      id: t.id, suite: t.suite, name: t.name, file: t.file, steps: t.steps, created: t.created_at.getTime(),
       history: t.history.map((h) => {
         const [status, runNum] = h.split(":");
         return { status, runNum: Number(runNum) };

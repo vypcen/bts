@@ -3,7 +3,7 @@ import { api, paths } from "../api";
 import { AUTO_STATUSES, find } from "../labels";
 import { go, href } from "../router";
 import { useData, useStore } from "../store";
-import type { Attachment, AutoResult, AutoRun, AutoStatus, AutoTest, Project } from "../types";
+import type { Attachment, AutoResult, AutoRun, AutoStatus, AutoStep, AutoTest, Project } from "../types";
 import { Confirm, Drawer, Empty, fmt, Modal, Pill, ResultBar } from "../ui";
 import { Attachments } from "./Attachments";
 import { BugEditor, type BugDraft } from "./Bugs";
@@ -16,6 +16,49 @@ export const fmtDuration = (ms: number) =>
 function AutoPill({ s, sm }: { s: AutoStatus; sm?: boolean }) {
   const d = find(AUTO_STATUSES, s);
   return <Pill tone={d.tone} label={d.label} sm={sm} />;
+}
+
+// Самый глубокий упавший шаг — на нём тест и упал. Путь от верхнего шага до него
+function failedPath(steps: AutoStep[]): AutoStep[] {
+  const s = steps.find((x) => x.status === "failed");
+  return s ? [s, ...failedPath(s.steps)] : [];
+}
+
+const STEP_MARK = { passed: { icon: "✓", color: "var(--ok)" }, failed: { icon: "✕", color: "var(--crit)" }, skipped: { icon: "–", color: "var(--muted)" } };
+
+// Дерево шагов: у результата со статусами и временем, в реестре — только названия
+function StepList({ steps, depth = 0 }: { steps: (AutoStep | { title: string; steps: any[] })[]; depth?: number }) {
+  return (
+    <ol style={{ margin: 0, paddingLeft: depth ? 18 : 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
+      {steps.map((s, i) => {
+        const st = "status" in s ? (s as AutoStep) : null;
+        // родительские шаги упавшего тоже помечены failed — подсвечиваем только сам шаг падения
+        const failedHere = st?.status === "failed" && !st.steps.some((c) => c.status === "failed");
+        const mark = st && STEP_MARK[st.status];
+        return (
+          <li key={i} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <div className="small" style={{ display: "flex", gap: 8, alignItems: "baseline", fontWeight: failedHere ? 600 : 400, color: failedHere ? "var(--crit)" : undefined }}>
+              <span className="mono" style={{ width: 16, flex: "none", textAlign: "center", color: mark?.color ?? "var(--muted)" }}>{mark ? mark.icon : `${i + 1}.`}</span>
+              <span style={{ flex: 1, overflowWrap: "anywhere" }}>{s.title}</span>
+              {st && <span className="muted mono" style={{ flex: "none" }}>{fmtDuration(st.durationMs)}</span>}
+            </div>
+            {failedHere && st.error && <div className="small" style={{ marginLeft: 24, color: "var(--crit)", overflowWrap: "anywhere" }}>{st.error}</div>}
+            {s.steps.length > 0 && <StepList steps={s.steps} depth={depth + 1} />}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+// Строка «что запущено · окружение · адрес» для списка запусков и шапки запуска
+function RunMeta({ r }: { r: AutoRun }) {
+  const parts = [
+    r.scope && <span key="s">Запущено: <span className="mono">{r.scope}</span></span>,
+    r.env && <span key="e">Окружение: {r.env}</span>,
+    r.url && <span key="u" className="mono" style={{ overflowWrap: "anywhere" }}>{r.url}</span>,
+  ].filter(Boolean);
+  return <>{parts.map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</>;
 }
 
 // ResultBar рисует полосу по статусам ручных прогонов: «сломан» показываем цветом «заблокирован»
@@ -90,11 +133,7 @@ function RunRow({ r }: { r: AutoRun }) {
       <td className="id"><a href={href("p", r.pid, "auto", r.num)} style={{ color: "inherit" }}>{r.id}</a></td>
       <td className="title">
         {r.title}
-        <div className="muted small" style={{ fontWeight: 400 }}>
-          {[r.branch && <span key="b" className="mono">{r.branch}</span>, r.build && <span key="v" className="mono">{r.build}</span>, r.env]
-            .filter(Boolean)
-            .map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}
-        </div>
+        <div className="muted small" style={{ fontWeight: 400 }}><RunMeta r={r} /></div>
       </td>
       <td>
         <ResultBar counts={barCounts(c)} />
@@ -164,9 +203,7 @@ export function AutoRunPage({ project, num }: { project: Project; num: number })
           <span className="label">{run.id}</span>
           <h1>{run.title}</h1>
           <p className="muted">
-            {run.branch && <>Ветка <span className="mono">{run.branch}</span> · </>}
-            {run.build && <>сборка <span className="mono">{run.build}</span> · </>}
-            {run.env && <>{run.env} · </>}
+            {(run.scope || run.env || run.url) && <><RunMeta r={run} /><br /></>}
             {fmt(run.created)}{run.state === "finished" && <> · {fmtDuration(run.durationMs)}</>}
           </p>
         </div>
@@ -203,6 +240,7 @@ export function AutoRunPage({ project, num }: { project: Project; num: number })
             {rows.map((r) => {
               const files = filesOf(r).length;
               const regress = r.prev?.status === "passed" && isProblem(r.status);
+              const failedAt = failedPath(r.steps).map((s) => s.title).join(" › ");
               return (
                 <tr key={r.id} className="click" aria-selected={selected === r.id} onClick={() => setSelected(r.id)}>
                   <td><AutoPill s={r.status} /></td>
@@ -214,6 +252,7 @@ export function AutoRunPage({ project, num }: { project: Project; num: number })
                         {r.message.slice(0, 200)}
                       </div>
                     )}
+                    {failedAt && <div className="small" style={{ fontWeight: 400, overflowWrap: "anywhere" }}>Упал на шаге: <b>{failedAt}</b></div>}
                   </td>
                   <td className="mono small">{fmtDuration(r.durationMs)}</td>
                   <td className="nowrap">
@@ -250,13 +289,24 @@ export function AutoRunPage({ project, num }: { project: Project; num: number })
   );
 }
 
+// Шаги в баг текстом: «1. Шаг», вложенные с отступом, упавший помечен
+function stepLines(steps: AutoStep[], prefix = ""): string[] {
+  return steps.flatMap((s, i) => [
+    `${prefix}${i + 1}. ${s.title}${s.status === "failed" && !s.steps.some((c) => c.status === "failed") ? "  ← упал здесь" : ""}`,
+    ...stepLines(s.steps, prefix + "   "),
+  ]);
+}
+
 function draftFromAuto(run: AutoRun, r: AutoResult): BugDraft {
   return {
     title: `Автотест: ${r.name}`.slice(0, 500),
     severity: "major",
     assignee: "",
-    env: [run.branch && `Ветка ${run.branch}`, run.build && `Сборка ${run.build}`, run.env].filter(Boolean).join(", "),
-    steps: [`Автотест: ${r.suite ? `${r.suite} › ` : ""}${r.name}`, r.file && `Файл: ${r.file}`, `Запуск: ${run.id}`].filter(Boolean).join("\n"),
+    env: [run.env, run.url, run.branch && `Ветка ${run.branch}`, run.build && `Сборка ${run.build}`].filter(Boolean).join(", "),
+    steps: [
+      `Автотест: ${r.suite ? `${r.suite} › ` : ""}${r.name}`, r.file && `Файл: ${r.file}`, `Запуск: ${run.id}`,
+      r.steps.length ? `\nШаги:\n${stepLines(r.steps).join("\n")}` : "",
+    ].filter(Boolean).join("\n"),
     actual: [r.message, r.details && r.details !== r.message ? r.details.slice(0, 3000) : ""].filter(Boolean).join("\n\n"),
     expected: "Тест проходит",
   };
@@ -287,6 +337,7 @@ function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachmen
       </div>
       {r.suite && <div className="view-block"><span className="label">Набор</span><span className="mono small" style={{ overflowWrap: "anywhere" }}>{r.suite}</span></div>}
       {r.file && <div className="view-block"><span className="label">Файл</span><span className="mono small" style={{ overflowWrap: "anywhere" }}>{r.file}</span></div>}
+      {r.steps.length > 0 && <div className="view-block"><span className="label">Шаги</span><StepList steps={r.steps} /></div>}
       {r.message && <div className="view-block"><span className="label">Ошибка</span><div className="txt">{r.message}</div></div>}
       {r.details && (
         <div className="view-block">
@@ -306,7 +357,7 @@ function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachmen
 
 function AutoRunModal({ run, onClose }: { run: AutoRun; onClose: () => void }) {
   const { write } = useStore();
-  const [f, setF] = useState({ title: run.title, build: run.build, env: run.env, branch: run.branch });
+  const [f, setF] = useState({ title: run.title, build: run.build, env: run.env, branch: run.branch, scope: run.scope, url: run.url });
   const [err, setErr] = useState("");
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   async function submit(e: FormEvent) {
@@ -323,7 +374,11 @@ function AutoRunModal({ run, onClose }: { run: AutoRun; onClose: () => void }) {
           <div className="field"><label htmlFor="a-branch">Ветка</label><input className="input mono" id="a-branch" value={f.branch} onChange={set("branch")} /></div>
           <div className="field"><label htmlFor="a-build">Сборка / версия</label><input className="input mono" id="a-build" value={f.build} onChange={set("build")} /></div>
         </div>
-        <div className="field"><label htmlFor="a-env">Окружение</label><input className="input" id="a-env" value={f.env} onChange={set("env")} /></div>
+        <div className="row2">
+          <div className="field"><label htmlFor="a-scope">Запущено</label><input className="input mono" id="a-scope" value={f.scope} onChange={set("scope")} /></div>
+          <div className="field"><label htmlFor="a-env">Окружение</label><input className="input" id="a-env" value={f.env} onChange={set("env")} /></div>
+        </div>
+        <div className="field"><label htmlFor="a-url">Адрес приложения</label><input className="input mono" id="a-url" value={f.url} onChange={set("url")} /></div>
         <div className="err">{err}</div>
         <div className="acts">
           <button type="button" className="btn" onClick={onClose}>Отмена</button>
@@ -374,6 +429,12 @@ function TestsRegistry({ project }: { project: Project }) {
                     {t.name}
                     {t.suite && <div className="muted small mono" style={{ fontWeight: 400, overflowWrap: "anywhere" }}>{t.suite}</div>}
                     {flaky(t) && <div className="small" style={{ color: "var(--warn)", fontWeight: 600 }}>Нестабильный</div>}
+                    {t.steps.length > 0 && (
+                      <details style={{ fontWeight: 400, marginTop: 4 }}>
+                        <summary className="small muted" style={{ cursor: "pointer" }}>Шаги ({t.steps.length})</summary>
+                        <div style={{ marginTop: 6 }}><StepList steps={t.steps} /></div>
+                      </details>
+                    )}
                   </td>
                   <td>{last ? <a href={href("p", p, "auto", last.runNum)} style={{ textDecoration: "none" }}><AutoPill s={last.status} sm /></a> : <span className="muted small">—</span>}</td>
                   <td>

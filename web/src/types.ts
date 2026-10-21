@@ -6,6 +6,15 @@ export type BugStatus = "new" | "in_progress" | "fixed" | "verified" | "closed" 
 export type Severity = "blocker" | "critical" | "major" | "minor";
 export type AutoStatus = "passed" | "failed" | "broken" | "skipped";
 
+// Шаг автотеста (test.step) с вложенными шагами
+export interface AutoStep {
+  title: string;
+  status: "passed" | "failed" | "skipped";
+  durationMs: number;
+  error: string;
+  steps: AutoStep[];
+}
+
 export interface User {
   login: string;
   name: string;
@@ -103,6 +112,8 @@ export interface AutoRun {
   build: string;
   env: string;
   branch: string;
+  scope: string; // какие проекты Playwright запускались
+  url: string; // адрес тестируемого приложения
   state: "running" | "finished";
   createdBy: string | null;
   created: number;
@@ -122,6 +133,7 @@ export interface AutoResult {
   durationMs: number;
   message: string;
   details: string;
+  steps: AutoStep[];
   prev: { status: AutoStatus; runNum: number } | null;
 }
 
@@ -131,6 +143,7 @@ export interface AutoTest {
   suite: string;
   name: string;
   file: string;
+  steps: { title: string; steps: AutoTest["steps"] }[]; // из последнего прохождения без падения
   created: number;
   history: { status: AutoStatus; runNum: number }[];
 }

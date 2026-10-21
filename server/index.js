@@ -139,7 +139,7 @@ app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
                 LEFT JOIN run_results rr ON rr.id=a.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
                 LEFT JOIN users u ON u.id=a.uploaded_by WHERE a.auto_result_id IS NULL ORDER BY a.created_at`),
     // запуски автотестов — только сводка; сами результаты отдаёт GET /api/projects/:key/autoruns/:num
-    pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.branch, r.state, u.login AS created_by, r.created_at, r.finished_at,
+    pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.branch, r.scope, r.app_url, r.state, u.login AS created_by, r.created_at, r.finished_at,
                   count(ar.id) FILTER (WHERE ar.status='passed')::int AS passed, count(ar.id) FILTER (WHERE ar.status='failed')::int AS failed,
                   count(ar.id) FILTER (WHERE ar.status='broken')::int AS broken, count(ar.id) FILTER (WHERE ar.status='skipped')::int AS skipped,
                   COALESCE(sum(ar.duration_ms), 0)::bigint AS duration
@@ -169,7 +169,7 @@ app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
     })),
     autoruns: autoruns.rows.map((r) => ({
       id: `${r.project_key}-A${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment, branch: r.branch,
-      state: r.state, createdBy: r.created_by, created: ms(r.created_at), finished: ms(r.finished_at), durationMs: Number(r.duration),
+      scope: r.scope, url: r.app_url, state: r.state, createdBy: r.created_by, created: ms(r.created_at), finished: ms(r.finished_at), durationMs: Number(r.duration),
       counts: { passed: r.passed, failed: r.failed, broken: r.broken, skipped: r.skipped },
     })),
     users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name }])),
