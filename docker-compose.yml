@@ -24,10 +24,12 @@ services:
     environment:
       DATABASE_URL: postgres://testbed:${POSTGRES_PASSWORD}@db:5432/testbed
       PORT: 3000
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
     ports:
       - "${APP_PORT:-3000}:3000"
     volumes:
       - ./import:/app/import:ro
+      - uploads:/app/data/uploads
 
   # Доступ из интернета через Cloudflare Tunnel (необязательно).
   # Запускается только командой: docker compose --profile tunnel up -d
@@ -43,3 +45,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:

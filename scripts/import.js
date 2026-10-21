@@ -13,7 +13,7 @@ const file = process.argv[2] || path.join(__dirname, "..", "import", "export.jso
   const data = JSON.parse(fs.readFileSync(file, "utf8"));
   await waitForDb();
   await migrate();
-  const stats = { users: 0, projects: 0, cases: 0 };
+  const stats = { users: 0, projects: 0, cases: 0, results: 0 };
   await tx(async (db) => {
     const ids = {};
     for (const a of data.accounts || []) {
@@ -37,22 +37,42 @@ const file = process.argv[2] || path.join(__dirname, "..", "import", "export.jso
       );
       if (r.rows[0]) stats.projects++;
     }
+    // В прошлой версии «Пройден/Упал/Заблокирован» хранились в кейсе. Теперь это результаты прогона:
+    // кейс получает статус «Готов», а результат попадает в прогон «Импортированные результаты».
+    const legacy = {};
     for (const c of data.cases || []) {
+      const result = ["passed", "failed", "blocked"].includes(c.status) ? c.status : null;
       const r = await db.query(
         `INSERT INTO test_cases(project_key, num, title, priority, status, preconditions, steps, expected,
            created_by, updated_by, created_at, updated_at)
          SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,to_timestamp($11/1000.0),to_timestamp($12/1000.0)
          WHERE EXISTS (SELECT 1 FROM projects WHERE key=$1)
          ON CONFLICT (project_key, num) DO NOTHING RETURNING id`,
-        [c.pid, c.num, c.title, c.priority, c.status, c.pre || "", c.steps || "", c.expected || "",
+        [c.pid, c.num, c.title, c.priority, result ? "ready" : c.status, c.pre || "", c.steps || "", c.expected || "",
          ids[c.createdBy] || null, ids[c.updatedBy] || null, c.created || Date.now(), c.updated || c.created || Date.now()]
       );
-      if (r.rows[0]) stats.cases++;
+      if (!r.rows[0]) continue;
+      stats.cases++;
+      if (result) (legacy[c.pid] ||= []).push({ caseId: r.rows[0].id, result, by: ids[c.updatedBy] || null, at: c.updated || c.created || Date.now() });
+    }
+    for (const [pid, list] of Object.entries(legacy)) {
+      const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [pid]);
+      const run = await db.query(
+        "INSERT INTO test_runs(project_key, num, title, state, closed_at) VALUES ($1,$2,'Импортированные результаты','closed',now()) RETURNING id",
+        [pid, seq.rows[0].run_seq]
+      );
+      for (const x of list) {
+        await db.query(
+          "INSERT INTO run_results(run_id, case_id, result, executed_by, executed_at) VALUES ($1,$2,$3,$4,to_timestamp($5/1000.0))",
+          [run.rows[0].id, x.caseId, x.result, x.by, x.at]
+        );
+        stats.results++;
+      }
     }
     // счётчик номеров не должен отставать от уже существующих кейсов
     await db.query(`UPDATE projects p SET seq = GREATEST(p.seq, COALESCE((SELECT max(num) FROM test_cases t WHERE t.project_key=p.key),0))`);
   });
-  console.log(`[import] добавлено: пользователей ${stats.users}, проектов ${stats.projects}, тест-кейсов ${stats.cases}`);
+  console.log(`[import] добавлено: пользователей ${stats.users}, проектов ${stats.projects}, тест-кейсов ${stats.cases}, результатов прогонов ${stats.results}`);
   await pool.end();
 })().catch((e) => {
   console.error("[import] Ошибка:", e.message);

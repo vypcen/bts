@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server/index.js",
     "migrate": "node server/migrate.js",
-    "import": "node scripts/import.js"
+    "import": "node scripts/import.js",
+    "build:web": "npm --prefix web ci && npm --prefix web run build",
+    "dev:web": "npm --prefix web run dev"
   },
   "engines": {
     "node": ">=20"

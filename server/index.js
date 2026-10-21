@@ -3,12 +3,17 @@ const express = require("express");
 const { pool, tx } = require("./db");
 const { migrate, waitForDb } = require("./migrate");
 const auth = require("./auth");
+const live = require("./live");
+const attachments = require("./attachments");
+const { wrap, str, num, ms } = require("./util");
 
 const PORT = Number(process.env.PORT || 3000);
-const STATUSES = ["draft", "ready", "passed", "failed", "blocked"];
+// Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
+const STATUSES = ["draft", "ready", "deprecated"];
 const PRIORITIES = ["critical", "high", "medium", "low"];
 const LOGIN_RE = /^[a-z0-9._-]{3,32}$/;
 const KEY_RE = /^[A-Z]{2,6}$/;
+const { broadcast } = live;
 
 const app = express();
 app.disable("x-powered-by");
@@ -25,35 +30,19 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "200kb" }));
 
-// Защита от CSRF: изменяющие запросы принимаются только как JSON
+// Защита от CSRF: изменяющие запросы принимаются только как JSON.
+// Загрузка файла идёт «сырым» телом, поэтому требует заголовок X-Upload: чужой сайт не может
+// прислать его без CORS-разрешения, которого сервер не даёт.
 app.use("/api", (req, res, next) => {
   if (["POST", "PATCH", "PUT", "DELETE"].includes(req.method) && !req.is("application/json")) {
-    return res.status(415).json({ error: "Ожидается Content-Type: application/json" });
+    const upload = req.method === "POST" && req.path.endsWith("/attachments") && req.get("x-upload") === "1";
+    if (!upload) return res.status(415).json({ error: "Ожидается Content-Type: application/json" });
   }
   next();
 });
 app.use(auth.loadUser);
 
-const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const str = (v, max = 10000) => (typeof v === "string" ? v.trim().slice(0, max) : "");
-
-// ---------- живые обновления (Server-Sent Events) ----------
-const clients = new Set();
-function broadcast(type) {
-  const msg = `event: change\ndata: ${JSON.stringify({ type, at: Date.now() })}\n\n`;
-  for (const res of clients) res.write(msg);
-}
-app.get("/api/events", auth.requireUser, (req, res) => {
-  res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive", "X-Accel-Buffering": "no" });
-  res.flushHeaders();
-  res.write("retry: 3000\n\n");
-  clients.add(res);
-  const ping = setInterval(() => res.write(": ping\n\n"), 25000);
-  req.on("close", () => {
-    clearInterval(ping);
-    clients.delete(res);
-  });
-});
+app.get("/api/events", auth.requireUser, live.events);
 
 // ---------- авторизация ----------
 app.get("/api/auth/me", (req, res) => {
@@ -116,15 +105,51 @@ const toCase = (r) => ({
 
 // Всё состояние одним запросом: для MVP-объёмов это проще и надёжнее точечной синхронизации
 app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
-  const [projects, cases, users] = await Promise.all([
+  const [projects, cases, users, runs, results, bugs, files] = await Promise.all([
     pool.query(`SELECT p.key, p.name, p.description, p.created_at, u.login AS created_by
                 FROM projects p LEFT JOIN users u ON u.id=p.created_by ORDER BY p.created_at DESC`),
     pool.query(`${caseSql} ORDER BY c.project_key, c.num`),
     pool.query("SELECT login, name FROM users"),
+    pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at
+                FROM test_runs r LEFT JOIN users u ON u.id=r.created_by ORDER BY r.project_key, r.num`),
+    pool.query(`SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, u.login AS executed_by, rr.executed_at
+                FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
+                LEFT JOIN users u ON u.id=rr.executed_by`),
+    pool.query(`SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
+                  c.num AS case_num, t.num AS run_num, b.run_result_id, d.num AS dup_num,
+                  cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at
+                FROM bugs b LEFT JOIN users au ON au.id=b.assignee_id LEFT JOIN test_cases c ON c.id=b.case_id
+                LEFT JOIN run_results rr ON rr.id=b.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
+                LEFT JOIN bugs d ON d.id=b.duplicate_of
+                LEFT JOIN users cu ON cu.id=b.created_by LEFT JOIN users uu ON uu.id=b.updated_by
+                ORDER BY b.project_key, b.num`),
+    pool.query(`SELECT a.id, COALESCE(b.project_key, t.project_key) AS project_key, b.num AS bug_num, a.run_result_id,
+                  a.filename, a.mime, a.size, u.login AS uploaded_by, a.created_at
+                FROM attachments a LEFT JOIN bugs b ON b.id=a.bug_id
+                LEFT JOIN run_results rr ON rr.id=a.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
+                LEFT JOIN users u ON u.id=a.uploaded_by ORDER BY a.created_at`),
   ]);
   res.json({
     projects: projects.rows.map((p) => ({ id: p.key, name: p.name, desc: p.description, createdBy: p.created_by, created: p.created_at.getTime() })),
     cases: cases.rows.map(toCase),
+    runs: runs.rows.map((r) => ({
+      id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
+      state: r.state, createdBy: r.created_by, created: ms(r.created_at), closed: ms(r.closed_at),
+    })),
+    results: results.rows.map((r) => ({
+      id: r.id, pid: r.project_key, runNum: r.run_num, caseNum: r.case_num, result: r.result, comment: r.comment,
+      executedBy: r.executed_by, executed: ms(r.executed_at),
+    })),
+    bugs: bugs.rows.map((b) => ({
+      id: `${b.project_key}-B${b.num}`, pid: b.project_key, num: b.num, title: b.title, status: b.status, severity: b.severity,
+      assignee: b.assignee, env: b.environment, steps: b.steps, actual: b.actual, expected: b.expected,
+      caseNum: b.case_num, runNum: b.run_num, resultId: b.run_result_id, duplicateOf: b.dup_num,
+      createdBy: b.created_by, updatedBy: b.updated_by, created: ms(b.created_at), updated: ms(b.updated_at),
+    })),
+    attachments: files.rows.map((a) => ({
+      id: a.id, pid: a.project_key, bugNum: a.bug_num, resultId: a.run_result_id, name: a.filename, mime: a.mime, size: a.size,
+      uploadedBy: a.uploaded_by, created: ms(a.created_at),
+    })),
     users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name }])),
   });
 }));
@@ -160,7 +185,7 @@ app.delete("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
   if (rows[0].created_by !== null && rows[0].created_by !== req.user.id) {
     return res.status(403).json({ error: "Удалить проект может только его создатель" });
   }
-  await pool.query("DELETE FROM projects WHERE key=$1", [req.params.key]); // кейсы удалятся каскадно
+  await pool.query("DELETE FROM projects WHERE key=$1", [req.params.key]); // кейсы, прогоны и баги удалятся каскадно
   broadcast("projects");
   res.json({ ok: true });
 }));
@@ -183,45 +208,48 @@ function readCase(body) {
 app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => {
   const { c, error } = readCase(req.body);
   if (error) return res.status(400).json({ error });
-  const num = await tx(async (db) => {
+  const n = await tx(async (db) => {
     // атомарно берём следующий номер — два одновременных создания не получат один ID
     const r = await db.query("UPDATE projects SET seq=seq+1 WHERE key=$1 RETURNING seq", [req.params.key]);
     if (!r.rows[0]) return null;
-    const n = r.rows[0].seq;
+    const next = r.rows[0].seq;
     await db.query(
       `INSERT INTO test_cases(project_key, num, title, priority, status, preconditions, steps, expected, created_by, updated_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
-      [req.params.key, n, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id]
+      [req.params.key, next, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id]
     );
-    return n;
+    return next;
   });
-  if (num === null) return res.status(404).json({ error: "Проект не найден" });
+  if (n === null) return res.status(404).json({ error: "Проект не найден" });
   broadcast("cases");
-  res.status(201).json({ id: `${req.params.key}-${num}` });
+  res.status(201).json({ id: `${req.params.key}-${n}`, num: n });
 }));
 
 app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, res) => {
-  const num = Number(req.params.num);
+  const n = num(req.params.num);
   // частичное обновление: можно прислать только status
-  const { rows } = await pool.query("SELECT title, priority, status, preconditions AS pre, steps, expected FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, num]);
+  const { rows } = await pool.query("SELECT title, priority, status, preconditions AS pre, steps, expected FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, n]);
   if (!rows[0]) return res.status(404).json({ error: "Тест-кейс не найден" });
   const { c, error } = readCase({ ...rows[0], ...req.body });
   if (error) return res.status(400).json({ error });
   await pool.query(
     `UPDATE test_cases SET title=$1, priority=$2, status=$3, preconditions=$4, steps=$5, expected=$6, updated_by=$7, updated_at=now()
      WHERE project_key=$8 AND num=$9`,
-    [c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, num]
+    [c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, n]
   );
   broadcast("cases");
   res.json({ ok: true });
 }));
 
 app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, res) => {
-  const r = await pool.query("DELETE FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, Number(req.params.num)]);
+  const r = await pool.query("DELETE FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, num(req.params.num)]);
   if (!r.rowCount) return res.status(404).json({ error: "Тест-кейс не найден" });
   broadcast("cases");
   res.json({ ok: true });
 }));
+
+app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), attachments.projectRouter);
+app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 
 app.get("/healthz", wrap(async (_req, res) => {
   await pool.query("SELECT 1");
@@ -229,17 +257,20 @@ app.get("/healthz", wrap(async (_req, res) => {
 }));
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "Не найдено" }));
+// Интерфейс собирается из web/ командой npm run build:web (в Docker — автоматически)
 app.use(express.static(path.join(__dirname, "..", "public"), { index: "index.html", maxAge: 0 }));
 
 app.use((err, _req, res, _next) => {
   if (err.type === "entity.parse.failed") return res.status(400).json({ error: "Некорректный JSON" });
   console.error("[server]", err);
+  if (res.headersSent) return res.destroy();
   res.status(500).json({ error: "Внутренняя ошибка сервера. Подробности в логах." });
 });
 
 (async () => {
   await waitForDb();
   await migrate();
+  attachments.startSweeper();
   app.listen(PORT, "0.0.0.0", () => console.log(`[server] Testbed QA запущен: http://localhost:${PORT}`));
 })().catch((e) => {
   console.error("[server] Не удалось запуститься:", e.message);
