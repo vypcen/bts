@@ -1,4 +1,4 @@
-import type { BugStatus, CaseStatus, Priority, ResultValue, Severity } from "./types";
+import type { AutoStatus, BugStatus, CaseStatus, Priority, ResultValue, Severity } from "./types";
 
 export type Tone = "neutral" | "info" | "ok" | "crit" | "warn" | "accent";
 type Def<K extends string> = { key: K; label: string; tone: Tone }[];
@@ -21,6 +21,14 @@ export const RESULTS: Def<ResultValue> = [
   { key: "passed", label: "Пройден", tone: "ok" },
   { key: "failed", label: "Упал", tone: "crit" },
   { key: "blocked", label: "Заблокирован", tone: "warn" },
+  { key: "skipped", label: "Пропущен", tone: "neutral" },
+];
+
+// «Сломан» — тест упал не на проверке, а с ошибкой в самом тесте или окружении (error в JUnit)
+export const AUTO_STATUSES: Def<AutoStatus> = [
+  { key: "passed", label: "Пройден", tone: "ok" },
+  { key: "failed", label: "Упал", tone: "crit" },
+  { key: "broken", label: "Сломан", tone: "warn" },
   { key: "skipped", label: "Пропущен", tone: "neutral" },
 ];
 

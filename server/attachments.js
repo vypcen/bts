@@ -1,4 +1,4 @@
-// Вложения к багам и к результатам в прогонах. Файлы хранятся на диске (UPLOAD_DIR) под именем id,
+// Вложения к багам, к результатам в прогонах и к результатам автотестов. Файлы хранятся на диске (UPLOAD_DIR) под именем id,
 // метаданные — в таблице attachments.
 const fs = require("fs");
 const path = require("path");
@@ -51,14 +51,14 @@ async function save(req, res, owner) {
   const mime = (req.get("content-type") || "application/octet-stream").split(";")[0].trim().toLowerCase().slice(0, 100);
   try {
     await pool.query(
-      "INSERT INTO attachments(id, bug_id, run_result_id, filename, mime, size, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      [id, owner.bugId || null, owner.resultId || null, cleanName(req.get("x-filename")), mime, bytes, req.user.id]
+      "INSERT INTO attachments(id, bug_id, run_result_id, auto_result_id, filename, mime, size, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+      [id, owner.bugId || null, owner.resultId || null, owner.autoResultId || null, cleanName(req.get("x-filename")), mime, bytes, req.user.id]
     );
   } catch (e) {
     await fs.promises.unlink(path.join(DIR, id)).catch(() => {});
     throw e;
   }
-  broadcast("attachments");
+  broadcast(owner.autoResultId ? "autoruns" : "attachments");
   res.status(201).json({ id });
 }
 
@@ -78,6 +78,16 @@ projectRouter.post("/runs/:num/results/:case/attachments", wrap(async (req, res)
   );
   if (!rows[0]) return res.status(404).json({ error: "Кейс не входит в этот прогон" });
   await save(req, res, { resultId: rows[0].id });
+}));
+
+// Скриншот упавшего автотеста: :rid — id результата из ответа POST /autoruns/:num/results
+projectRouter.post("/autoruns/:num/results/:rid/attachments", wrap(async (req, res) => {
+  const { rows } = await pool.query(
+    "SELECT ar.id FROM auto_results ar JOIN auto_runs r ON r.id=ar.run_id WHERE r.project_key=$1 AND r.num=$2 AND ar.id=$3",
+    [req.params.key, num(req.params.num), num(req.params.rid)]
+  );
+  if (!rows[0]) return res.status(404).json({ error: "Результат не входит в этот запуск" });
+  await save(req, res, { autoResultId: rows[0].id });
 }));
 
 const fileRouter = express.Router();
@@ -116,7 +126,7 @@ fileRouter.delete("/:id", wrap(async (req, res) => {
 }));
 
 // Удаляет с диска файлы, у которых больше нет записи в базе: записи пропадают каскадно,
-// когда удаляют баг, прогон, кейс или проект. Свежие файлы не трогаем — их может дописывать save().
+// когда удаляют баг, прогон, кейс, запуск автотестов или проект. Свежие файлы не трогаем — их может дописывать save().
 async function sweep() {
   const cutoff = Date.now() - 60 * 60 * 1000;
   const names = await fs.promises.readdir(DIR);

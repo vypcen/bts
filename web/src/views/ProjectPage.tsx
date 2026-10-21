@@ -3,6 +3,7 @@ import { isOpenBug } from "../labels";
 import { href } from "../router";
 import { useData, useStore } from "../store";
 import type { Project } from "../types";
+import { AutoRunPage, AutotestsTab } from "./Autotests";
 import { BugsTab } from "./Bugs";
 import { CasesTab } from "./Cases";
 import { ProjectModal } from "./Projects";
@@ -18,16 +19,19 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
 
   // Страница прогона — отдельный экран: на ней идёт сама работа тестировщика
   if (tab === "runs" && n !== undefined) return <RunPage project={project} num={n} />;
+  if (tab === "auto" && n !== undefined) return <AutoRunPage project={project} num={n} />;
 
   const count = {
     cases: data.cases.filter((c) => c.pid === p).length,
     runs: data.runs.filter((r) => r.pid === p).length,
     bugs: data.bugs.filter((b) => b.pid === p && isOpenBug(b.status)).length,
+    auto: data.autoruns.filter((r) => r.pid === p).length,
   };
   const tabs: [string, string, number][] = [
     ["cases", "Тест-кейсы", count.cases],
     ["runs", "Прогоны", count.runs],
     ["bugs", "Баги", count.bugs],
+    ["auto", "Автотесты", count.auto],
   ];
 
   return (
@@ -44,13 +48,16 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
       </div>
       <nav className="nav">
         {tabs.map(([k, label, c]) => (
-          <a key={k} href={href("p", p, k)} aria-current={tab === k ? "page" : undefined} title={k === "bugs" ? "Открытые баги" : undefined}>
+          <a key={k} href={href("p", p, k)} aria-current={tab === k ? "page" : undefined} title={k === "bugs" ? "Открытые баги" : k === "auto" ? "Запуски автотестов" : undefined}>
             {label}
             <span className="n">{c}</span>
           </a>
         ))}
       </nav>
-      {tab === "runs" ? <RunsTab project={project} /> : tab === "bugs" ? <BugsTab project={project} openNum={n} /> : <CasesTab project={project} openNum={n} />}
+      {tab === "runs" ? <RunsTab project={project} />
+        : tab === "bugs" ? <BugsTab project={project} openNum={n} />
+        : tab === "auto" ? <AutotestsTab project={project} view={id === "tests" ? "tests" : "runs"} />
+        : <CasesTab project={project} openNum={n} />}
       {settings && <ProjectModal project={project} onClose={() => setSettings(false)} />}
     </main>
   );

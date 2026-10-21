@@ -5,6 +5,7 @@ const { migrate, waitForDb } = require("./migrate");
 const auth = require("./auth");
 const live = require("./live");
 const attachments = require("./attachments");
+const autotests = require("./autotests");
 const { wrap, str, num, ms } = require("./util");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -28,6 +29,8 @@ app.use((req, res, next) => {
   });
   next();
 });
+// Результаты автотестов приходят пачками вместе со стектрейсами — им нужен лимит побольше
+app.use("/api/projects/:key/autoruns", express.json({ limit: "10mb" }));
 app.use(express.json({ limit: "200kb" }));
 
 // Защита от CSRF: изменяющие запросы принимаются только как JSON.
@@ -41,6 +44,13 @@ app.use("/api", (req, res, next) => {
   next();
 });
 app.use(auth.loadUser);
+// Токен даёт доступ только к API автотестов: даже утёкший токен не позволит читать и менять баги и кейсы
+app.use("/api", (req, res, next) => {
+  if (req.viaToken && !/^\/projects\/[^/]+\/autoruns(\/|$)/.test(req.path)) {
+    return res.status(403).json({ error: "Токен подходит только для отправки результатов автотестов" });
+  }
+  next();
+});
 
 app.get("/api/events", auth.requireUser, live.events);
 
@@ -105,7 +115,7 @@ const toCase = (r) => ({
 
 // Всё состояние одним запросом: для MVP-объёмов это проще и надёжнее точечной синхронизации
 app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
-  const [projects, cases, users, runs, results, bugs, files] = await Promise.all([
+  const [projects, cases, users, runs, results, bugs, files, autoruns] = await Promise.all([
     pool.query(`SELECT p.key, p.name, p.description, p.created_at, u.login AS created_by
                 FROM projects p LEFT JOIN users u ON u.id=p.created_by ORDER BY p.created_at DESC`),
     pool.query(`${caseSql} ORDER BY c.project_key, c.num`),
@@ -127,7 +137,14 @@ app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
                   a.filename, a.mime, a.size, u.login AS uploaded_by, a.created_at
                 FROM attachments a LEFT JOIN bugs b ON b.id=a.bug_id
                 LEFT JOIN run_results rr ON rr.id=a.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
-                LEFT JOIN users u ON u.id=a.uploaded_by ORDER BY a.created_at`),
+                LEFT JOIN users u ON u.id=a.uploaded_by WHERE a.auto_result_id IS NULL ORDER BY a.created_at`),
+    // запуски автотестов — только сводка; сами результаты отдаёт GET /api/projects/:key/autoruns/:num
+    pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.branch, r.state, u.login AS created_by, r.created_at, r.finished_at,
+                  count(ar.id) FILTER (WHERE ar.status='passed')::int AS passed, count(ar.id) FILTER (WHERE ar.status='failed')::int AS failed,
+                  count(ar.id) FILTER (WHERE ar.status='broken')::int AS broken, count(ar.id) FILTER (WHERE ar.status='skipped')::int AS skipped,
+                  COALESCE(sum(ar.duration_ms), 0)::bigint AS duration
+                FROM auto_runs r LEFT JOIN auto_results ar ON ar.run_id=r.id LEFT JOIN users u ON u.id=r.created_by
+                GROUP BY r.id, u.login ORDER BY r.project_key, r.num`),
   ]);
   res.json({
     projects: projects.rows.map((p) => ({ id: p.key, name: p.name, desc: p.description, createdBy: p.created_by, created: p.created_at.getTime() })),
@@ -149,6 +166,11 @@ app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
     attachments: files.rows.map((a) => ({
       id: a.id, pid: a.project_key, bugNum: a.bug_num, resultId: a.run_result_id, name: a.filename, mime: a.mime, size: a.size,
       uploadedBy: a.uploaded_by, created: ms(a.created_at),
+    })),
+    autoruns: autoruns.rows.map((r) => ({
+      id: `${r.project_key}-A${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment, branch: r.branch,
+      state: r.state, createdBy: r.created_by, created: ms(r.created_at), finished: ms(r.finished_at), durationMs: Number(r.duration),
+      counts: { passed: r.passed, failed: r.failed, broken: r.broken, skipped: r.skipped },
     })),
     users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name }])),
   });
@@ -248,7 +270,8 @@ app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, r
   res.json({ ok: true });
 }));
 
-app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), attachments.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), autotests.projectRouter, attachments.projectRouter);
+app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 
 app.get("/healthz", wrap(async (_req, res) => {
@@ -257,6 +280,13 @@ app.get("/healthz", wrap(async (_req, res) => {
 }));
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "Не найдено" }));
+// Скрипты отправки результатов автотестов: curl -O http://<адрес>/testbol-reporter.js (Playwright) или /report.js (JUnit XML)
+const CLIENT_SCRIPTS = { "testbol-reporter.js": "playwright-reporter.js", "report.js": "report.js" };
+app.get(["/testbol-reporter.js", "/report.js"], (req, res) => {
+  const name = req.path.slice(1);
+  res.set("Content-Disposition", `attachment; filename="${name}"`);
+  res.type("application/javascript").sendFile(path.join(__dirname, "..", "scripts", CLIENT_SCRIPTS[name]));
+});
 // Интерфейс собирается из web/ командой npm run build:web (в Docker — автоматически)
 app.use(express.static(path.join(__dirname, "..", "public"), { index: "index.html", maxAge: 0 }));
 

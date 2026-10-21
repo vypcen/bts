@@ -57,9 +57,26 @@ async function destroySession(req, res) {
   res.clearCookie(COOKIE, { path: "/" });
 }
 
-// Кладёт в req.user {id, login, name}, если cookie валидна
+// Токен для скриптов: "tb_" + случайная строка. Показывается один раз, в базе только хэш
+const newApiToken = () => "tb_" + crypto.randomBytes(24).toString("base64url");
+
+// Кладёт в req.user {id, login, name}, если cookie или токен (Authorization: Bearer) валидны.
+// Вход по токену помечается req.viaToken: такие запросы пускаются только к API автотестов
 async function loadUser(req, _res, next) {
   try {
+    const bearer = /^Bearer\s+(tb_[\w-]{20,64})$/.exec(req.get("authorization") || "");
+    if (bearer) {
+      const { rows } = await pool.query(
+        `UPDATE api_tokens t SET last_used_at=now() FROM users u
+         WHERE t.token_hash=$1 AND u.id=t.user_id RETURNING u.id, u.login, u.name`,
+        [sha256(bearer[1])]
+      );
+      if (rows[0]) {
+        req.user = rows[0];
+        req.viaToken = true;
+      }
+      return next();
+    }
     const token = parseCookies(req.headers.cookie)[COOKIE];
     if (token) {
       const { rows } = await pool.query(
@@ -102,6 +119,8 @@ setInterval(() => {
 }, 10 * 60 * 1000).unref();
 
 module.exports = {
+  sha256,
+  newApiToken,
   hashPassword,
   verifyPassword,
   createSession,

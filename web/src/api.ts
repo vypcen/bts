@@ -69,4 +69,9 @@ export const paths = {
   bugs: (k: string) => `/api/projects/${e(k)}/bugs`,
   bug: (k: string, n: number) => `/api/projects/${e(k)}/bugs/${n}`,
   file: (id: string) => `/api/attachments/${e(id)}`,
+  autoruns: (k: string) => `/api/projects/${e(k)}/autoruns`,
+  autorun: (k: string, n: number) => `/api/projects/${e(k)}/autoruns/${n}`,
+  autoFiles: (k: string, n: number, rid: number) => `/api/projects/${e(k)}/autoruns/${n}/results/${rid}/attachments`,
+  autotests: (k: string) => `/api/projects/${e(k)}/autotests`,
+  tokens: "/api/tokens",
 };
