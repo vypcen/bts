@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { isOpenBug } from "../labels";
 import { href } from "../router";
-import { useData, useStore } from "../store";
+import { useCanEdit, useData, useStore } from "../store";
 import type { Project } from "../types";
 import { AutoRunPage, AutotestsTab } from "./Autotests";
 import { BugsTab } from "./Bugs";
@@ -13,6 +13,7 @@ import { RunsTab } from "./Runs";
 export function ProjectPage({ project, tab, id }: { project: Project; tab: string; id?: string }) {
   const data = useData();
   const { liveError } = useStore();
+  const canEdit = useCanEdit();
   const [settings, setSettings] = useState(false);
   const p = project.id;
   const n = id && /^\d+$/.test(id) ? Number(id) : undefined;
@@ -44,7 +45,7 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
           {project.desc && <p className="muted">{project.desc}</p>}
         </div>
         <div className="spacer" />
-        <button className="btn" onClick={() => setSettings(true)}>Настройки проекта</button>
+        {canEdit && <button className="btn" onClick={() => setSettings(true)}>Настройки проекта</button>}
       </div>
       <nav className="nav">
         {tabs.map(([k, label, c]) => (

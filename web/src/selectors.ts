@@ -28,5 +28,11 @@ export function countResults(list: { result: ResultValue }[]) {
   return c;
 }
 
+// Кому можно назначить баг в проекте: участникам и админам (сервер проверяет то же самое)
+export const assigneesOf = (data: State, pid: string) => {
+  const members = new Set(data.projects.find((p) => p.id === pid)?.members || []);
+  return Object.keys(data.users).filter((u) => members.has(u) || data.users[u].role === "admin");
+};
+
 export const runResults = (data: State, pid: string, runNum: number) =>
   data.results.filter((r) => r.pid === pid && r.runNum === runNum);

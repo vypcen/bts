@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, paths } from "../api";
 import { AUTO_STATUSES, find } from "../labels";
 import { go, href } from "../router";
-import { useData, useStore } from "../store";
+import { useCanEdit, useData, useLoad, useStore } from "../store";
 import type { Attachment, AutoResult, AutoRun, AutoStatus, AutoStep, AutoTest, Project } from "../types";
 import { Confirm, Drawer, Empty, fmt, Modal, Pill, ResultBar } from "../ui";
 import { Attachments } from "./Attachments";
@@ -65,25 +65,9 @@ function RunMeta({ r }: { r: AutoRun }) {
 const barCounts = (c: Record<AutoStatus, number>) => ({ passed: c.passed, failed: c.failed, blocked: c.broken, skipped: c.skipped, untested: 0 });
 const total = (c: Record<AutoStatus, number>) => c.passed + c.failed + c.broken + c.skipped;
 
-// Загружает данные, которых нет в общем состоянии, и перечитывает их при каждом обновлении состояния
-function useLoad<T>(url: string) {
-  const data = useData();
-  const [s, setS] = useState<{ value?: T; error?: string }>({});
-  useEffect(() => {
-    let alive = true;
-    api<T>("GET", url).then(
-      (value) => alive && setS({ value }),
-      (e) => alive && setS((prev) => ({ ...prev, error: e.message }))
-    );
-    return () => {
-      alive = false;
-    };
-  }, [url, data]);
-  return s;
-}
-
 export function AutotestsTab({ project, view }: { project: Project; view: "runs" | "tests" }) {
   const data = useData();
+  const canEdit = useCanEdit();
   const p = project.id;
   const [connect, setConnect] = useState(false);
   const runs = data.autoruns.filter((r) => r.pid === p).sort((a, b) => b.num - a.num);
@@ -96,14 +80,14 @@ export function AutotestsTab({ project, view }: { project: Project; view: "runs"
           <button role="tab" aria-selected={view === "tests"} onClick={() => go("p", p, "auto", "tests")}>Все автотесты</button>
         </div>
         <div className="spacer" />
-        <button className="btn primary" onClick={() => setConnect(true)}>Подключить автотесты</button>
+        {canEdit && <button className="btn primary" onClick={() => setConnect(true)}>Подключить автотесты</button>}
       </div>
       {view === "tests" ? (
         <TestsRegistry project={project} />
       ) : runs.length === 0 ? (
         <Empty title="Запусков автотестов пока нет">
           Каждый запуск тестов на вашем компьютере или в CI появится здесь отдельной папкой: что прошло, что упало, скриншоты падений.
-          <button className="btn primary" onClick={() => setConnect(true)}>Подключить автотесты</button>
+          {canEdit && <button className="btn primary" onClick={() => setConnect(true)}>Подключить автотесты</button>}
         </Empty>
       ) : (
         <div className="tbl-wrap">
@@ -155,6 +139,7 @@ type Filter = "all" | "problems" | AutoStatus;
 export function AutoRunPage({ project, num }: { project: Project; num: number }) {
   const data = useData();
   const { write, liveError } = useStore();
+  const canEdit = useCanEdit();
   const p = project.id;
   const run = data.autoruns.find((r) => r.pid === p && r.num === num);
   const { value, error } = useLoad<{ results: AutoResult[]; attachments: Attachment[] }>(paths.autorun(p, num));
@@ -210,8 +195,8 @@ export function AutoRunPage({ project, num }: { project: Project; num: number })
         <div className="spacer" />
         <div className="acts">
           {run.state === "running" ? <Pill tone="info" label="Идёт" /> : bad ? <Pill tone="crit" label={`Упало ${bad}`} /> : <Pill tone="ok" label="Всё прошло" />}
-          <button className="btn" onClick={() => setModal("edit")}>Параметры</button>
-          <button className="btn danger" onClick={() => setModal("delete")} aria-label="Удалить запуск">✕</button>
+          {canEdit && <button className="btn" onClick={() => setModal("edit")}>Параметры</button>}
+          {canEdit && <button className="btn danger" onClick={() => setModal("delete")} aria-label="Удалить запуск">✕</button>}
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -314,6 +299,7 @@ function draftFromAuto(run: AutoRun, r: AutoResult): BugDraft {
 
 function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachment[]; onClose: () => void; onBug: (d: BugDraft) => void }) {
   const { run, r, files } = props;
+  const canEdit = useCanEdit();
   return (
     <Drawer
       label="Результат автотеста"
@@ -322,7 +308,7 @@ function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachmen
       onClose={props.onClose}
       footer={
         <>
-          {isProblem(r.status) && <button className="btn" onClick={() => props.onBug(draftFromAuto(run, r))}>Завести баг</button>}
+          {canEdit && isProblem(r.status) && <button className="btn" onClick={() => props.onBug(draftFromAuto(run, r))}>Завести баг</button>}
           <div className="spacer" />
           <button className="btn" onClick={props.onClose}>Закрыть</button>
         </>
@@ -345,7 +331,7 @@ function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachmen
           <pre className="txt mono small" style={{ margin: 0, maxHeight: 360, overflow: "auto", whiteSpace: "pre-wrap" }}>{r.details}</pre>
         </div>
       )}
-      <Attachments list={files} label="Скриншоты и файлы" uploadUrl={paths.autoFiles(run.pid, run.num, r.id)} />
+      <Attachments list={files} label="Скриншоты и файлы" uploadUrl={canEdit ? paths.autoFiles(run.pid, run.num, r.id) : undefined} />
       {files.some((a) => a.name === "trace.zip") && (
         <span className="muted small">
           Трейс Playwright: скачайте trace.zip и откройте на <a href="https://trace.playwright.dev" target="_blank" rel="noopener">trace.playwright.dev</a> или командой <span className="mono">npx playwright show-trace trace.zip</span>.
@@ -393,6 +379,7 @@ function AutoRunModal({ run, onClose }: { run: AutoRun; onClose: () => void }) {
 function TestsRegistry({ project }: { project: Project }) {
   const p = project.id;
   const { write } = useStore();
+  const canEdit = useCanEdit();
   const { value, error } = useLoad<{ tests: AutoTest[] }>(paths.autotests(p));
   const [q, setQ] = useState("");
   const [onlyFlaky, setOnlyFlaky] = useState(false);
@@ -446,7 +433,7 @@ function TestsRegistry({ project }: { project: Project }) {
                     </div>
                   </td>
                   <td className="small">{fmt(t.created)}</td>
-                  <td><button className="btn ghost sm" onClick={() => setDel(t)} aria-label={`Удалить ${t.name}`} title="Удалить из реестра">✕</button></td>
+                  <td>{canEdit && <button className="btn ghost sm" onClick={() => setDel(t)} aria-label={`Удалить ${t.name}`} title="Удалить из реестра">✕</button>}</td>
                 </tr>
               );
             })}

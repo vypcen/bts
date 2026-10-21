@@ -8,6 +8,7 @@ const { pipeline } = require("stream/promises");
 const express = require("express");
 const { pool } = require("./db");
 const { broadcast } = require("./live");
+const access = require("./access");
 const { wrap, num } = require("./util");
 
 const DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "data", "uploads");
@@ -92,10 +93,24 @@ projectRouter.post("/autoruns/:num/results/:rid/attachments", wrap(async (req, r
 
 const fileRouter = express.Router();
 
-fileRouter.get("/:id", wrap(async (req, res) => {
-  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "Файл не найден" });
-  const { rows } = await pool.query("SELECT filename, mime, size FROM attachments WHERE id=$1", [req.params.id]);
+// Файл вместе с ключом проекта, которому он принадлежит. Файл из недоступного проекта — как несуществующий
+async function findFile(req) {
+  if (!UUID_RE.test(req.params.id)) return null;
+  const { rows } = await pool.query(
+    `SELECT a.filename, a.mime, a.size, COALESCE(b.project_key, t.project_key, r.project_key) AS project_key
+     FROM attachments a
+     LEFT JOIN bugs b ON b.id=a.bug_id
+     LEFT JOIN run_results rr ON rr.id=a.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
+     LEFT JOIN auto_results ar ON ar.id=a.auto_result_id LEFT JOIN auto_runs r ON r.id=ar.run_id
+     WHERE a.id=$1`,
+    [req.params.id]
+  );
   const a = rows[0];
+  return a && (await access.hasProject(req.user, a.project_key)) ? a : null;
+}
+
+fileRouter.get("/:id", wrap(async (req, res) => {
+  const a = await findFile(req);
   if (!a) return res.status(404).json({ error: "Файл не найден" });
   const inline = INLINE.has(a.mime);
   const ascii = a.filename.replace(/[^\x20-\x7e]/g, "_");
@@ -116,8 +131,8 @@ fileRouter.get("/:id", wrap(async (req, res) => {
   stream.pipe(res);
 }));
 
-fileRouter.delete("/:id", wrap(async (req, res) => {
-  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: "Файл не найден" });
+fileRouter.delete("/:id", access.requireWriter, wrap(async (req, res) => {
+  if (!(await findFile(req))) return res.status(404).json({ error: "Файл не найден" });
   const r = await pool.query("DELETE FROM attachments WHERE id=$1", [req.params.id]);
   if (!r.rowCount) return res.status(404).json({ error: "Файл не найден" });
   await fs.promises.unlink(path.join(DIR, req.params.id)).catch(() => {});

@@ -3,13 +3,14 @@ import { api, paths } from "../api";
 import { isOpenBug } from "../labels";
 import { go, href } from "../router";
 import { lastResults } from "../selectors";
-import { useData, useStore } from "../store";
+import { useCanEdit, useData, useStore } from "../store";
 import type { Project, ResultValue } from "../types";
 import { Confirm, Empty, Modal, ResultBar, useNames } from "../ui";
 
 export function Projects({ missing }: { missing?: string }) {
   const data = useData();
   const { liveError } = useStore();
+  const canEdit = useCanEdit();
   const nameOf = useNames();
   const [creating, setCreating] = useState(false);
   const list = [...data.projects].sort((a, b) => b.created - a.created);
@@ -43,17 +44,17 @@ export function Projects({ missing }: { missing?: string }) {
       <div className="head">
         <div>
           <h1>Проекты</h1>
-          <p className="muted">Общие для всех участников команды</p>
+          <p className="muted">Проекты, к которым у вас есть доступ</p>
         </div>
         <div className="spacer" />
-        <button className="btn primary" onClick={() => setCreating(true)}>+ Новый проект</button>
+        {canEdit && <button className="btn primary" onClick={() => setCreating(true)}>+ Новый проект</button>}
       </div>
       {list.length ? (
         <div className="grid">{list.map(card)}</div>
       ) : (
         <Empty title="Проектов пока нет">
-          Создайте первый проект. Он сразу станет виден всем участникам.
-          <button className="btn primary" onClick={() => setCreating(true)}>+ Новый проект</button>
+          {canEdit ? "Создайте первый проект. Коллег в него добавляет администратор в разделе «Пользователи»." : "Вас ещё не добавили ни в один проект. Попросите администратора выдать доступ."}
+          {canEdit && <button className="btn primary" onClick={() => setCreating(true)}>+ Новый проект</button>}
         </Empty>
       )}
       {creating && <ProjectModal onClose={() => setCreating(false)} />}
@@ -63,14 +64,14 @@ export function Projects({ missing }: { missing?: string }) {
 
 export function ProjectModal({ project, onClose }: { project?: Project; onClose: () => void }) {
   const data = useData();
-  const { me, write, toast, reload } = useStore();
+  const { write, toast, reload } = useStore();
   const [name, setName] = useState(project?.name || "");
   const [key, setKey] = useState(project?.id || "");
   const [desc, setDesc] = useState(project?.desc || "");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
-  const canDelete = project && (!project.createdBy || project.createdBy === me?.login);
+  const canDelete = Boolean(project);
 
   async function submit(e: FormEvent) {
     e.preventDefault();

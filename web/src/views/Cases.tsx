@@ -3,7 +3,7 @@ import { api, paths } from "../api";
 import { BUG_STATUSES, CASE_STATUSES, find, isOpenBug, PRIORITIES, RESULTS } from "../labels";
 import { go, href } from "../router";
 import { lastResults } from "../selectors";
-import { useData, useStore } from "../store";
+import { useCanEdit, useData, useStore } from "../store";
 import type { Project, ResultValue, TestCase } from "../types";
 import { Confirm, Drawer, Empty, fmt, Pill, Prio, ResultPill, TextBlock, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
@@ -21,6 +21,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const [deleting, setDeleting] = useState<TestCase | null>(null);
   const [bugDraft, setBugDraft] = useState<BugDraft | null>(null);
   const { write } = useStore();
+  const canEdit = useCanEdit();
 
   const all = data.cases.filter((c) => c.pid === p);
   const last = lastResults(data, p);
@@ -47,7 +48,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
       <div className="head">
         <p className="muted small" style={{ margin: 0 }}>Результат — последний из прогонов. Чтобы проверить кейсы на новой сборке, создайте прогон.</p>
         <div className="spacer" />
-        <button className="btn primary" onClick={() => setEditing("new")}>+ Тест-кейс</button>
+        {canEdit && <button className="btn primary" onClick={() => setEditing("new")}>+ Тест-кейс</button>}
       </div>
       <div className="stats">
         {chip("all", "Все")}
@@ -67,8 +68,8 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
       </div>
       {all.length === 0 ? (
         <Empty title="В проекте нет тест-кейсов">
-          Добавьте первый: название, шаги и ожидаемый результат.
-          <button className="btn primary" onClick={() => setEditing("new")}>+ Тест-кейс</button>
+          {canEdit ? "Добавьте первый: название, шаги и ожидаемый результат." : "Здесь появятся тест-кейсы, которые заведут тестировщики."}
+          {canEdit && <button className="btn primary" onClick={() => setEditing("new")}>+ Тест-кейс</button>}
         </Empty>
       ) : (
         <div className="tbl-wrap">
@@ -96,8 +97,8 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
                     </td>
                     <td className="muted small nowrap">{fmt(c.updated)}</td>
                     <td className="actions" onClick={(e) => e.stopPropagation()}>
-                      <button className="btn ghost" onClick={() => setEditing(c)} aria-label="Редактировать">✎</button>
-                      <button className="btn ghost" onClick={() => setDeleting(c)} aria-label="Удалить" style={{ color: "var(--crit)" }}>✕</button>
+                      {canEdit && <button className="btn ghost" onClick={() => setEditing(c)} aria-label="Редактировать">✎</button>}
+                      {canEdit && <button className="btn ghost" onClick={() => setDeleting(c)} aria-label="Удалить" style={{ color: "var(--crit)" }}>✕</button>}
                     </td>
                   </tr>
                 );
@@ -134,6 +135,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
 function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onClose: () => void; onEdit: () => void; onDelete: () => void; onBug: (d: BugDraft) => void }) {
   const data = useData();
   const { write } = useStore();
+  const canEdit = useCanEdit();
   const p = c.pid;
   const history = data.results
     .filter((r) => r.pid === p && r.caseNum === c.num)
@@ -154,19 +156,21 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
       title={c.title}
       onClose={onClose}
       footer={
-        <>
-          <button className="btn primary" onClick={onEdit}>Редактировать</button>
-          <button className="btn" onClick={newBug}>Завести баг</button>
-          <div className="spacer" />
-          <button className="btn danger" onClick={onDelete}>Удалить</button>
-        </>
+        canEdit && (
+          <>
+            <button className="btn primary" onClick={onEdit}>Редактировать</button>
+            <button className="btn" onClick={newBug}>Завести баг</button>
+            <div className="spacer" />
+            <button className="btn danger" onClick={onDelete}>Удалить</button>
+          </>
+        )
       }
     >
       <div className="row2">
         <div className="view-block"><span className="label">Приоритет</span><Prio p={c.priority} /></div>
         <div className="view-block">
           <span className="label">Статус</span>
-          <select className="input" value={c.status} onChange={(e) => { const status = e.target.value; write(() => api("PATCH", paths.testCase(p, c.num), { status }), `Статус: ${find(CASE_STATUSES, status as TestCase["status"]).label}`); }}>
+          <select className="input" value={c.status} disabled={!canEdit} onChange={(e) => { const status = e.target.value; write(() => api("PATCH", paths.testCase(p, c.num), { status }), `Статус: ${find(CASE_STATUSES, status as TestCase["status"]).label}`); }}>
             {CASE_STATUSES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
           </select>
         </div>

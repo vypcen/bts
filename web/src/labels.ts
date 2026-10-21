@@ -1,4 +1,4 @@
-import type { AutoStatus, BugStatus, CaseStatus, Priority, ResultValue, Severity } from "./types";
+import type { AutoStatus, BugStatus, CaseStatus, Priority, ResultValue, Role, Severity } from "./types";
 
 export type Tone = "neutral" | "info" | "ok" | "crit" | "warn" | "accent";
 type Def<K extends string> = { key: K; label: string; tone: Tone }[];
@@ -74,3 +74,10 @@ export const isOpenBug = (s: BugStatus) => !RESOLVED.includes(s);
 export function find<K extends string>(list: Def<K>, key: K) {
   return list.find((d) => d.key === key) || { key, label: key, tone: "neutral" as Tone };
 }
+
+export const ROLES: (Def<Role>[number] & { hint: string })[] = [
+  { key: "tester", label: "Тестировщик", tone: "info", hint: "Создаёт, меняет и удаляет всё в своих проектах" },
+  { key: "developer", label: "Разработчик", tone: "neutral", hint: "Только просмотр своих проектов" },
+  { key: "admin", label: "Администратор", tone: "accent", hint: "Все проекты, пользователи, роли и доступы" },
+];
+export const roleOf = (r: Role) => ROLES.find((x) => x.key === r) || ROLES[1];

@@ -4,6 +4,7 @@ const express = require("express");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const { sha256, newApiToken } = require("./auth");
+const access = require("./access");
 const { wrap, str, num } = require("./util");
 
 const STATUSES = ["passed", "failed", "broken", "skipped"];
@@ -246,7 +247,8 @@ tokenRouter.get("/", wrap(async (req, res) => {
   res.json({ tokens: rows.map((t) => ({ id: t.id, name: t.name, created: t.created_at.getTime(), used: t.last_used_at ? t.last_used_at.getTime() : null })) });
 }));
 
-tokenRouter.post("/", wrap(async (req, res) => {
+// токен нужен только чтобы отправлять результаты, а разработчику это недоступно
+tokenRouter.post("/", access.requireWriter, wrap(async (req, res) => {
   const name = str(req.body.name, 100);
   if (!name) return res.status(400).json({ error: "Укажите название токена, например «Ноутбук» или «CI»" });
   const token = newApiToken();

@@ -15,9 +15,13 @@ export interface AutoStep {
   steps: AutoStep[];
 }
 
+// tester — работает с проектами, developer — только смотрит, admin — ещё и пользователи с доступами
+export type Role = "tester" | "developer" | "admin";
+
 export interface User {
   login: string;
   name: string;
+  role: Role;
 }
 
 export interface Project {
@@ -26,6 +30,7 @@ export interface Project {
   desc: string;
   createdBy: string | null;
   created: number;
+  members: string[]; // логины участников; админы видят проект и без этого
 }
 
 export interface TestCase {
@@ -156,5 +161,5 @@ export interface State {
   bugs: Bug[];
   attachments: Attachment[];
   autoruns: AutoRun[];
-  users: Record<string, { name: string }>;
+  users: Record<string, { name: string; role: Role }>;
 }

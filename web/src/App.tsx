@@ -5,6 +5,8 @@ import { Avatar } from "./ui";
 import { Login } from "./views/Login";
 import { ProjectPage } from "./views/ProjectPage";
 import { Projects } from "./views/Projects";
+import { Users } from "./views/Users";
+import { roleOf } from "./labels";
 
 export function App() {
   const { me, bootError, data } = useStore();
@@ -28,9 +30,11 @@ export function App() {
   const project = section === "p" && data ? data.projects.find((p) => p.id === key) : undefined;
   return (
     <>
-      <Topbar projectName={project?.name} projectKey={project?.id} />
+      <Topbar projectName={project?.name} projectKey={project?.id} users={section === "users"} />
       {!data ? (
         <main className="wrap"><div className="skel">Загружаем данные…</div></main>
+      ) : section === "users" ? (
+        <Users />
       ) : section === "p" && project ? (
         <ProjectPage project={project} tab={tab || "cases"} id={id} />
       ) : (
@@ -40,7 +44,7 @@ export function App() {
   );
 }
 
-function Topbar({ projectName, projectKey }: { projectName?: string; projectKey?: string }) {
+function Topbar({ projectName, projectKey, users }: { projectName?: string; projectKey?: string; users?: boolean }) {
   const { me, liveError, setMe, toast } = useStore();
   const logout = () => {
     api("POST", "/api/auth/logout", {}).catch(() => {});
@@ -60,6 +64,12 @@ function Topbar({ projectName, projectKey }: { projectName?: string; projectKey?
               <span>/</span>
               <a href={href("p", projectKey!)} style={{ color: "inherit", textDecoration: "none", minWidth: 0 }}><b>{projectName}</b></a>
             </>
+          ) : users ? (
+            <>
+              <a className="btn ghost" href={href()} style={{ padding: "4px 6px", color: "inherit", textDecoration: "none" }}>Проекты</a>
+              <span>/</span>
+              <b>Пользователи</b>
+            </>
           ) : (
             <b>Проекты</b>
           )}
@@ -69,11 +79,12 @@ function Topbar({ projectName, projectKey }: { projectName?: string; projectKey?
           <span className="dot" />
           {liveError ? "Нет связи" : "Онлайн"}
         </span>
+        {me?.role === "admin" && <a className="btn" href={href("users")} style={{ textDecoration: "none" }}>Пользователи</a>}
         {me && (
-          <span className="user who">
+          <span className="user who" title={roleOf(me.role).hint}>
             <Avatar login={me.login} />
             <span>{me.name}</span>
-            <span className="mono" style={{ fontSize: 12 }}>@{me.login}</span>
+            <span className="mono" style={{ fontSize: 12 }}>@{me.login} · {roleOf(me.role).label}</span>
           </span>
         )}
         <button className="btn" onClick={logout}>Выйти</button>

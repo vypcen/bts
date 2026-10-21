@@ -2,7 +2,8 @@ import { useState, type FormEvent } from "react";
 import { api, paths } from "../api";
 import { BUG_FLOW, BUG_STATUSES, find, isOpenBug, SEVERITIES, transitionLabel } from "../labels";
 import { go, href } from "../router";
-import { useData, useStore } from "../store";
+import { assigneesOf } from "../selectors";
+import { useCanEdit, useData, useStore } from "../store";
 import type { Bug, BugStatus, Project, Result, Run, Severity, TestCase } from "../types";
 import { Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who } from "../ui";
 import { Attachments } from "./Attachments";
@@ -41,6 +42,7 @@ const EMPTY: BugDraft = { title: "", severity: "major", assignee: "", env: "", s
 export function BugsTab({ project, openNum }: { project: Project; openNum?: number }) {
   const data = useData();
   const { me } = useStore();
+  const canEdit = useCanEdit();
   const p = project.id;
   const [q, setQ] = useState("");
   const [fStatus, setFStatus] = useState("open");
@@ -81,12 +83,12 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
           <option value="none">Не назначены</option>
           {users.filter((u) => u !== me?.login).map((u) => <option key={u} value={u}>{nameOf(u)}</option>)}
         </select>
-        <button className="btn primary" onClick={() => setEditing({ draft: EMPTY })}>+ Баг</button>
+        {canEdit && <button className="btn primary" onClick={() => setEditing({ draft: EMPTY })}>+ Баг</button>}
       </div>
       {all.length === 0 ? (
         <Empty title="Багов пока нет">
-          Заведите баг вручную или прямо из упавшего кейса в прогоне: шаги и ожидаемый результат подставятся сами.
-          <button className="btn primary" onClick={() => setEditing({ draft: EMPTY })}>+ Баг</button>
+          {canEdit ? "Заведите баг вручную или прямо из упавшего кейса в прогоне: шаги и ожидаемый результат подставятся сами." : "Здесь появятся баги, которые заведут тестировщики."}
+          {canEdit && <button className="btn primary" onClick={() => setEditing({ draft: EMPTY })}>+ Баг</button>}
         </Empty>
       ) : (
         <div className="tbl-wrap">
@@ -132,6 +134,7 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
 function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; onEdit: () => void }) {
   const data = useData();
   const { write } = useStore();
+  const canEdit = useCanEdit();
   const nameOf = useNames();
   const [dupOpen, setDupOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -155,19 +158,21 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
       title={bug.title}
       onClose={onClose}
       footer={
-        <>
-          <button className="btn primary" onClick={onEdit}>Редактировать</button>
-          <div className="spacer" />
-          <button className="btn danger" onClick={() => setDeleting(true)}>Удалить</button>
-        </>
+        canEdit && (
+          <>
+            <button className="btn primary" onClick={onEdit}>Редактировать</button>
+            <div className="spacer" />
+            <button className="btn danger" onClick={() => setDeleting(true)}>Удалить</button>
+          </>
+        )
       }
     >
       <div className="view-block">
         <span className="label">Статус</span>
         <div className="flow" style={{ alignItems: "center" }}>
           <Pill tone={st.tone} label={st.label} />
-          <span className="muted">→</span>
-          {BUG_FLOW[bug.status].map((to) => (
+          {canEdit && <span className="muted">→</span>}
+          {canEdit && BUG_FLOW[bug.status].map((to) => (
             <button key={to} className={`btn sm${to === "fixed" || to === "verified" || to === "closed" ? " primary" : ""}`} onClick={() => move(to)}>
               {transitionLabel(bug.status, to)}
             </button>
@@ -183,15 +188,16 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
       <div className="row2">
         <div className="view-block">
           <span className="label">Серьёзность</span>
-          <select className="input" value={bug.severity} onChange={(e) => patch({ severity: e.target.value }, "Серьёзность изменена")}>
+          <select className="input" value={bug.severity} disabled={!canEdit} onChange={(e) => patch({ severity: e.target.value }, "Серьёзность изменена")}>
             {SEVERITIES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
           </select>
         </div>
         <div className="view-block">
           <span className="label">Исполнитель</span>
-          <select className="input" value={bug.assignee || ""} onChange={(e) => patch({ assignee: e.target.value }, e.target.value ? `Назначен: ${nameOf(e.target.value)}` : "Исполнитель снят")}>
+          <select className="input" value={bug.assignee || ""} disabled={!canEdit} onChange={(e) => patch({ assignee: e.target.value }, e.target.value ? `Назначен: ${nameOf(e.target.value)}` : "Исполнитель снят")}>
             <option value="">Не назначен</option>
-            {Object.keys(data.users).map((u) => <option key={u} value={u}>{nameOf(u)}</option>)}
+            {/* прежний исполнитель остаётся в списке, даже если его убрали из проекта */}
+            {[...new Set([...assigneesOf(data, p), ...(bug.assignee ? [bug.assignee] : [])])].map((u) => <option key={u} value={u}>{nameOf(u)}</option>)}
           </select>
         </div>
       </div>
@@ -208,7 +214,7 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
           {result && <> · сейчас: <ResultPill r={result.result} sm /></>}
         </div>
       )}
-      <Attachments list={files} uploadUrl={`${paths.bug(p, bug.num)}/attachments`} paste />
+      <Attachments list={files} uploadUrl={canEdit ? `${paths.bug(p, bug.num)}/attachments` : undefined} paste={canEdit} />
       {resultFiles.length > 0 && <Attachments list={resultFiles} label={`Вложения из прогона ${run?.id || ""}`} />}
       <div className="row2 small">
         <div className="view-block"><span className="label">Создал</span><Who login={bug.createdBy} /><span className="muted">{fmt(bug.created)}</span></div>
@@ -297,7 +303,7 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
           <div className="field"><label htmlFor="b-who">Исполнитель</label>
             <select className="input" id="b-who" value={f.assignee} onChange={set("assignee")}>
               <option value="">Не назначен</option>
-              {Object.keys(data.users).map((u) => <option key={u} value={u}>{nameOf(u)}</option>)}
+              {[...new Set([...assigneesOf(data, pid), ...(draft.assignee ? [draft.assignee] : [])])].map((u) => <option key={u} value={u}>{nameOf(u)}</option>)}
             </select></div>
         </div>
         <div className="field"><label htmlFor="b-env">Окружение / версия</label><input className="input" id="b-env" value={f.env} onChange={set("env")} placeholder="Сборка 1.4.2, Chrome 130, staging" /></div>

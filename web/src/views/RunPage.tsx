@@ -3,7 +3,7 @@ import { api, paths } from "../api";
 import { BUG_STATUSES, find, RESULTS } from "../labels";
 import { go, href } from "../router";
 import { countResults, previousResults, runResults } from "../selectors";
-import { useData, useStore } from "../store";
+import { useCanEdit, useData, useStore } from "../store";
 import type { Project, Result, ResultValue, Run, TestCase } from "../types";
 import { Confirm, Drawer, fmt, Modal, Pill, Prio, ResultBar, ResultPill, TextBlock, Who } from "../ui";
 import { Attachments } from "./Attachments";
@@ -15,6 +15,7 @@ const MARKS: ResultValue[] = ["passed", "failed", "blocked", "skipped"];
 export function RunPage({ project, num }: { project: Project; num: number }) {
   const data = useData();
   const { write, liveError } = useStore();
+  const canEdit = useCanEdit();
   const p = project.id;
   const run = data.runs.find((r) => r.pid === p && r.num === num);
   const [filter, setFilter] = useState<"all" | ResultValue>("all");
@@ -33,6 +34,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   }
 
   const open = run.state === "open";
+  const editable = open && canEdit;
   const results = runResults(data, p, num);
   const counts = countResults(results);
   const prev = previousResults(data, p, num);
@@ -72,19 +74,23 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
         <div className="spacer" />
         <div className="acts">
           {open ? <Pill tone="info" label="Идёт" /> : <Pill tone="neutral" label={`Закрыт ${fmt(run.closed)}`} />}
-          <button className="btn" onClick={() => setModal("edit")}>Параметры</button>
-          {open && <button className="btn" onClick={() => setModal("add")}>Добавить кейсы</button>}
-          <button className={`btn${open ? " primary" : ""}`} onClick={() => write(() => api("PATCH", paths.run(p, num), { state: open ? "closed" : "open" }), open ? "Прогон закрыт" : "Прогон снова открыт")}>
-            {open ? "Закрыть прогон" : "Открыть снова"}
-          </button>
-          <button className="btn danger" onClick={() => setModal("delete")} aria-label="Удалить прогон">✕</button>
+          {canEdit && (
+            <>
+              <button className="btn" onClick={() => setModal("edit")}>Параметры</button>
+              {open && <button className="btn" onClick={() => setModal("add")}>Добавить кейсы</button>}
+              <button className={`btn${open ? " primary" : ""}`} onClick={() => write(() => api("PATCH", paths.run(p, num), { state: open ? "closed" : "open" }), open ? "Прогон закрыт" : "Прогон снова открыт")}>
+                {open ? "Закрыть прогон" : "Открыть снова"}
+              </button>
+              <button className="btn danger" onClick={() => setModal("delete")} aria-label="Удалить прогон">✕</button>
+            </>
+          )}
         </div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <ResultBar counts={counts} />
         <span className="muted small">Проверено {done} из {results.length}{results.length ? ` (${Math.round((done / results.length) * 100)}%)` : ""}</span>
       </div>
-      {!open && <div className="banner">Прогон закрыт: результаты зафиксированы. Чтобы что-то поменять, откройте его снова.</div>}
+      {!open && <div className="banner">Прогон закрыт: результаты зафиксированы.{canEdit && " Чтобы что-то поменять, откройте его снова."}</div>}
       <div className="stats">
         {chip("all", "Все", results.length)}
         {RESULTS.map((x) => chip(x.key, x.label, counts[x.key]))}
@@ -111,7 +117,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
                   <td className="title">{c.title}{r.comment && <div className="muted small" style={{ fontWeight: 400, whiteSpace: "pre-wrap" }}>{r.comment.slice(0, 140)}</div>}</td>
                   <td><Prio p={c.priority} /></td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    {open ? <ResultButtons value={r.result} onPick={(v) => mark(r, v)} /> : <ResultPill r={r.result} />}
+                    {editable ? <ResultButtons value={r.result} onPick={(v) => mark(r, v)} /> : <ResultPill r={r.result} />}
                   </td>
                   <td className="nowrap">
                     {pr ? <span title={`${p}-R${pr.runNum}`}><ResultPill r={pr.result} sm /> <span className="muted small mono">R{pr.runNum}</span></span> : <span className="muted small">—</span>}
@@ -120,7 +126,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
                   <td onClick={(e) => e.stopPropagation()}>
                     <div className="chips">
                       {bugs.map((b) => <a key={b.id} className="chip" href={href("p", p, "bugs", b.num)} title={`${b.title} · ${find(BUG_STATUSES, b.status).label}`}>B{b.num}</a>)}
-                      {!bugs.length && (r.result === "failed" || r.result === "blocked") && (
+                      {canEdit && !bugs.length && (r.result === "failed" || r.result === "blocked") && (
                         <button className="btn sm" onClick={() => setBugDraft(draftFromCase(c, run, r))}>+ Баг</button>
                       )}
                     </div>
@@ -183,9 +189,11 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   const { run, r, c, prev } = props;
   const data = useData();
   const { write } = useStore();
+  const canEdit = useCanEdit();
   const [comment, setComment] = useState(r.comment);
   const p = run.pid;
-  const open = run.state === "open";
+  // разработчик видит результат так же, как в закрытом прогоне: без кнопок и правки
+  const open = run.state === "open" && canEdit;
   const files = data.attachments.filter((a) => a.resultId === r.id);
   const bugs = data.bugs.filter((b) => b.pid === p && (b.resultId === r.id || (b.caseNum === c.num && b.runNum === run.num)));
   const dirty = comment.trim() !== r.comment;
@@ -210,7 +218,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
       onClose={props.onClose}
       footer={
         <>
-          {(r.result === "failed" || r.result === "blocked") && (
+          {canEdit && (r.result === "failed" || r.result === "blocked") && (
             <button className="btn" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(c, run, { ...r, comment: comment.trim() })); }}>Завести баг</button>
           )}
           <a className="btn ghost" href={href("p", p, "cases", c.num)} style={{ textDecoration: "none" }}>Открыть кейс</a>

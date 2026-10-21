@@ -2,12 +2,13 @@ import { useState, type FormEvent } from "react";
 import { api, paths } from "../api";
 import { href, go } from "../router";
 import { countResults, runResults } from "../selectors";
-import { useData, useStore } from "../store";
+import { useCanEdit, useData, useStore } from "../store";
 import type { Project, Run, TestCase } from "../types";
 import { Empty, fmt, Modal, Pill, Prio, ResultBar, Who } from "../ui";
 
 export function RunsTab({ project }: { project: Project }) {
   const data = useData();
+  const canEdit = useCanEdit();
   const p = project.id;
   const [creating, setCreating] = useState(false);
   const runs = data.runs.filter((r) => r.pid === p).sort((a, b) => b.num - a.num);
@@ -17,12 +18,12 @@ export function RunsTab({ project }: { project: Project }) {
       <div className="head">
         <p className="muted small" style={{ margin: 0 }}>Прогон фиксирует, что и на какой сборке проверяли. Результаты прошлых прогонов не перезаписываются.</p>
         <div className="spacer" />
-        <button className="btn primary" onClick={() => setCreating(true)}>+ Новый прогон</button>
+        {canEdit && <button className="btn primary" onClick={() => setCreating(true)}>+ Новый прогон</button>}
       </div>
       {runs.length === 0 ? (
         <Empty title="Прогонов пока нет">
-          Создайте прогон: выберите кейсы и укажите сборку, на которой проверяете.
-          <button className="btn primary" onClick={() => setCreating(true)}>+ Новый прогон</button>
+          {canEdit ? "Создайте прогон: выберите кейсы и укажите сборку, на которой проверяете." : "Здесь появятся прогоны, которые создадут тестировщики."}
+          {canEdit && <button className="btn primary" onClick={() => setCreating(true)}>+ Новый прогон</button>}
         </Empty>
       ) : (
         <div className="tbl-wrap">

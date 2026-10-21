@@ -60,7 +60,8 @@ async function destroySession(req, res) {
 // Токен для скриптов: "tb_" + случайная строка. Показывается один раз, в базе только хэш
 const newApiToken = () => "tb_" + crypto.randomBytes(24).toString("base64url");
 
-// Кладёт в req.user {id, login, name}, если cookie или токен (Authorization: Bearer) валидны.
+// Кладёт в req.user {id, login, name, role}, если cookie или токен (Authorization: Bearer) валидны.
+// Заблокированный пользователь не проходит ни по сессии, ни по токену.
 // Вход по токену помечается req.viaToken: такие запросы пускаются только к API автотестов
 async function loadUser(req, _res, next) {
   try {
@@ -68,7 +69,7 @@ async function loadUser(req, _res, next) {
     if (bearer) {
       const { rows } = await pool.query(
         `UPDATE api_tokens t SET last_used_at=now() FROM users u
-         WHERE t.token_hash=$1 AND u.id=t.user_id RETURNING u.id, u.login, u.name`,
+         WHERE t.token_hash=$1 AND u.id=t.user_id AND NOT u.blocked RETURNING u.id, u.login, u.name, u.role`,
         [sha256(bearer[1])]
       );
       if (rows[0]) {
@@ -80,8 +81,8 @@ async function loadUser(req, _res, next) {
     const token = parseCookies(req.headers.cookie)[COOKIE];
     if (token) {
       const { rows } = await pool.query(
-        `SELECT u.id, u.login, u.name FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash=$1 AND s.expires_at > now()`,
+        `SELECT u.id, u.login, u.name, u.role FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.token_hash=$1 AND s.expires_at > now() AND NOT u.blocked`,
         [sha256(token)]
       );
       if (rows[0]) req.user = rows[0];

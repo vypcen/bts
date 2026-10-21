@@ -19,9 +19,14 @@ const LABELS = { new: "Новый", in_progress: "В работе", fixed: "Ис
 
 const router = express.Router({ mergeParams: true });
 
-async function userId(db, login) {
+// Исполнитель — участник проекта или админ. undefined — такого нет
+async function userId(db, key, login) {
   if (!login) return null;
-  const { rows } = await db.query("SELECT id FROM users WHERE login=$1", [login]);
+  const { rows } = await db.query(
+    `SELECT id FROM users u WHERE login=$1 AND NOT blocked
+       AND (role='admin' OR EXISTS (SELECT 1 FROM project_members m WHERE m.user_id=u.id AND m.project_key=$2))`,
+    [login, key]
+  );
   return rows[0] ? rows[0].id : undefined;
 }
 
@@ -45,8 +50,8 @@ router.post("/bugs", wrap(async (req, res) => {
   if (error) return res.status(400).json({ error });
   const key = req.params.key;
   const out = await tx(async (db) => {
-    const assignee = await userId(db, b.assignee);
-    if (assignee === undefined) return { status: 400, error: "Исполнитель не найден" };
+    const assignee = await userId(db, key, b.assignee);
+    if (assignee === undefined) return { status: 400, error: "Исполнитель не найден среди участников проекта" };
     // связь с кейсом и, если баг заведён из прогона, с конкретным результатом
     let caseId = null, resultId = null;
     if (req.body.caseNum != null) {
@@ -81,7 +86,7 @@ router.post("/bugs", wrap(async (req, res) => {
 router.patch("/bugs/:num", wrap(async (req, res) => {
   const key = req.params.key, n = num(req.params.num);
   const { rows } = await pool.query(
-    `SELECT b.id, b.title, b.severity, u.login AS assignee, b.environment AS env, b.steps, b.actual, b.expected,
+    `SELECT b.id, b.title, b.severity, u.login AS assignee, b.assignee_id, b.environment AS env, b.steps, b.actual, b.expected,
        b.status, b.duplicate_of
      FROM bugs b LEFT JOIN users u ON u.id=b.assignee_id WHERE b.project_key=$1 AND b.num=$2`,
     [key, n]
@@ -91,8 +96,9 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
   // частичное обновление: можно прислать только status или assignee
   const { b, error } = readBug({ ...cur, assignee: cur.assignee || "", ...req.body });
   if (error) return res.status(400).json({ error });
-  const assignee = await userId(pool, b.assignee);
-  if (assignee === undefined) return res.status(400).json({ error: "Исполнитель не найден" });
+  // прежнего исполнителя, которого с тех пор убрали из проекта, можно оставить
+  const assignee = b.assignee === cur.assignee ? cur.assignee_id : await userId(pool, key, b.assignee);
+  if (assignee === undefined) return res.status(400).json({ error: "Исполнитель не найден среди участников проекта" });
 
   const status = req.body.status === undefined ? cur.status : str(req.body.status, 20);
   if (status !== cur.status && !(FLOW[cur.status] || []).includes(status)) {

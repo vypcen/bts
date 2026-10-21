@@ -4,6 +4,7 @@ import type { State, User } from "./types";
 
 interface Store {
   me: User | null | undefined; // undefined — ещё не знаем, вошёл ли пользователь
+  canEdit: boolean; // false у роли «Разработчик»: интерфейс только для просмотра
   bootError: boolean;
   data: State | null;
   liveError: string;
@@ -17,6 +18,24 @@ interface Store {
 const Ctx = createContext<Store>(null!);
 export const useStore = () => useContext(Ctx);
 export const useData = () => useContext(Ctx).data!;
+export const useCanEdit = () => useContext(Ctx).canEdit;
+
+// Загружает данные, которых нет в общем состоянии, и перечитывает их при каждом обновлении состояния
+export function useLoad<T>(url: string) {
+  const data = useData();
+  const [s, setS] = useState<{ value?: T; error?: string }>({});
+  useEffect(() => {
+    let alive = true;
+    api<T>("GET", url).then(
+      (value) => alive && setS({ value }),
+      (e) => alive && setS((prev) => ({ ...prev, error: e.message }))
+    );
+    return () => {
+      alive = false;
+    };
+  }, [url, data]);
+  return s;
+}
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<User | null | undefined>(undefined);
@@ -99,8 +118,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     };
   }, [login, reload]);
 
+  // роль могут поменять, пока вкладка открыта: свежая приходит с каждым обновлением состояния
+  const role = me && data?.users[me.login]?.role;
+  const user = me && role && role !== me.role ? { ...me, role } : me;
+
   return (
-    <Ctx.Provider value={{ me, bootError, data, liveError, setMe, reload, toast, write }}>
+    <Ctx.Provider value={{ me: user, canEdit: user?.role === "tester" || user?.role === "admin", bootError, data, liveError, setMe, reload, toast, write }}>
       {children}
       <div className="toast" hidden={!toastMsg} role="status">
         {toastMsg}

@@ -3,6 +3,7 @@ const express = require("express");
 const { pool, tx } = require("./db");
 const { migrate, waitForDb } = require("./migrate");
 const auth = require("./auth");
+const access = require("./access");
 const live = require("./live");
 const attachments = require("./attachments");
 const autotests = require("./autotests");
@@ -55,8 +56,10 @@ app.use("/api", (req, res, next) => {
 app.get("/api/events", auth.requireUser, live.events);
 
 // ---------- авторизация ----------
+const me = (u) => ({ login: u.login, name: u.name, role: u.role });
+
 app.get("/api/auth/me", (req, res) => {
-  res.json({ user: req.user ? { login: req.user.login, name: req.user.name } : null });
+  res.json({ user: req.user ? me(req.user) : null });
 });
 
 app.post("/api/auth/register", wrap(async (req, res) => {
@@ -67,14 +70,18 @@ app.post("/api/auth/register", wrap(async (req, res) => {
   if (!name) return res.status(400).json({ error: "Укажите имя" });
   if (password.length < 8 || password.length > 200) return res.status(400).json({ error: "Пароль должен быть от 8 до 200 символов" });
   const hash = await auth.hashPassword(password);
+  // новичок только смотрит и не видит ни одного проекта, пока админ не выдаст доступ;
+  // первый пользователь в пустой базе становится админом
   const { rows } = await pool.query(
-    "INSERT INTO users(login, name, password_hash) VALUES ($1,$2,$3) ON CONFLICT (login) DO NOTHING RETURNING id",
+    `INSERT INTO users(login, name, password_hash, role)
+     VALUES ($1,$2,$3, CASE WHEN EXISTS (SELECT 1 FROM users) THEN 'developer' ELSE 'admin' END)
+     ON CONFLICT (login) DO NOTHING RETURNING id, role`,
     [login, name, hash]
   );
   if (!rows[0]) return res.status(409).json({ error: "Логин уже занят. Выберите другой или войдите" });
   await auth.createSession(res, req, rows[0].id);
   broadcast("users");
-  res.status(201).json({ user: { login, name } });
+  res.status(201).json({ user: { login, name, role: rows[0].role } });
 }));
 
 app.post("/api/auth/login", wrap(async (req, res) => {
@@ -82,7 +89,7 @@ app.post("/api/auth/login", wrap(async (req, res) => {
   const password = typeof req.body.password === "string" ? req.body.password : "";
   const key = `${req.ip}|${login}`;
   if (auth.tooManyAttempts(key)) return res.status(429).json({ error: "Слишком много попыток входа. Подождите 15 минут" });
-  const { rows } = await pool.query("SELECT id, login, name, password_hash FROM users WHERE login=$1", [login]);
+  const { rows } = await pool.query("SELECT id, login, name, role, blocked, password_hash FROM users WHERE login=$1", [login]);
   const u = rows[0];
   const check = u ? await auth.verifyPassword(password, u.password_hash) : { ok: false };
   if (!check.ok) {
@@ -90,12 +97,13 @@ app.post("/api/auth/login", wrap(async (req, res) => {
     return res.status(401).json({ error: "Неверный логин или пароль" });
   }
   auth.clearFailures(key);
+  if (u.blocked) return res.status(403).json({ error: "Учётная запись заблокирована. Обратитесь к администратору" });
   if (check.legacy) {
     // пароль из прошлой версии — сразу перехэшируем в bcrypt
     await pool.query("UPDATE users SET password_hash=$1 WHERE id=$2", [await auth.hashPassword(password), u.id]);
   }
   await auth.createSession(res, req, u.id);
-  res.json({ user: { login: u.login, name: u.name } });
+  res.json({ user: me(u) });
 }));
 
 app.post("/api/auth/logout", wrap(async (req, res) => {
@@ -114,17 +122,22 @@ const toCase = (r) => ({
 });
 
 // Всё состояние одним запросом: для MVP-объёмов это проще и надёжнее точечной синхронизации
-app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
+// Пользователь получает только свои проекты и всё, что в них; админ — всё
+app.get("/api/state", auth.requireUser, wrap(async (req, res) => {
+  // $1 — список доступных ключей или NULL, если доступны все
+  const only = [await access.projectKeys(req.user)];
+  const mine = (col) => `($1::text[] IS NULL OR ${col} = ANY($1::text[]))`;
   const [projects, cases, users, runs, results, bugs, files, autoruns] = await Promise.all([
-    pool.query(`SELECT p.key, p.name, p.description, p.created_at, u.login AS created_by
-                FROM projects p LEFT JOIN users u ON u.id=p.created_by ORDER BY p.created_at DESC`),
-    pool.query(`${caseSql} ORDER BY c.project_key, c.num`),
-    pool.query("SELECT login, name FROM users"),
+    pool.query(`SELECT p.key, p.name, p.description, p.created_at, u.login AS created_by,
+                  ARRAY(SELECT mu.login FROM project_members m JOIN users mu ON mu.id=m.user_id WHERE m.project_key=p.key ORDER BY mu.login) AS members
+                FROM projects p LEFT JOIN users u ON u.id=p.created_by WHERE ${mine("p.key")} ORDER BY p.created_at DESC`, only),
+    pool.query(`${caseSql} WHERE ${mine("c.project_key")} ORDER BY c.project_key, c.num`, only),
+    pool.query("SELECT login, name, role FROM users"),
     pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at
-                FROM test_runs r LEFT JOIN users u ON u.id=r.created_by ORDER BY r.project_key, r.num`),
+                FROM test_runs r LEFT JOIN users u ON u.id=r.created_by WHERE ${mine("r.project_key")} ORDER BY r.project_key, r.num`, only),
     pool.query(`SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, u.login AS executed_by, rr.executed_at
                 FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
-                LEFT JOIN users u ON u.id=rr.executed_by`),
+                LEFT JOIN users u ON u.id=rr.executed_by WHERE ${mine("t.project_key")}`, only),
     pool.query(`SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
                   c.num AS case_num, t.num AS run_num, b.run_result_id, d.num AS dup_num,
                   cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at
@@ -132,22 +145,25 @@ app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
                 LEFT JOIN run_results rr ON rr.id=b.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
                 LEFT JOIN bugs d ON d.id=b.duplicate_of
                 LEFT JOIN users cu ON cu.id=b.created_by LEFT JOIN users uu ON uu.id=b.updated_by
-                ORDER BY b.project_key, b.num`),
+                WHERE ${mine("b.project_key")} ORDER BY b.project_key, b.num`, only),
     pool.query(`SELECT a.id, COALESCE(b.project_key, t.project_key) AS project_key, b.num AS bug_num, a.run_result_id,
                   a.filename, a.mime, a.size, u.login AS uploaded_by, a.created_at
                 FROM attachments a LEFT JOIN bugs b ON b.id=a.bug_id
                 LEFT JOIN run_results rr ON rr.id=a.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
-                LEFT JOIN users u ON u.id=a.uploaded_by WHERE a.auto_result_id IS NULL ORDER BY a.created_at`),
+                LEFT JOIN users u ON u.id=a.uploaded_by
+                WHERE a.auto_result_id IS NULL AND ${mine("COALESCE(b.project_key, t.project_key)")} ORDER BY a.created_at`, only),
     // запуски автотестов — только сводка; сами результаты отдаёт GET /api/projects/:key/autoruns/:num
     pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.branch, r.scope, r.app_url, r.state, u.login AS created_by, r.created_at, r.finished_at,
                   count(ar.id) FILTER (WHERE ar.status='passed')::int AS passed, count(ar.id) FILTER (WHERE ar.status='failed')::int AS failed,
                   count(ar.id) FILTER (WHERE ar.status='broken')::int AS broken, count(ar.id) FILTER (WHERE ar.status='skipped')::int AS skipped,
                   COALESCE(sum(ar.duration_ms), 0)::bigint AS duration
                 FROM auto_runs r LEFT JOIN auto_results ar ON ar.run_id=r.id LEFT JOIN users u ON u.id=r.created_by
-                GROUP BY r.id, u.login ORDER BY r.project_key, r.num`),
+                WHERE ${mine("r.project_key")} GROUP BY r.id, u.login ORDER BY r.project_key, r.num`, only),
   ]);
   res.json({
-    projects: projects.rows.map((p) => ({ id: p.key, name: p.name, desc: p.description, createdBy: p.created_by, created: p.created_at.getTime() })),
+    projects: projects.rows.map((p) => ({
+      id: p.key, name: p.name, desc: p.description, createdBy: p.created_by, created: p.created_at.getTime(), members: p.members,
+    })),
     cases: cases.rows.map(toCase),
     runs: runs.rows.map((r) => ({
       id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
@@ -172,24 +188,32 @@ app.get("/api/state", auth.requireUser, wrap(async (_req, res) => {
       scope: r.scope, url: r.app_url, state: r.state, createdBy: r.created_by, created: ms(r.created_at), finished: ms(r.finished_at), durationMs: Number(r.duration),
       counts: { passed: r.passed, failed: r.failed, broken: r.broken, skipped: r.skipped },
     })),
-    users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name }])),
+    users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name, role: u.role }])),
   });
 }));
 
-app.post("/api/projects", auth.requireUser, wrap(async (req, res) => {
+app.post("/api/projects", auth.requireUser, access.requireWriter, wrap(async (req, res) => {
   const key = str(req.body.key, 10).toUpperCase();
   const name = str(req.body.name, 200);
   const desc = str(req.body.desc, 2000);
   if (!name) return res.status(400).json({ error: "Укажите название проекта" });
   if (!KEY_RE.test(key)) return res.status(400).json({ error: "Ключ: от 2 до 6 латинских букв" });
-  const { rows } = await pool.query(
-    "INSERT INTO projects(key, name, description, created_by) VALUES ($1,$2,$3,$4) ON CONFLICT (key) DO NOTHING RETURNING key",
-    [key, name, desc, req.user.id]
-  );
-  if (!rows[0]) return res.status(409).json({ error: `Ключ ${key} уже занят другим проектом` });
+  const created = await tx(async (db) => {
+    const { rows } = await db.query(
+      "INSERT INTO projects(key, name, description, created_by) VALUES ($1,$2,$3,$4) ON CONFLICT (key) DO NOTHING RETURNING key",
+      [key, name, desc, req.user.id]
+    );
+    // создатель сразу становится участником, остальных добавляет админ
+    if (rows[0]) await db.query("INSERT INTO project_members(project_key, user_id) VALUES ($1,$2)", [key, req.user.id]);
+    return Boolean(rows[0]);
+  });
+  if (!created) return res.status(409).json({ error: `Ключ ${key} уже занят другим проектом` });
   broadcast("projects");
   res.status(201).json({ id: key });
 }));
+
+// Всё внутри проекта: доступ только участникам и админам, изменения — только тестировщикам и админам
+app.use("/api/projects/:key", auth.requireUser, access.project);
 
 app.patch("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
   const name = str(req.body.name, 200);
@@ -202,12 +226,9 @@ app.patch("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
 }));
 
 app.delete("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
-  const { rows } = await pool.query("SELECT created_by FROM projects WHERE key=$1", [req.params.key]);
-  if (!rows[0]) return res.status(404).json({ error: "Проект не найден" });
-  if (rows[0].created_by !== null && rows[0].created_by !== req.user.id) {
-    return res.status(403).json({ error: "Удалить проект может только его создатель" });
-  }
-  await pool.query("DELETE FROM projects WHERE key=$1", [req.params.key]); // кейсы, прогоны и баги удалятся каскадно
+  // кейсы, прогоны и баги удалятся каскадно
+  const r = await pool.query("DELETE FROM projects WHERE key=$1", [req.params.key]);
+  if (!r.rowCount) return res.status(404).json({ error: "Проект не найден" });
   broadcast("projects");
   res.json({ ok: true });
 }));
@@ -273,6 +294,7 @@ app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, r
 app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), autotests.projectRouter, attachments.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
+app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"));
 
 app.get("/healthz", wrap(async (_req, res) => {
   await pool.query("SELECT 1");
@@ -300,6 +322,11 @@ app.use((err, _req, res, _next) => {
 (async () => {
   await waitForDb();
   await migrate();
+  // Аварийный вход для админа: ADMIN_LOGIN в .env делает этого пользователя админом и снимает блокировку
+  if (process.env.ADMIN_LOGIN) {
+    const r = await pool.query("UPDATE users SET role='admin', blocked=false WHERE login=$1", [process.env.ADMIN_LOGIN.trim().toLowerCase()]);
+    console.log(r.rowCount ? `[server] ${process.env.ADMIN_LOGIN} — администратор` : `[server] ADMIN_LOGIN: пользователь ${process.env.ADMIN_LOGIN} не найден`);
+  }
   attachments.startSweeper();
   app.listen(PORT, "0.0.0.0", () => console.log(`[server] TestBol QA запущен: http://localhost:${PORT}`));
 })().catch((e) => {
