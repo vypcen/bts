@@ -1,5 +1,5 @@
 // Роли и доступ к проектам.
-// tester — создаёт, меняет и удаляет всё в своих проектах; developer — только читает свои проекты;
+// tester — создаёт, меняет и удаляет всё в своих проектах; developer — читает свои проекты и пишет комментарии;
 // admin — всё во всех проектах, плюс пользователи, роли и участники проектов.
 // «Свои проекты» — те, где пользователь есть в project_members. Чужой проект выглядит как несуществующий.
 const { pool } = require("./db");
@@ -23,11 +23,14 @@ async function hasProject(user, key) {
   return rows.length > 0;
 }
 
+// Комментарии разработчик пишет наравне с остальными; кто может менять конкретный комментарий, решает server/comments.js
+const COMMENTS_RE = /^\/((bugs|cases)\/[^/]+\/comments|comments\/[^/]+)$/;
+
 // Для всего под /api/projects/:key: проект должен быть доступен, а изменения — разрешены ролью
 function project(req, res, next) {
   hasProject(req.user, req.params.key).then((ok) => {
     if (!ok) return res.status(404).json({ error: "Проект не найден" });
-    if (req.method !== "GET" && !canWrite(req.user)) return res.status(403).json({ error: READ_ONLY });
+    if (req.method !== "GET" && !canWrite(req.user) && !COMMENTS_RE.test(req.path)) return res.status(403).json({ error: READ_ONLY });
     next();
   }, next);
 }

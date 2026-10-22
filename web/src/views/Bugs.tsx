@@ -2,11 +2,12 @@ import { useState, type FormEvent } from "react";
 import { api, paths } from "../api";
 import { BUG_FLOW, BUG_STATUSES, find, isOpenBug, SEVERITIES, transitionLabel } from "../labels";
 import { go, href } from "../router";
-import { assigneesOf } from "../selectors";
+import { assigneesOf, countBy } from "../selectors";
 import { useCanEdit, useData, useStore } from "../store";
 import type { Bug, BugStatus, Project, Result, Run, Severity, TestCase } from "../types";
-import { Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who } from "../ui";
+import { CommentCount, Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who } from "../ui";
 import { Attachments } from "./Attachments";
+import { Comments } from "./Comments";
 
 export interface BugDraft {
   title: string;
@@ -63,6 +64,7 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
     .sort((a, b) => SEVERITIES.findIndex((s) => s.key === a.severity) - SEVERITIES.findIndex((s) => s.key === b.severity) || b.num - a.num);
   const viewing = openNum !== undefined ? all.find((b) => b.num === openNum) : undefined;
   const users = Object.keys(data.users).sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+  const talk = countBy(data.comments.filter((c) => c.pid === p), (c) => c.bugNum);
 
   return (
     <>
@@ -105,7 +107,7 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
                 return (
                   <tr key={b.id} className="click" aria-selected={viewing?.num === b.num} onClick={() => go("p", p, "bugs", b.num)}>
                     <td className="id">{b.id}</td>
-                    <td className="title">{b.title}</td>
+                    <td className="title">{b.title}<CommentCount n={talk.get(b.num)} /></td>
                     <td><Sev s={b.severity} /></td>
                     <td><Pill tone={st.tone} label={st.label} /></td>
                     <td className="small"><Who login={b.assignee} /></td>
@@ -147,6 +149,7 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
   const duplicates = data.bugs.filter((b) => b.pid === p && b.duplicateOf === bug.num);
   const files = data.attachments.filter((a) => a.pid === p && a.bugNum === bug.num);
   const resultFiles = result ? data.attachments.filter((a) => a.resultId === result.id) : [];
+  const comments = data.comments.filter((c) => c.pid === p && c.bugNum === bug.num);
 
   const patch = (body: object, msg: string) => write(() => api("PATCH", paths.bug(p, bug.num), body), msg);
   const move = (to: BugStatus) => (to === "duplicate" ? setDupOpen(true) : patch({ status: to }, `Статус: ${find(BUG_STATUSES, to).label}`));
@@ -220,6 +223,7 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
         <div className="view-block"><span className="label">Создал</span><Who login={bug.createdBy} /><span className="muted">{fmt(bug.created)}</span></div>
         <div className="view-block"><span className="label">Изменил</span><Who login={bug.updatedBy} /><span className="muted">{fmt(bug.updated)}</span></div>
       </div>
+      <Comments list={comments} postUrl={`${paths.bug(p, bug.num)}/comments`} />
 
       {dupOpen && <DuplicateModal bug={bug} onClose={() => setDupOpen(false)} />}
       {deleting && (

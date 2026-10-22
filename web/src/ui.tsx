@@ -153,6 +153,11 @@ export function ResultBar({ counts, title }: { counts: Record<ResultValue, numbe
   );
 }
 
+// Значок «💬 N» рядом с названием в таблице, если есть комментарии
+export function CommentCount({ n }: { n?: number }) {
+  return n ? <span className="ccount" title={`Комментариев: ${n}`}>💬 {n}</span> : null;
+}
+
 export function Empty({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="empty">

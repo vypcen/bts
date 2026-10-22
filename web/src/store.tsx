@@ -4,7 +4,7 @@ import type { State, User } from "./types";
 
 interface Store {
   me: User | null | undefined; // undefined — ещё не знаем, вошёл ли пользователь
-  canEdit: boolean; // false у роли «Разработчик»: интерфейс только для просмотра
+  canEdit: boolean; // false у роли «Разработчик»: только просмотр и комментарии
   bootError: boolean;
   data: State | null;
   liveError: string;

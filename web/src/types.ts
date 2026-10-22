@@ -15,7 +15,7 @@ export interface AutoStep {
   steps: AutoStep[];
 }
 
-// tester — работает с проектами, developer — только смотрит, admin — ещё и пользователи с доступами
+// tester — работает с проектами, developer — смотрит и комментирует, admin — ещё и пользователи с доступами
 export type Role = "tester" | "developer" | "admin";
 
 export interface User {
@@ -33,10 +33,19 @@ export interface Project {
   members: string[]; // логины участников; админы видят проект и без этого
 }
 
+// Папка тест-кейсов; parent: null — в корне проекта
+export interface CaseFolder {
+  id: number;
+  pid: string;
+  parent: number | null;
+  name: string;
+}
+
 export interface TestCase {
   id: string;
   pid: string;
   num: number;
+  folder: number | null; // null — в корне проекта
   title: string;
   priority: Priority;
   status: CaseStatus;
@@ -108,6 +117,18 @@ export interface Attachment {
   created: number;
 }
 
+// Комментарий к багу (bugNum) или к тест-кейсу (caseNum)
+export interface Comment {
+  id: number;
+  pid: string;
+  bugNum: number | null;
+  caseNum: number | null;
+  author: string | null; // null — автора удалили
+  text: string;
+  created: number;
+  edited: number | null;
+}
+
 // Запуск автотестов — «папка» с результатами. В состоянии только сводка, результаты грузятся отдельно
 export interface AutoRun {
   id: string;
@@ -156,10 +177,12 @@ export interface AutoTest {
 export interface State {
   projects: Project[];
   cases: TestCase[];
+  folders: CaseFolder[];
   runs: Run[];
   results: Result[];
   bugs: Bug[];
   attachments: Attachment[];
   autoruns: AutoRun[];
+  comments: Comment[];
   users: Record<string, { name: string; role: Role }>;
 }

@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { Fragment, useState, type FormEvent } from "react";
 import { api, paths } from "../api";
 import { href, go } from "../router";
-import { countResults, runResults } from "../selectors";
+import { countResults, folderTree, runResults, withSubfolders } from "../selectors";
 import { useCanEdit, useData, useStore } from "../store";
 import type { Project, Run, TestCase } from "../types";
 import { Empty, fmt, Modal, Pill, Prio, ResultBar, Who } from "../ui";
@@ -112,12 +112,31 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
   );
 }
 
+// Группа в списке выбора: кейсы папки, а галочка в заголовке отмечает папку вместе с подпапками
+interface PickGroup { key: string; title: string | null; depth: number; cases: TestCase[]; subtree: TestCase[] }
+
 export function CasePicker({ cases, picked, setPicked }: { cases: TestCase[]; picked: Set<number>; setPicked: (s: Set<number>) => void }) {
+  const data = useData();
   const toggle = (n: number) => {
     const s = new Set(picked);
     s.has(n) ? s.delete(n) : s.add(n);
     setPicked(s);
   };
+  const toggleMany = (list: TestCase[], on: boolean) => {
+    const s = new Set(picked);
+    for (const c of list) on ? s.add(c.num) : s.delete(c.num);
+    setPicked(s);
+  };
+  const tree = cases.length ? folderTree(data, cases[0].pid) : [];
+  const groups: PickGroup[] = [];
+  for (const { f, depth } of tree) {
+    const ids = withSubfolders(data, f.id);
+    const subtree = cases.filter((c) => c.folder !== null && ids.has(c.folder));
+    if (subtree.length) groups.push({ key: `f${f.id}`, title: f.name, depth, cases: cases.filter((c) => c.folder === f.id), subtree });
+  }
+  const loose = cases.filter((c) => c.folder === null);
+  // без папок — плоский список, как раньше
+  if (loose.length) groups.push({ key: "none", title: groups.length ? "Без папки" : null, depth: 0, cases: loose, subtree: loose });
   if (!cases.length) return <p className="muted" style={{ margin: 0 }}>Нет кейсов для добавления.</p>;
   return (
     <div className="field">
@@ -128,14 +147,29 @@ export function CasePicker({ cases, picked, setPicked }: { cases: TestCase[]; pi
         <button type="button" className="btn sm" onClick={() => setPicked(new Set())}>Снять</button>
       </div>
       <div className="checklist">
-        {cases.map((c) => (
-          <label key={c.num}>
-            <input type="checkbox" checked={picked.has(c.num)} onChange={() => toggle(c.num)} />
-            <span className="mono muted small" style={{ width: 64 }}>{c.id}</span>
-            <span style={{ flex: 1, minWidth: 0 }}>{c.title}{c.status === "draft" && <span className="muted small"> · черновик</span>}</span>
-            <Prio p={c.priority} />
-          </label>
-        ))}
+        {groups.map((g) => {
+          const on = g.subtree.filter((c) => picked.has(c.num)).length;
+          return (
+            <Fragment key={g.key}>
+              {g.title !== null && (
+                <label className="grp" style={{ paddingLeft: 12 + g.depth * 14 }}>
+                  <input type="checkbox" checked={on === g.subtree.length} ref={(el) => { if (el) el.indeterminate = on > 0 && on < g.subtree.length; }}
+                    onChange={() => toggleMany(g.subtree, on < g.subtree.length)} />
+                  <span style={{ flex: 1, minWidth: 0 }}>{g.title}</span>
+                  <span className="muted small">{on} из {g.subtree.length}</span>
+                </label>
+              )}
+              {g.cases.map((c) => (
+                <label key={c.num} style={g.title !== null ? { paddingLeft: 26 + g.depth * 14 } : undefined}>
+                  <input type="checkbox" checked={picked.has(c.num)} onChange={() => toggle(c.num)} />
+                  <span className="mono muted small" style={{ width: 64 }}>{c.id}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>{c.title}{c.status === "draft" && <span className="muted small"> · черновик</span>}</span>
+                  <Prio p={c.priority} />
+                </label>
+              ))}
+            </Fragment>
+          );
+        })}
       </div>
     </div>
   );

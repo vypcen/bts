@@ -7,6 +7,7 @@ const access = require("./access");
 const live = require("./live");
 const attachments = require("./attachments");
 const autotests = require("./autotests");
+const folders = require("./folders");
 const { wrap, str, num, ms } = require("./util");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -112,11 +113,11 @@ app.post("/api/auth/logout", wrap(async (req, res) => {
 }));
 
 // ---------- данные ----------
-const caseSql = `SELECT c.project_key, c.num, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected,
+const caseSql = `SELECT c.project_key, c.num, c.folder_id, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected,
   cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at
   FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by`;
 const toCase = (r) => ({
-  id: `${r.project_key}-${r.num}`, pid: r.project_key, num: r.num, title: r.title, priority: r.priority, status: r.status,
+  id: `${r.project_key}-${r.num}`, pid: r.project_key, num: r.num, folder: r.folder_id, title: r.title, priority: r.priority, status: r.status,
   pre: r.preconditions, steps: r.steps, expected: r.expected, createdBy: r.created_by, updatedBy: r.updated_by,
   created: r.created_at.getTime(), updated: r.updated_at.getTime(),
 });
@@ -127,7 +128,7 @@ app.get("/api/state", auth.requireUser, wrap(async (req, res) => {
   // $1 — список доступных ключей или NULL, если доступны все
   const only = [await access.projectKeys(req.user)];
   const mine = (col) => `($1::text[] IS NULL OR ${col} = ANY($1::text[]))`;
-  const [projects, cases, users, runs, results, bugs, files, autoruns] = await Promise.all([
+  const [projects, cases, users, runs, results, bugs, files, autoruns, comments, caseFolders] = await Promise.all([
     pool.query(`SELECT p.key, p.name, p.description, p.created_at, u.login AS created_by,
                   ARRAY(SELECT mu.login FROM project_members m JOIN users mu ON mu.id=m.user_id WHERE m.project_key=p.key ORDER BY mu.login) AS members
                 FROM projects p LEFT JOIN users u ON u.id=p.created_by WHERE ${mine("p.key")} ORDER BY p.created_at DESC`, only),
@@ -159,12 +160,19 @@ app.get("/api/state", auth.requireUser, wrap(async (req, res) => {
                   COALESCE(sum(ar.duration_ms), 0)::bigint AS duration
                 FROM auto_runs r LEFT JOIN auto_results ar ON ar.run_id=r.id LEFT JOIN users u ON u.id=r.created_by
                 WHERE ${mine("r.project_key")} GROUP BY r.id, u.login ORDER BY r.project_key, r.num`, only),
+    pool.query(`SELECT cm.id, COALESCE(b.project_key, c.project_key) AS project_key, b.num AS bug_num, c.num AS case_num,
+                  u.login AS author, cm.body, cm.created_at, cm.edited_at
+                FROM comments cm LEFT JOIN bugs b ON b.id=cm.bug_id LEFT JOIN test_cases c ON c.id=cm.case_id
+                LEFT JOIN users u ON u.id=cm.author_id
+                WHERE ${mine("COALESCE(b.project_key, c.project_key)")} ORDER BY cm.created_at, cm.id`, only),
+    pool.query(`SELECT id, project_key, parent_id, name FROM case_folders WHERE ${mine("project_key")} ORDER BY project_key, name`, only),
   ]);
   res.json({
     projects: projects.rows.map((p) => ({
       id: p.key, name: p.name, desc: p.description, createdBy: p.created_by, created: p.created_at.getTime(), members: p.members,
     })),
     cases: cases.rows.map(toCase),
+    folders: caseFolders.rows.map((f) => ({ id: f.id, pid: f.project_key, parent: f.parent_id, name: f.name })),
     runs: runs.rows.map((r) => ({
       id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
       state: r.state, createdBy: r.created_by, created: ms(r.created_at), closed: ms(r.closed_at),
@@ -187,6 +195,10 @@ app.get("/api/state", auth.requireUser, wrap(async (req, res) => {
       id: `${r.project_key}-A${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment, branch: r.branch,
       scope: r.scope, url: r.app_url, state: r.state, createdBy: r.created_by, created: ms(r.created_at), finished: ms(r.finished_at), durationMs: Number(r.duration),
       counts: { passed: r.passed, failed: r.failed, broken: r.broken, skipped: r.skipped },
+    })),
+    comments: comments.rows.map((c) => ({
+      id: c.id, pid: c.project_key, bugNum: c.bug_num, caseNum: c.case_num, author: c.author, text: c.body,
+      created: ms(c.created_at), edited: ms(c.edited_at),
     })),
     users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name, role: u.role }])),
   });
@@ -212,7 +224,7 @@ app.post("/api/projects", auth.requireUser, access.requireWriter, wrap(async (re
   res.status(201).json({ id: key });
 }));
 
-// Всё внутри проекта: доступ только участникам и админам, изменения — только тестировщикам и админам
+// Всё внутри проекта: доступ только участникам и админам, изменения — только тестировщикам и админам (кроме комментариев)
 app.use("/api/projects/:key", auth.requireUser, access.project);
 
 app.patch("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
@@ -251,15 +263,17 @@ function readCase(body) {
 app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => {
   const { c, error } = readCase(req.body);
   if (error) return res.status(400).json({ error });
+  const folder = await folders.folderId(pool, req.params.key, req.body.folder);
+  if (folder === undefined) return res.status(400).json({ error: "Папка не найдена" });
   const n = await tx(async (db) => {
     // атомарно берём следующий номер — два одновременных создания не получат один ID
     const r = await db.query("UPDATE projects SET seq=seq+1 WHERE key=$1 RETURNING seq", [req.params.key]);
     if (!r.rows[0]) return null;
     const next = r.rows[0].seq;
     await db.query(
-      `INSERT INTO test_cases(project_key, num, title, priority, status, preconditions, steps, expected, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
-      [req.params.key, next, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id]
+      `INSERT INTO test_cases(project_key, num, folder_id, title, priority, status, preconditions, steps, expected, created_by, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
+      [req.params.key, next, folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id]
     );
     return next;
   });
@@ -271,14 +285,17 @@ app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => 
 app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, res) => {
   const n = num(req.params.num);
   // частичное обновление: можно прислать только status
-  const { rows } = await pool.query("SELECT title, priority, status, preconditions AS pre, steps, expected FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, n]);
+  const { rows } = await pool.query("SELECT folder_id, title, priority, status, preconditions AS pre, steps, expected FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, n]);
   if (!rows[0]) return res.status(404).json({ error: "Тест-кейс не найден" });
   const { c, error } = readCase({ ...rows[0], ...req.body });
   if (error) return res.status(400).json({ error });
+  // folder: null — в корень проекта; не прислали — остаётся где был
+  const folder = req.body.folder === undefined ? rows[0].folder_id : await folders.folderId(pool, req.params.key, req.body.folder);
+  if (folder === undefined) return res.status(400).json({ error: "Папка не найдена" });
   await pool.query(
-    `UPDATE test_cases SET title=$1, priority=$2, status=$3, preconditions=$4, steps=$5, expected=$6, updated_by=$7, updated_at=now()
-     WHERE project_key=$8 AND num=$9`,
-    [c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, n]
+    `UPDATE test_cases SET folder_id=$1, title=$2, priority=$3, status=$4, preconditions=$5, steps=$6, expected=$7, updated_by=$8, updated_at=now()
+     WHERE project_key=$9 AND num=$10`,
+    [folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, n]
   );
   broadcast("cases");
   res.json({ ok: true });
@@ -291,7 +308,7 @@ app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, r
   res.json({ ok: true });
 }));
 
-app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), autotests.projectRouter, attachments.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, autotests.projectRouter, attachments.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"));

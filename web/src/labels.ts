@@ -77,7 +77,7 @@ export function find<K extends string>(list: Def<K>, key: K) {
 
 export const ROLES: (Def<Role>[number] & { hint: string })[] = [
   { key: "tester", label: "Тестировщик", tone: "info", hint: "Создаёт, меняет и удаляет всё в своих проектах" },
-  { key: "developer", label: "Разработчик", tone: "neutral", hint: "Только просмотр своих проектов" },
+  { key: "developer", label: "Разработчик", tone: "neutral", hint: "Просмотр своих проектов и комментарии" },
   { key: "admin", label: "Администратор", tone: "accent", hint: "Все проекты, пользователи, роли и доступы" },
 ];
 export const roleOf = (r: Role) => ROLES.find((x) => x.key === r) || ROLES[1];
