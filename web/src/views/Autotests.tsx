@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { AiBar, useAi, useAiReady } from "../ai";
 import { api, paths } from "../api";
 import { AUTO_STATUSES, find } from "../labels";
 import { go, href } from "../router";
@@ -300,6 +301,16 @@ function draftFromAuto(run: AutoRun, r: AutoResult): BugDraft {
 function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachment[]; onClose: () => void; onBug: (d: BugDraft) => void }) {
   const { run, r, files } = props;
   const canEdit = useCanEdit();
+  const aiReady = useAiReady();
+  const ai = useAi();
+  // разбор привязан к результату: при переходе к другому тесту старый не показываем
+  const [explain, setExplain] = useState<{ id: number; text: string } | null>(null);
+  const explained = explain?.id === r.id ? explain.text : "";
+
+  async function explainIt() {
+    const res = await ai.run(() => api<{ text: string }>("GET", paths.aiExplain(run.pid, r.id)));
+    if (res) setExplain({ id: r.id, text: res.text });
+  }
   return (
     <Drawer
       label="Результат автотеста"
@@ -321,6 +332,14 @@ function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachmen
         </div>
         {r.prev && <span className="muted small">В прошлый раз ({run.pid}-A{r.prev.runNum}): <AutoPill s={r.prev.status} sm /></span>}
       </div>
+      {aiReady && isProblem(r.status) && (
+        <div className="view-block">
+          <span className="label">Разбор падения</span>
+          {explained && <div className="ai-answer">{explained}</div>}
+          <AiBar busy={ai.busy} onRun={explainIt} label={explained ? "Разобрать ещё раз" : "Объяснить падение"}
+            hint={explained ? "Ответ модели может ошибаться — сверяйте со стектрейсом" : "Модель прочитает ошибку, шаги и стектрейс и подскажет, где искать"} />
+        </div>
+      )}
       {r.suite && <div className="view-block"><span className="label">Набор</span><span className="mono small" style={{ overflowWrap: "anywhere" }}>{r.suite}</span></div>}
       {r.file && <div className="view-block"><span className="label">Файл</span><span className="mono small" style={{ overflowWrap: "anywhere" }}>{r.file}</span></div>}
       {r.steps.length > 0 && <div className="view-block"><span className="label">Шаги</span><StepList steps={r.steps} /></div>}

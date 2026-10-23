@@ -186,3 +186,11 @@ export interface State {
   comments: Comment[];
   users: Record<string, { name: string; role: Role }>;
 }
+
+// GET /api/llm/status: показывать ли в интерфейсе функции с локальной моделью
+export interface LlmStatus {
+  enabled: boolean;
+  model: string | null;
+  ready: boolean;
+  error?: string;
+}

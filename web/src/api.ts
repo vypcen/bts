@@ -78,4 +78,8 @@ export const paths = {
   autoFiles: (k: string, n: number, rid: number) => `/api/projects/${e(k)}/autoruns/${n}/results/${rid}/attachments`,
   autotests: (k: string) => `/api/projects/${e(k)}/autotests`,
   tokens: "/api/tokens",
+  llmStatus: "/api/llm/status",
+  aiBugDraft: (k: string) => `/api/projects/${e(k)}/ai/bug-draft`,
+  aiCaseDraft: (k: string) => `/api/projects/${e(k)}/ai/case-draft`,
+  aiExplain: (k: string, resultId: number) => `/api/projects/${e(k)}/ai/autoresults/${resultId}/explain`,
 };

@@ -8,6 +8,7 @@ const live = require("./live");
 const attachments = require("./attachments");
 const autotests = require("./autotests");
 const folders = require("./folders");
+const llm = require("./llm");
 const { wrap, str, num, ms } = require("./util");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -308,10 +309,13 @@ app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, r
   res.json({ ok: true });
 }));
 
+// подсказки локальной модели в формах; запись (черновики бага и кейса) — только тестировщикам, как и сами формы
+app.use("/api/projects/:key/ai", auth.requireUser, require("./assist"));
 app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, autotests.projectRouter, attachments.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"));
+app.use("/api/llm", auth.requireUser, llm.router);
 
 app.get("/healthz", wrap(async (_req, res) => {
   await pool.query("SELECT 1");
@@ -331,6 +335,8 @@ app.use(express.static(path.join(__dirname, "..", "public"), { index: "index.htm
 
 app.use((err, _req, res, _next) => {
   if (err.type === "entity.parse.failed") return res.status(400).json({ error: "Некорректный JSON" });
+  // недоступность модели — не ошибка сервера: остальное приложение работает
+  if (err instanceof llm.LlmError) return res.status(err.status).json({ error: err.message });
   console.error("[server]", err);
   if (res.headersSent) return res.destroy();
   res.status(500).json({ error: "Внутренняя ошибка сервера. Подробности в логах." });

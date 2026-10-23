@@ -232,3 +232,11 @@ ol.steps{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:var(--r);font-size:14px;z-index:40;max-width:calc(100% - 32px)}
 @media (max-width:560px){.row2,.row3{grid-template-columns:1fr}.head h1{font-size:22px}.user{display:none}}
 @media (prefers-reduced-motion:no-preference){.drawer{animation:slide .18s ease-out}@keyframes slide{from{transform:translateX(24px);opacity:.6}}}
+
+/* Подсказки локальной модели */
+.ai-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px dashed var(--line);border-radius:var(--r);padding:8px 10px}
+.btn.ai{border-color:var(--accent);color:var(--accent)}
+.ai-spin{width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:ai-spin .8s linear infinite}
+@keyframes ai-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.ai-spin{animation:none}}
+.ai-answer{background:var(--accent-soft);border-radius:var(--r);padding:10px 12px;font-size:14px;white-space:pre-wrap}

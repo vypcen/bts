@@ -28,6 +28,10 @@ services:
       PORT: 3000
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
       ADMIN_LOGIN: ${ADMIN_LOGIN:-}
+      # Локальная модель (необязательно). Пустой LLM_URL — функции с моделью выключены
+      LLM_URL: ${LLM_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-120000}
     ports:
       - "${APP_PORT:-3000}:3000"
     volumes:
@@ -46,6 +50,50 @@ services:
     depends_on:
       - app
 
+  # Локальная языковая модель (необязательно).
+  # Запускается только командой: docker compose --profile llm up -d
+  # Приложение от неё не зависит: если модель выключена, кнопки с ней просто не работают.
+  ollama:
+    image: ollama/ollama:0.6.8
+    profiles: ["llm"]
+    restart: unless-stopped
+    environment:
+      # Один запрос за раз и одна модель в памяти — под небольшой сервер без видеокарты
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_MAX_LOADED_MODELS: 1
+      OLLAMA_CONTEXT_LENGTH: ${LLM_CONTEXT:-8192}
+      # Сколько держать модель в памяти после последнего запроса
+      OLLAMA_KEEP_ALIVE: ${LLM_KEEP_ALIVE:-30m}
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    # Порт наружу не открыт: к модели обращается только приложение внутри Docker.
+    # Видеокарта NVIDIA (нужен NVIDIA Container Toolkit или Docker Desktop с WSL 2) — раскомментируйте:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Скачивает модель LLM_MODEL при первом запуске и завершается; при следующих запусках проверяет, что она на месте
+  ollama-pull:
+    image: ollama/ollama:0.6.8
+    profiles: ["llm"]
+    restart: "no"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "${LLM_MODEL:-qwen2.5:3b}"]
+
 volumes:
   pgdata:
   uploads:
+  ollama:

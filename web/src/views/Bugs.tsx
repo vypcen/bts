@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { AI_NOTE, AiBar, useAi, useAiReady } from "../ai";
 import { api, paths } from "../api";
 import { BUG_FLOW, BUG_STATUSES, find, isOpenBug, SEVERITIES, transitionLabel } from "../labels";
 import { go, href } from "../router";
@@ -275,6 +276,17 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
   const [err, setErr] = useState("");
   const set = (k: keyof BugDraft) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const linkedCase = draft.caseNum ? data.cases.find((c) => c.pid === pid && c.num === draft.caseNum) : undefined;
+  const aiReady = useAiReady();
+  const ai = useAi();
+  const [beforeAi, setBeforeAi] = useState<BugDraft | null>(null);
+
+  async function improve() {
+    const r = await ai.run(() => api<Pick<BugDraft, "title" | "steps" | "actual" | "expected"> & { severity: Severity | null }>("POST", paths.aiBugDraft(pid), f));
+    if (!r) return;
+    setBeforeAi(f);
+    setF((cur) => ({ ...cur, title: r.title, steps: r.steps, actual: r.actual, expected: r.expected, severity: r.severity || cur.severity }));
+    toast(AI_NOTE);
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -299,6 +311,10 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
           <div className="linkbox">
             Баг будет связан с кейсом <b>{linkedCase.id}</b>{draft.runNum ? <> и прогоном <b>{pid}-R{draft.runNum}</b></> : null}. Поля заполнены из кейса, поправьте их под то, что случилось.
           </div>
+        )}
+        {aiReady && (
+          <AiBar busy={ai.busy} onRun={improve} label="Оформить с ИИ" hint="Перепишет заголовок, шаги и результаты из ваших заметок"
+            onUndo={beforeAi ? () => { setF(beforeAi); setBeforeAi(null); } : undefined} />
         )}
         <div className="field"><label htmlFor="b-title">Заголовок *</label><input className="input" id="b-title" value={f.title} onChange={set("title")} placeholder="Что сломалось, коротко" autoFocus /></div>
         <div className="row2">

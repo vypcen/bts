@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { AI_NOTE, AiBar, useAi, useAiReady } from "../ai";
 import { api, paths } from "../api";
 import { BUG_STATUSES, CASE_STATUSES, find, isOpenBug, PRIORITIES, RESULTS } from "../labels";
 import { go, href } from "../router";
@@ -288,6 +289,19 @@ function CaseEditor({ pid, c, folder, onClose }: { pid: string; c?: TestCase; fo
   });
   const [err, setErr] = useState("");
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const aiReady = useAiReady();
+  const ai = useAi();
+  const [beforeAi, setBeforeAi] = useState<typeof f | null>(null);
+
+  async function draft() {
+    if (!f.title.trim()) return setErr("Сначала напишите название: по нему модель составит шаги");
+    setErr("");
+    const r = await ai.run(() => api<{ pre: string; steps: string; expected: string }>("POST", paths.aiCaseDraft(pid), f));
+    if (!r) return;
+    setBeforeAi(f);
+    setF((cur) => ({ ...cur, ...r }));
+    toast(AI_NOTE);
+  }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -321,6 +335,10 @@ function CaseEditor({ pid, c, folder, onClose }: { pid: string; c?: TestCase; fo
           <div className="field"><label htmlFor="c-status">Статус</label>
             <select className="input" id="c-status" value={f.status} onChange={set("status")}>{CASE_STATUSES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</select></div>
         </div>
+        {aiReady && (
+          <AiBar busy={ai.busy} onRun={draft} label="Заполнить по названию" hint="Модель предложит предусловия, шаги и ожидаемый результат"
+            onUndo={beforeAi ? () => { setF(beforeAi); setBeforeAi(null); } : undefined} />
+        )}
         <div className="field"><label htmlFor="c-pre">Предусловия</label><textarea className="input" id="c-pre" rows={2} value={f.pre} onChange={set("pre")} /></div>
         <div className="field"><label htmlFor="c-steps">Шаги</label><textarea className="input" id="c-steps" rows={5} placeholder="Каждый шаг с новой строки" value={f.steps} onChange={set("steps")} /></div>
         <div className="field"><label htmlFor="c-exp">Ожидаемый результат</label><textarea className="input" id="c-exp" rows={3} value={f.expected} onChange={set("expected")} /></div>
