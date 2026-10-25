@@ -5,6 +5,7 @@ import { href } from "../router";
 import { useData, useLoad, useStore } from "../store";
 import type { Role } from "../types";
 import { Avatar, Confirm, Empty, fmt, Modal, Pill } from "../ui";
+import { NewUserModal, PasswordModal } from "./Password";
 
 // Ответ GET /api/admin/users
 interface AdminUser {
@@ -26,6 +27,8 @@ export function Users() {
   const [q, setQ] = useState("");
   const [access, setAccess] = useState<AdminUser | null>(null);
   const [del, setDel] = useState<AdminUser | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [resetting, setResetting] = useState<AdminUser | null>(null);
   const users = value?.users || [];
   const needle = q.trim().toLowerCase();
   const rows = users.filter((u) => !needle || u.login.includes(needle) || u.name.toLowerCase().includes(needle));
@@ -48,6 +51,8 @@ export function Users() {
           <h1>Пользователи</h1>
           <p className="muted">Роли, блокировка и доступ к проектам. Пользователь видит только проекты, в которые его добавили; администратор видит все.</p>
         </div>
+        <div className="spacer" />
+        <button className="btn primary" onClick={() => setCreating(true)}>+ Новый пользователь</button>
       </div>
       <div className="stats" style={{ flexWrap: "wrap" }}>
         {ROLES.map((r) => (
@@ -71,7 +76,7 @@ export function Users() {
             <thead>
               <tr>
                 <th>Пользователь</th><th style={{ width: 170 }}>Роль</th><th>Проекты</th>
-                <th style={{ width: 130 }}>Статус</th><th style={{ width: 210 }} />
+                <th style={{ width: 130 }}>Статус</th><th style={{ width: 300 }} />
               </tr>
             </thead>
             <tbody>
@@ -108,6 +113,7 @@ export function Users() {
                           <button className="btn sm" onClick={() => patch(u, { blocked: !u.blocked }, u.blocked ? `${u.name} разблокирован` : `${u.name} заблокирован`)}>
                             {u.blocked ? "Разблокировать" : "Заблокировать"}
                           </button>
+                          <button className="btn sm" onClick={() => setResetting(u)}>Сменить пароль</button>
                           <button className="btn ghost sm" style={{ color: "var(--crit)" }} onClick={() => setDel(u)} aria-label={`Удалить ${u.name}`}>Удалить</button>
                         </>
                       )}
@@ -121,6 +127,8 @@ export function Users() {
         </div>
       )}
       {access && <AccessModal user={access} onClose={() => setAccess(null)} />}
+      {creating && <NewUserModal onClose={() => setCreating(false)} />}
+      {resetting && <PasswordModal target={resetting} onClose={() => setResetting(null)} />}
       {del && (
         <Confirm
           title={`Удалить пользователя «${del.name}»?`}

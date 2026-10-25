@@ -9,31 +9,55 @@ const attachments = require("./attachments");
 const autotests = require("./autotests");
 const folders = require("./folders");
 const llm = require("./llm");
-const { wrap, str, num, ms } = require("./util");
+const { wrap, str, num, ms, HttpError } = require("./util");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
 const STATUSES = ["draft", "ready", "deprecated"];
 const PRIORITIES = ["critical", "high", "medium", "low"];
-const LOGIN_RE = /^[a-z0-9._-]{3,32}$/;
 const KEY_RE = /^[A-Z]{2,6}$/;
+// closed — зарегистрироваться самому нельзя, учётные записи создаёт админ («Пользователи» → «Новый пользователь»)
+const REGISTRATION = process.env.REGISTRATION === "closed" ? "closed" : "open";
+const RESERVED_ADMIN = (process.env.ADMIN_LOGIN || "").trim().toLowerCase();
+// Даже если в данные попадёт скрипт, браузер выполнит только код самого приложения
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:", "font-src 'self'",
+  "connect-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
+].join("; ");
+// Токен может только отправлять результаты автотестов: создать запуск, прислать результаты и файлы, завершить запуск.
+// Читать и удалять с ним нельзя ничего — даже утёкший токен не откроет данные и не сотрёт историю
+const TOKEN_ROUTES = [
+  ["POST", /^\/projects\/[^/]+\/autoruns$/],
+  ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/results$/],
+  ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/results\/\d+\/attachments$/],
+  ["PATCH", /^\/projects\/[^/]+\/autoruns\/\d+$/],
+];
 const { broadcast } = live;
 
 const app = express();
 app.disable("x-powered-by");
 // За обратным прокси (Cloudflare Tunnel, Caddy, nginx) нужно доверять X-Forwarded-*, чтобы cookie получали флаг Secure
-app.set("trust proxy", process.env.TRUST_PROXY || "loopback, linklocal, uniquelocal");
+// TRUST_PROXY=false — никому (приложение открыто напрямую: иначе любой подделает свой IP и обойдёт лимиты входа)
+const TRUST = (process.env.TRUST_PROXY || "").trim();
+app.set("trust proxy", !TRUST ? "loopback, linklocal, uniquelocal" : TRUST === "false" ? false : TRUST === "true" ? true : /^\d+$/.test(TRUST) ? Number(TRUST) : TRUST);
 
 app.use((req, res, next) => {
   res.set({
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "same-origin",
+    "Content-Security-Policy": CSP,
   });
+  // браузер больше не откроет сайт по HTTP и не даст подменить соединение. Только для этого адреса, без поддоменов
+  if (req.secure) res.set("Strict-Transport-Security", "max-age=15552000");
   next();
 });
+
+// Сначала — кто пришёл. Тело запроса разбирается после: без входа нельзя заставить сервер разбирать мегабайты JSON
+app.use(auth.loadUser);
 // Результаты автотестов приходят пачками вместе со стектрейсами — им нужен лимит побольше
-app.use("/api/projects/:key/autoruns", express.json({ limit: "10mb" }));
+const bigJson = express.json({ limit: "10mb" });
+app.use("/api/projects/:key/autoruns", (req, res, next) => (req.user ? bigJson(req, res, next) : next()));
 app.use(express.json({ limit: "200kb" }));
 
 // Защита от CSRF: изменяющие запросы принимаются только как JSON.
@@ -46,10 +70,8 @@ app.use("/api", (req, res, next) => {
   }
   next();
 });
-app.use(auth.loadUser);
-// Токен даёт доступ только к API автотестов: даже утёкший токен не позволит читать и менять баги и кейсы
 app.use("/api", (req, res, next) => {
-  if (req.viaToken && !/^\/projects\/[^/]+\/autoruns(\/|$)/.test(req.path)) {
+  if (req.viaToken && !TOKEN_ROUTES.some(([method, re]) => method === req.method && re.test(req.path))) {
     return res.status(403).json({ error: "Токен подходит только для отправки результатов автотестов" });
   }
   next();
@@ -59,18 +81,30 @@ app.get("/api/events", auth.requireUser, live.events);
 
 // ---------- авторизация ----------
 const me = (u) => ({ login: u.login, name: u.name, role: u.role });
+const { limits, TOO_MANY } = auth;
 
-app.get("/api/auth/me", (req, res) => {
-  res.json({ user: req.user ? me(req.user) : null });
-});
+// Без входа — ещё и что показывать на странице входа: нужен ли код установки, открыта ли регистрация
+app.get("/api/auth/me", wrap(async (req, res) => {
+  if (req.user) return res.json({ user: me(req.user) });
+  res.json({ user: null, setup: await auth.needsSetup(), registration: REGISTRATION });
+}));
 
 app.post("/api/auth/register", wrap(async (req, res) => {
   const login = str(req.body.login, 64).toLowerCase();
   const name = str(req.body.name, 100);
   const password = typeof req.body.password === "string" ? req.body.password : "";
-  if (!LOGIN_RE.test(login)) return res.status(400).json({ error: "Логин: 3–32 символа, латинские буквы, цифры, точка, дефис или подчёркивание" });
-  if (!name) return res.status(400).json({ error: "Укажите имя" });
-  if (password.length < 8 || password.length > 200) return res.status(400).json({ error: "Пароль должен быть от 8 до 200 символов" });
+  const bad = auth.checkLogin(login) || (!name && "Укажите имя") || auth.checkPassword(password);
+  if (bad) return res.status(400).json({ error: bad });
+  // лимит до проверки кода установки — иначе его можно подбирать
+  if (!limits.registerIp.take(req.ip) || !limits.registerAll.take("all")) return res.status(429).json({ error: TOO_MANY });
+  const setup = await auth.needsSetup();
+  if (setup) await auth.prepareSetup(); // база могла опустеть после запуска сервера
+  if (setup && !auth.checkSetupCode(req.body.setupCode)) {
+    return res.status(403).json({ error: "Неверный код установки. Он напечатан в логах сервера: docker compose logs app" });
+  }
+  if (!setup && REGISTRATION === "closed") return res.status(403).json({ error: "Регистрация закрыта. Попросите администратора создать вам учётную запись" });
+  // логин из ADMIN_LOGIN станет админом при перезапуске — занять его регистрацией нельзя
+  if (!setup && login === RESERVED_ADMIN) return res.status(403).json({ error: "Этот логин зарезервирован. Выберите другой" });
   const hash = await auth.hashPassword(password);
   // новичок только смотрит и не видит ни одного проекта, пока админ не выдаст доступ;
   // первый пользователь в пустой базе становится админом
@@ -81,6 +115,7 @@ app.post("/api/auth/register", wrap(async (req, res) => {
     [login, name, hash]
   );
   if (!rows[0]) return res.status(409).json({ error: "Логин уже занят. Выберите другой или войдите" });
+  if (rows[0].role === "admin") auth.setupDone();
   await auth.createSession(res, req, rows[0].id);
   broadcast("users");
   res.status(201).json({ user: { login, name, role: rows[0].role } });
@@ -90,15 +125,19 @@ app.post("/api/auth/login", wrap(async (req, res) => {
   const login = str(req.body.login, 64).toLowerCase();
   const password = typeof req.body.password === "string" ? req.body.password : "";
   const key = `${req.ip}|${login}`;
-  if (auth.tooManyAttempts(key)) return res.status(429).json({ error: "Слишком много попыток входа. Подождите 15 минут" });
+  if (limits.loginIpLogin.blocked(key) || limits.loginIp.blocked(req.ip) || limits.loginAny.blocked(login)) {
+    return res.status(429).json({ error: TOO_MANY });
+  }
   const { rows } = await pool.query("SELECT id, login, name, role, blocked, password_hash FROM users WHERE login=$1", [login]);
   const u = rows[0];
   const check = u ? await auth.verifyPassword(password, u.password_hash) : { ok: false };
   if (!check.ok) {
-    auth.recordFailure(key);
+    limits.loginIpLogin.hit(key);
+    limits.loginIp.hit(req.ip);
+    limits.loginAny.hit(login);
     return res.status(401).json({ error: "Неверный логин или пароль" });
   }
-  auth.clearFailures(key);
+  limits.loginIpLogin.clear(key);
   if (u.blocked) return res.status(403).json({ error: "Учётная запись заблокирована. Обратитесь к администратору" });
   if (check.legacy) {
     // пароль из прошлой версии — сразу перехэшируем в bcrypt
@@ -110,6 +149,19 @@ app.post("/api/auth/login", wrap(async (req, res) => {
 
 app.post("/api/auth/logout", wrap(async (req, res) => {
   await auth.destroySession(req, res);
+  res.json({ ok: true });
+}));
+
+// Смена своего пароля. Остальные сессии закрываются: если пароль утёк, вошедший с ним теряет доступ
+app.post("/api/auth/password", auth.requireUser, wrap(async (req, res) => {
+  const current = typeof req.body.current === "string" ? req.body.current : "";
+  const bad = auth.checkPassword(req.body.password);
+  if (bad) return res.status(400).json({ error: bad });
+  if (!limits.password.take(String(req.user.id))) return res.status(429).json({ error: TOO_MANY });
+  const { rows } = await pool.query("SELECT password_hash FROM users WHERE id=$1", [req.user.id]);
+  if (!(await auth.verifyPassword(current, rows[0].password_hash)).ok) return res.status(403).json({ error: "Текущий пароль указан неверно" });
+  await pool.query("UPDATE users SET password_hash=$1 WHERE id=$2", [await auth.hashPassword(req.body.password), req.user.id]);
+  await auth.destroyOtherSessions(req, req.user.id);
   res.json({ ok: true });
 }));
 
@@ -134,7 +186,14 @@ app.get("/api/state", auth.requireUser, wrap(async (req, res) => {
                   ARRAY(SELECT mu.login FROM project_members m JOIN users mu ON mu.id=m.user_id WHERE m.project_key=p.key ORDER BY mu.login) AS members
                 FROM projects p LEFT JOIN users u ON u.id=p.created_by WHERE ${mine("p.key")} ORDER BY p.created_at DESC`, only),
     pool.query(`${caseSql} WHERE ${mine("c.project_key")} ORDER BY c.project_key, c.num`, only),
-    pool.query("SELECT login, name, role FROM users"),
+    // Пользователи — те, с кем есть общий проект, и админы (их можно назначить исполнителем). Админ видит всех.
+    // Новичок без проектов видит только себя: список логинов и админов не должен доставаться любому зарегистрировавшемуся
+    pool.query(
+      `SELECT login, name, role FROM users u WHERE $1::text[] IS NULL OR u.id=$2
+         OR (u.role='admin' AND cardinality($1::text[]) > 0)
+         OR EXISTS (SELECT 1 FROM project_members m WHERE m.user_id=u.id AND m.project_key = ANY($1::text[]))`,
+      [only[0], req.user.id]
+    ),
     pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at
                 FROM test_runs r LEFT JOIN users u ON u.id=r.created_by WHERE ${mine("r.project_key")} ORDER BY r.project_key, r.num`, only),
     pool.query(`SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, u.login AS executed_by, rr.executed_at
@@ -335,8 +394,9 @@ app.use(express.static(path.join(__dirname, "..", "public"), { index: "index.htm
 
 app.use((err, _req, res, _next) => {
   if (err.type === "entity.parse.failed") return res.status(400).json({ error: "Некорректный JSON" });
-  // недоступность модели — не ошибка сервера: остальное приложение работает
-  if (err instanceof llm.LlmError) return res.status(err.status).json({ error: err.message });
+  // ошибки с понятным пользователю кодом (модель недоступна, сервер перегружен, тело слишком большое) — не ошибки сервера
+  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+  if (err.expose && err.status) return res.status(err.status).json({ error: err.status === 413 ? "Слишком большой запрос" : "Некорректный запрос" });
   console.error("[server]", err);
   if (res.headersSent) return res.destroy();
   res.status(500).json({ error: "Внутренняя ошибка сервера. Подробности в логах." });
@@ -347,9 +407,10 @@ app.use((err, _req, res, _next) => {
   await migrate();
   // Аварийный вход для админа: ADMIN_LOGIN в .env делает этого пользователя админом и снимает блокировку
   if (process.env.ADMIN_LOGIN) {
-    const r = await pool.query("UPDATE users SET role='admin', blocked=false WHERE login=$1", [process.env.ADMIN_LOGIN.trim().toLowerCase()]);
+    const r = await pool.query("UPDATE users SET role='admin', blocked=false WHERE login=$1", [RESERVED_ADMIN]);
     console.log(r.rowCount ? `[server] ${process.env.ADMIN_LOGIN} — администратор` : `[server] ADMIN_LOGIN: пользователь ${process.env.ADMIN_LOGIN} не найден`);
   }
+  await auth.prepareSetup();
   attachments.startSweeper();
   app.listen(PORT, "0.0.0.0", () => console.log(`[server] TestBol QA запущен: http://localhost:${PORT}`));
 })().catch((e) => {

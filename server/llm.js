@@ -3,7 +3,7 @@
 // LLM_URL пустой — функции с моделью выключены, остальное приложение работает как обычно.
 // Ответ модели — только подсказка: сохраняет его человек, сервер сам ничего по нему не меняет.
 const express = require("express");
-const { wrap } = require("./util");
+const { wrap, HttpError } = require("./util");
 
 const URL_BASE = (process.env.LLM_URL || "").replace(/\/+$/, "");
 const MODEL = process.env.LLM_MODEL || "qwen2.5:3b";
@@ -14,11 +14,10 @@ const MAX_QUEUE = Number(process.env.LLM_MAX_QUEUE || 10);
 // Защита от переполнения контекста модели: длинные поля (стектрейсы, логи) обрезает вызывающий код
 const MAX_PROMPT_CHARS = Number(process.env.LLM_MAX_PROMPT_CHARS || 12000);
 
-class LlmError extends Error {
+class LlmError extends HttpError {
   constructor(status, message) {
-    super(message);
+    super(status, message);
     this.name = "LlmError";
-    this.status = status;
   }
 }
 

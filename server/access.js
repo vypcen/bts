@@ -23,14 +23,15 @@ async function hasProject(user, key) {
   return rows.length > 0;
 }
 
-// Комментарии разработчик пишет наравне с остальными; кто может менять конкретный комментарий, решает server/comments.js
-const COMMENTS_RE = /^\/((bugs|cases)\/[^/]+\/comments|comments\/[^/]+)$/;
+// Что разработчик может отправлять при доступе «только просмотр»: комментарии (кто может менять конкретный, решает
+// server/comments.js) и разбор падения автотеста моделью — он ничего не меняет
+const DEV_WRITES_RE = /^\/((bugs|cases)\/[^/]+\/comments|comments\/[^/]+|ai\/autoresults\/[^/]+\/explain)$/;
 
 // Для всего под /api/projects/:key: проект должен быть доступен, а изменения — разрешены ролью
 function project(req, res, next) {
   hasProject(req.user, req.params.key).then((ok) => {
     if (!ok) return res.status(404).json({ error: "Проект не найден" });
-    if (req.method !== "GET" && !canWrite(req.user) && !COMMENTS_RE.test(req.path)) return res.status(403).json({ error: READ_ONLY });
+    if (req.method !== "GET" && !canWrite(req.user) && !DEV_WRITES_RE.test(req.path)) return res.status(403).json({ error: READ_ONLY });
     next();
   }, next);
 }

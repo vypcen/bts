@@ -308,7 +308,7 @@ function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachmen
   const explained = explain?.id === r.id ? explain.text : "";
 
   async function explainIt() {
-    const res = await ai.run(() => api<{ text: string }>("GET", paths.aiExplain(run.pid, r.id)));
+    const res = await ai.run(() => api<{ text: string }>("POST", paths.aiExplain(run.pid, r.id), {}));
     if (res) setExplain({ id: r.id, text: res.text });
   }
   return (

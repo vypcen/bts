@@ -28,12 +28,19 @@ services:
       PORT: 3000
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
       ADMIN_LOGIN: ${ADMIN_LOGIN:-}
+      REGISTRATION: ${REGISTRATION:-open}
+      SETUP_CODE: ${SETUP_CODE:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
       # Локальная модель (необязательно). Пустой LLM_URL — функции с моделью выключены
       LLM_URL: ${LLM_URL:-}
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
       LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-120000}
+      # Запросов к модели на пользователя за 10 минут
+      LLM_USER_LIMIT: ${LLM_USER_LIMIT:-20}
+    # По умолчанию приложение доступно только с этого компьютера: снаружи — через туннель или прокси.
+    # Для доступа из локальной сети (вариант А в README) задайте APP_BIND=0.0.0.0
     ports:
-      - "${APP_PORT:-3000}:3000"
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3000}:3000"
     volumes:
       - ./import:/app/import:ro
       - uploads:/app/data/uploads
@@ -41,7 +48,7 @@ services:
   # Доступ из интернета через Cloudflare Tunnel (необязательно).
   # Запускается только командой: docker compose --profile tunnel up -d
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.9.2
     profiles: ["tunnel"]
     restart: unless-stopped
     command: tunnel --no-autoupdate run

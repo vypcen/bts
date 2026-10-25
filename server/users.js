@@ -3,6 +3,7 @@ const express = require("express");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const { ROLES } = require("./access");
+const auth = require("./auth");
 const { wrap, str } = require("./util");
 
 const router = express.Router();
@@ -23,18 +24,39 @@ router.get("/users", wrap(async (_req, res) => {
   });
 }));
 
-// Роль и блокировка. Можно прислать одно из полей
+// Новый пользователь — когда регистрация закрыта (REGISTRATION=closed) или чтобы сразу выдать роль
+router.post("/users", wrap(async (req, res) => {
+  const login = str(req.body.login, 64).toLowerCase();
+  const name = str(req.body.name, 100);
+  const role = req.body.role === undefined ? "tester" : req.body.role;
+  const bad = auth.checkLogin(login) || (!name && "Укажите имя") || auth.checkPassword(req.body.password) || (!ROLES.includes(role) && "Неизвестная роль");
+  if (bad) return res.status(400).json({ error: bad });
+  const { rows } = await pool.query(
+    "INSERT INTO users(login, name, password_hash, role) VALUES ($1,$2,$3,$4) ON CONFLICT (login) DO NOTHING RETURNING id",
+    [login, name, await auth.hashPassword(req.body.password), role]
+  );
+  if (!rows[0]) return res.status(409).json({ error: "Логин уже занят" });
+  broadcast("users");
+  res.status(201).json({ login });
+}));
+
+// Роль, блокировка и новый пароль. Можно прислать одно из полей
 router.patch("/users/:login", wrap(async (req, res) => {
-  if (self(req)) return res.status(409).json({ error: "Свою роль и блокировку поменять нельзя: попросите другого админа" });
+  if (self(req)) return res.status(409).json({ error: "Свою роль, блокировку и пароль здесь поменять нельзя: попросите другого админа" });
   const u = await findUser(pool, req.params.login);
   if (!u) return res.status(404).json({ error: "Пользователь не найден" });
-  const { role, blocked } = req.body;
+  const { role, blocked, password } = req.body;
   if (role !== undefined && !ROLES.includes(role)) return res.status(400).json({ error: "Неизвестная роль" });
   if (blocked !== undefined && typeof blocked !== "boolean") return res.status(400).json({ error: "blocked должно быть true или false" });
+  const badPass = password !== undefined && auth.checkPassword(password);
+  if (badPass) return res.status(400).json({ error: badPass });
+  const hash = password !== undefined ? await auth.hashPassword(password) : null;
   await tx(async (db) => {
-    await db.query("UPDATE users SET role=COALESCE($1, role), blocked=COALESCE($2, blocked) WHERE id=$3", [role ?? null, blocked ?? null, u.id]);
-    // заблокированного сразу выкидываем из всех открытых вкладок
-    if (blocked) await db.query("DELETE FROM sessions WHERE user_id=$1", [u.id]);
+    await db.query("UPDATE users SET role=COALESCE($1, role), blocked=COALESCE($2, blocked), password_hash=COALESCE($3, password_hash) WHERE id=$4", [
+      role ?? null, blocked ?? null, hash, u.id,
+    ]);
+    // заблокированного или со сброшенным паролем сразу выкидываем из всех открытых вкладок
+    if (blocked || hash) await db.query("DELETE FROM sessions WHERE user_id=$1", [u.id]);
   });
   broadcast("users");
   res.json({ ok: true });

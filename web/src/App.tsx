@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { api } from "./api";
 import { go, href, useRoute } from "./router";
 import { useStore } from "./store";
 import { Avatar } from "./ui";
 import { Login } from "./views/Login";
+import { PasswordModal } from "./views/Password";
 import { ProjectPage } from "./views/ProjectPage";
 import { Projects } from "./views/Projects";
 import { Users } from "./views/Users";
@@ -46,6 +48,7 @@ export function App() {
 
 function Topbar({ projectName, projectKey, users }: { projectName?: string; projectKey?: string; users?: boolean }) {
   const { me, liveError, setMe, toast } = useStore();
+  const [password, setPassword] = useState(false);
   const logout = () => {
     api("POST", "/api/auth/logout", {}).catch(() => {});
     setMe(null);
@@ -87,8 +90,10 @@ function Topbar({ projectName, projectKey, users }: { projectName?: string; proj
             <span className="mono" style={{ fontSize: 12 }}>@{me.login} · {roleOf(me.role).label}</span>
           </span>
         )}
+        {me && <button className="btn ghost" onClick={() => setPassword(true)}>Пароль</button>}
         <button className="btn" onClick={logout}>Выйти</button>
       </div>
+      {password && <PasswordModal onClose={() => setPassword(false)} />}
     </div>
   );
 }
