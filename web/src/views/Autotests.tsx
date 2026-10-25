@@ -52,11 +52,12 @@ function StepList({ steps, depth = 0 }: { steps: (AutoStep | { title: string; st
   );
 }
 
-// Строка «что запущено · окружение · адрес» для списка запусков и шапки запуска
+// Строка «что запущено · окружение · ветка · адрес» для списка запусков и шапки запуска
 function RunMeta({ r }: { r: AutoRun }) {
   const parts = [
     r.scope && <span key="s">Запущено: <span className="mono">{r.scope}</span></span>,
     r.env && <span key="e">Окружение: {r.env}</span>,
+    r.branch && <span key="b">Ветка: <span className="mono">{r.branch}</span></span>,
     r.url && <span key="u" className="mono" style={{ overflowWrap: "anywhere" }}>{r.url}</span>,
   ].filter(Boolean);
   return <>{parts.map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</>;
@@ -189,7 +190,7 @@ export function AutoRunPage({ project, num }: { project: Project; num: number })
           <span className="label">{run.id}</span>
           <h1>{run.title}</h1>
           <p className="muted">
-            {(run.scope || run.env || run.url) && <><RunMeta r={run} /><br /></>}
+            {(run.scope || run.env || run.branch || run.url) && <><RunMeta r={run} /><br /></>}
             {fmt(run.created)}{run.state === "finished" && <> · {fmtDuration(run.durationMs)}</>}
           </p>
         </div>

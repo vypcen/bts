@@ -240,3 +240,28 @@ ol.steps{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px}
 @keyframes ai-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.ai-spin{animation:none}}
 .ai-answer{background:var(--accent-soft);border-radius:var(--r);padding:10px 12px;font-size:14px;white-space:pre-wrap}
+
+/* Пункты чек-листа: текст слева, отметки справа; на узком экране — под текстом */
+.items-list{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:6px}
+.items-list li{padding:6px 0;border-bottom:1px solid var(--line)}
+.items-list li:last-child{border-bottom:0}
+.items-list li>*{vertical-align:middle}
+.items-list .item-text{display:inline-block;margin-right:10px;overflow-wrap:anywhere}
+.items-list .item-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px}
+
+/* Блоки «Тест-кейсы» и «Чек-листы» на вкладке кейсов */
+.case-block{display:flex;flex-direction:column;gap:8px}
+.case-block+.case-block{margin-top:18px}
+.block-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.block-head h2{font-size:16px;margin:0;display:flex;align-items:baseline;gap:8px}
+.block-head h2 .n{font-family:var(--f-mono);font-size:12px;color:var(--muted);font-weight:500}
+.block-empty{border:1px dashed var(--line);border-radius:var(--r);padding:14px}
+
+/* Пункты чек-листа с отметкой «выполнено» */
+.done-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r)}
+.done-list label{display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--line);cursor:pointer;font-size:14px}
+.done-list label:last-child{border-bottom:0}
+.done-list label:hover{background:var(--sunken)}
+.done-list input{margin-top:3px;flex:none}
+.done-list .item-text{overflow-wrap:anywhere}
+.done-list label.is-done .item-text{color:var(--muted);text-decoration:line-through}

@@ -41,10 +41,15 @@ export interface CaseFolder {
   name: string;
 }
 
+// checklist — чек-лист: вместо предусловий, шагов и ожидаемого результата — пункты (в steps, по одному в строке)
+export type CaseKind = "case" | "checklist";
+
 export interface TestCase {
   id: string;
   pid: string;
   num: number;
+  kind: CaseKind;
+  checked: Record<string, { by: string; at: string }>; // пункты чек-листа, отмеченные выполненными (без прогона)
   folder: number | null; // null — в корне проекта
   title: string;
   priority: Priority;
@@ -78,6 +83,7 @@ export interface Result {
   caseNum: number;
   result: ResultValue;
   comment: string;
+  items: Record<string, ResultValue>; // отметки пунктов чек-листа по их тексту; у тест-кейса пусто
   executedBy: string | null;
   executed: number | null;
 }

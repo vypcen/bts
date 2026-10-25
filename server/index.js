@@ -8,6 +8,8 @@ const live = require("./live");
 const attachments = require("./attachments");
 const autotests = require("./autotests");
 const folders = require("./folders");
+const caseio = require("./caseio");
+const checklist = require("./checklist");
 const llm = require("./llm");
 const { wrap, str, num, ms, HttpError } = require("./util");
 
@@ -58,6 +60,9 @@ app.use(auth.loadUser);
 // Результаты автотестов приходят пачками вместе со стектрейсами — им нужен лимит побольше
 const bigJson = express.json({ limit: "10mb" });
 app.use("/api/projects/:key/autoruns", (req, res, next) => (req.user ? bigJson(req, res, next) : next()));
+// импорт тест-кейсов — CSV на тысячи строк
+const importJson = express.json({ limit: "5mb" });
+app.use("/api/projects/:key/cases/import", (req, res, next) => (req.user ? importJson(req, res, next) : next()));
 app.use(express.json({ limit: "200kb" }));
 
 // Защита от CSRF: изменяющие запросы принимаются только как JSON.
@@ -166,11 +171,11 @@ app.post("/api/auth/password", auth.requireUser, wrap(async (req, res) => {
 }));
 
 // ---------- данные ----------
-const caseSql = `SELECT c.project_key, c.num, c.folder_id, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected,
+const caseSql = `SELECT c.project_key, c.num, c.kind, c.checked, c.folder_id, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected,
   cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at
   FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by`;
 const toCase = (r) => ({
-  id: `${r.project_key}-${r.num}`, pid: r.project_key, num: r.num, folder: r.folder_id, title: r.title, priority: r.priority, status: r.status,
+  id: `${r.project_key}-${r.num}`, pid: r.project_key, num: r.num, kind: r.kind, checked: r.checked, folder: r.folder_id, title: r.title, priority: r.priority, status: r.status,
   pre: r.preconditions, steps: r.steps, expected: r.expected, createdBy: r.created_by, updatedBy: r.updated_by,
   created: r.created_at.getTime(), updated: r.updated_at.getTime(),
 });
@@ -196,7 +201,7 @@ app.get("/api/state", auth.requireUser, wrap(async (req, res) => {
     ),
     pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at
                 FROM test_runs r LEFT JOIN users u ON u.id=r.created_by WHERE ${mine("r.project_key")} ORDER BY r.project_key, r.num`, only),
-    pool.query(`SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, u.login AS executed_by, rr.executed_at
+    pool.query(`SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, rr.items, u.login AS executed_by, rr.executed_at
                 FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
                 LEFT JOIN users u ON u.id=rr.executed_by WHERE ${mine("t.project_key")}`, only),
     pool.query(`SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
@@ -238,7 +243,7 @@ app.get("/api/state", auth.requireUser, wrap(async (req, res) => {
       state: r.state, createdBy: r.created_by, created: ms(r.created_at), closed: ms(r.closed_at),
     })),
     results: results.rows.map((r) => ({
-      id: r.id, pid: r.project_key, runNum: r.run_num, caseNum: r.case_num, result: r.result, comment: r.comment,
+      id: r.id, pid: r.project_key, runNum: r.run_num, caseNum: r.case_num, result: r.result, comment: r.comment, items: r.items,
       executedBy: r.executed_by, executed: ms(r.executed_at),
     })),
     bugs: bugs.rows.map((b) => ({
@@ -307,6 +312,7 @@ app.delete("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
 
 function readCase(body) {
   const c = {
+    kind: body.kind === undefined ? "case" : str(body.kind, 20),
     title: str(body.title, 500),
     priority: str(body.priority, 20),
     status: str(body.status, 20),
@@ -314,9 +320,16 @@ function readCase(body) {
     steps: str(body.steps),
     expected: str(body.expected),
   };
-  if (!c.title) return { error: "Укажите название тест-кейса" };
+  if (!checklist.KINDS.includes(c.kind)) return { error: "Неизвестный вид: case или checklist" };
+  if (!c.title) return { error: c.kind === "checklist" ? "Укажите название чек-листа" : "Укажите название тест-кейса" };
   if (!PRIORITIES.includes(c.priority)) return { error: "Неизвестный приоритет" };
   if (!STATUSES.includes(c.status)) return { error: "Неизвестный статус" };
+  // у чек-листа вместо шагов — пункты, предусловий и ожидаемого результата нет
+  if (c.kind === "checklist") {
+    const { steps, error } = checklist.check(c.steps);
+    if (error) return { error };
+    Object.assign(c, { steps, pre: "", expected: "" });
+  }
   return { c };
 }
 
@@ -331,9 +344,9 @@ app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => 
     if (!r.rows[0]) return null;
     const next = r.rows[0].seq;
     await db.query(
-      `INSERT INTO test_cases(project_key, num, folder_id, title, priority, status, preconditions, steps, expected, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
-      [req.params.key, next, folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id]
+      `INSERT INTO test_cases(project_key, num, kind, folder_id, title, priority, status, preconditions, steps, expected, created_by, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
+      [req.params.key, next, c.kind, folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id]
     );
     return next;
   });
@@ -345,7 +358,7 @@ app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => 
 app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, res) => {
   const n = num(req.params.num);
   // частичное обновление: можно прислать только status
-  const { rows } = await pool.query("SELECT folder_id, title, priority, status, preconditions AS pre, steps, expected FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, n]);
+  const { rows } = await pool.query("SELECT kind, folder_id, title, priority, status, preconditions AS pre, steps, expected FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, n]);
   if (!rows[0]) return res.status(404).json({ error: "Тест-кейс не найден" });
   const { c, error } = readCase({ ...rows[0], ...req.body });
   if (error) return res.status(400).json({ error });
@@ -353,10 +366,35 @@ app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, re
   const folder = req.body.folder === undefined ? rows[0].folder_id : await folders.folderId(pool, req.params.key, req.body.folder);
   if (folder === undefined) return res.status(400).json({ error: "Папка не найдена" });
   await pool.query(
-    `UPDATE test_cases SET folder_id=$1, title=$2, priority=$3, status=$4, preconditions=$5, steps=$6, expected=$7, updated_by=$8, updated_at=now()
+    `UPDATE test_cases SET folder_id=$1, title=$2, priority=$3, status=$4, preconditions=$5, steps=$6, expected=$7, updated_by=$8, updated_at=now(), kind=$11
      WHERE project_key=$9 AND num=$10`,
-    [folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, n]
+    [folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, n, c.kind]
   );
+  broadcast("cases");
+  res.json({ ok: true });
+}));
+
+// Отметить пункт чек-листа выполненным: {"item": "текст", "done": true | false}, или снять все отметки: {"reset": true}.
+// Дата «Обновлён» у чек-листа не меняется — сам чек-лист остался прежним
+app.post("/api/projects/:key/cases/:num/check", auth.requireUser, wrap(async (req, res) => {
+  const where = [req.params.key, num(req.params.num)];
+  const { rows } = await pool.query("SELECT kind, steps FROM test_cases WHERE project_key=$1 AND num=$2", where);
+  if (!rows[0]) return res.status(404).json({ error: "Чек-лист не найден" });
+  if (rows[0].kind !== "checklist") return res.status(400).json({ error: "Отмечать пункты можно только у чек-листа" });
+  if (req.body.reset === true) {
+    await pool.query("UPDATE test_cases SET checked='{}' WHERE project_key=$1 AND num=$2", where);
+  } else {
+    const item = str(req.body.item, checklist.MAX_ITEM);
+    if (!checklist.items(rows[0].steps).includes(item)) return res.status(404).json({ error: "Такого пункта в чек-листе нет: возможно, его только что изменили" });
+    if (typeof req.body.done !== "boolean") return res.status(400).json({ error: "done должно быть true или false" });
+    // правка одного ключа прямо в базе: двое, отмечающие разные пункты одновременно, не затрут отметки друг друга
+    await pool.query(
+      req.body.done
+        ? "UPDATE test_cases SET checked = checked || jsonb_build_object($3::text, jsonb_build_object('by', $4::text, 'at', now())) WHERE project_key=$1 AND num=$2"
+        : "UPDATE test_cases SET checked = checked - $3::text WHERE project_key=$1 AND num=$2",
+      req.body.done ? [...where, item, req.user.login] : [...where, item]
+    );
+  }
   broadcast("cases");
   res.json({ ok: true });
 }));
@@ -370,7 +408,7 @@ app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, r
 
 // подсказки локальной модели в формах; запись (черновики бага и кейса) — только тестировщикам, как и сами формы
 app.use("/api/projects/:key/ai", auth.requireUser, require("./assist"));
-app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, autotests.projectRouter, attachments.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, autotests.projectRouter, attachments.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"));

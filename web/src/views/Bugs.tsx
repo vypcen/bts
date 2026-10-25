@@ -24,16 +24,17 @@ export interface BugDraft {
 
 const SEV_BY_PRIO: Record<TestCase["priority"], Severity> = { critical: "critical", high: "major", medium: "major", low: "minor" };
 
-// Баг из упавшего кейса: шаги, ожидаемый результат и окружение переносятся из кейса и прогона
-export function draftFromCase(c: TestCase, run?: Run, result?: Result): BugDraft {
+// Баг из упавшего кейса: шаги, ожидаемый результат и окружение переносятся из кейса и прогона.
+// item — упавший пункт чек-листа: баг про него, а сам пункт и есть ожидаемый результат
+export function draftFromCase(c: TestCase, run?: Run, result?: Result, item?: string): BugDraft {
   return {
-    title: c.title,
+    title: item ? `${c.title}: ${item}`.slice(0, 500) : c.title,
     severity: SEV_BY_PRIO[c.priority],
     assignee: "",
     env: run ? [run.build && `Сборка ${run.build}`, run.env].filter(Boolean).join(", ") : "",
-    steps: [c.pre && `Предусловия: ${c.pre}`, c.steps].filter(Boolean).join("\n"),
+    steps: item ? `Чек-лист ${c.id} «${c.title}»\nНе выполняется пункт: ${item}` : [c.pre && `Предусловия: ${c.pre}`, c.steps].filter(Boolean).join("\n"),
     actual: result?.comment || "",
-    expected: c.expected,
+    expected: item || c.expected,
     caseNum: c.num,
     runNum: run?.num,
   };

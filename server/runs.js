@@ -2,6 +2,7 @@
 const express = require("express");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
+const checklist = require("./checklist");
 const { wrap, str, num } = require("./util");
 
 const RESULTS = ["untested", "passed", "failed", "blocked", "skipped"];
@@ -90,22 +91,37 @@ router.patch("/runs/:num/results/:case", wrap(async (req, res) => {
   if (!run) return res.status(404).json({ error: "Прогон не найден" });
   if (run.state !== "open") return res.status(409).json({ error: "Прогон закрыт. Откройте его, чтобы менять результаты" });
   const { rows } = await pool.query(
-    `SELECT rr.id, rr.result, rr.comment FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
+    `SELECT rr.id, rr.result, rr.comment, rr.items, c.kind, c.steps FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
      WHERE rr.run_id=$1 AND c.num=$2`,
     [run.id, num(req.params.case)]
   );
-  if (!rows[0]) return res.status(404).json({ error: "Кейс не входит в этот прогон" });
-  const result = req.body.result === undefined ? rows[0].result : str(req.body.result, 20);
-  const comment = req.body.comment === undefined ? rows[0].comment : str(req.body.comment);
+  const cur = rows[0];
+  if (!cur) return res.status(404).json({ error: "Кейс не входит в этот прогон" });
+  let result = req.body.result === undefined ? cur.result : str(req.body.result, 20);
+  const comment = req.body.comment === undefined ? cur.comment : str(req.body.comment);
   if (!RESULTS.includes(result)) return res.status(400).json({ error: "Неизвестный результат" });
-  const changed = result !== rows[0].result;
+  let items = cur.items;
+  if (req.body.item !== undefined) {
+    // отметка пункта чек-листа: {"item": "текст пункта", "result": "failed"}; "untested" снимает отметку
+    if (cur.kind !== "checklist") return res.status(400).json({ error: "Пункты есть только у чек-листа" });
+    const list = checklist.items(cur.steps);
+    const item = str(req.body.item, checklist.MAX_ITEM);
+    if (!list.includes(item)) return res.status(404).json({ error: "Такого пункта в чек-листе нет: возможно, его только что изменили" });
+    items = { ...cur.items };
+    if (result === "untested") delete items[item];
+    else items[item] = result;
+    result = checklist.verdict(list, items);
+  } else if (cur.kind === "checklist" && req.body.result !== undefined) {
+    return res.status(400).json({ error: "У чек-листа отмечаются пункты, итог считается сам" });
+  }
+  const changed = result !== cur.result;
   // исполнитель и время фиксируются, когда меняется сам результат, а не комментарий
   await pool.query(
-    `UPDATE run_results SET result=$1, comment=$2,
+    `UPDATE run_results SET result=$1, comment=$2, items=$6,
        executed_by = CASE WHEN $3 THEN (CASE WHEN $1='untested' THEN NULL ELSE $4::int END) ELSE executed_by END,
        executed_at = CASE WHEN $3 THEN (CASE WHEN $1='untested' THEN NULL ELSE now() END) ELSE executed_at END
      WHERE id=$5`,
-    [result, comment, changed, req.user.id, rows[0].id]
+    [result, comment, changed, req.user.id, cur.id, JSON.stringify(items)]
   );
   broadcast("runs");
   res.json({ ok: true });

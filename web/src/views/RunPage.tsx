@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { api, paths } from "../api";
+import { checkedCount, checklistItems, itemMark } from "../checklist";
 import { BUG_STATUSES, find, RESULTS } from "../labels";
 import { go, href } from "../router";
 import { countResults, previousResults, runResults } from "../selectors";
@@ -114,10 +115,15 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
               return (
                 <tr key={r.id} className="click" aria-selected={selected === r.caseNum} onClick={() => setSelected(r.caseNum)}>
                   <td className="id">{c.id}</td>
-                  <td className="title">{c.title}{r.comment && <div className="muted small" style={{ fontWeight: 400, whiteSpace: "pre-wrap" }}>{r.comment.slice(0, 140)}</div>}</td>
+                  <td className="title">{c.kind === "checklist" && <span title="Чек-лист">☑ </span>}{c.title}{r.comment && <div className="muted small" style={{ fontWeight: 400, whiteSpace: "pre-wrap" }}>{r.comment.slice(0, 140)}</div>}</td>
                   <td><Prio p={c.priority} /></td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    {editable ? <ResultButtons value={r.result} onPick={(v) => mark(r, v)} /> : <ResultPill r={r.result} />}
+                    {c.kind === "checklist" ? (
+                      // пункты отмечаются в карточке, здесь — итог и прогресс
+                      <button type="button" className="btn ghost sm" onClick={() => setSelected(r.caseNum)} style={{ gap: 8 }}>
+                        <ResultPill r={r.result} sm /><span className="muted small">{checkedCount(checklistItems(c), r)} из {checklistItems(c).length}</span>
+                      </button>
+                    ) : editable ? <ResultButtons value={r.result} onPick={(v) => mark(r, v)} /> : <ResultPill r={r.result} />}
                   </td>
                   <td className="nowrap">
                     {pr ? <span title={`${p}-R${pr.runNum}`}><ResultPill r={pr.result} sm /> <span className="muted small mono">R{pr.runNum}</span></span> : <span className="muted small">—</span>}
@@ -173,9 +179,9 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   );
 }
 
-function ResultButtons({ value, onPick, lg }: { value: ResultValue; onPick: (v: ResultValue) => void; lg?: boolean }) {
+function ResultButtons({ value, onPick, lg, label = "Результат" }: { value: ResultValue; onPick: (v: ResultValue) => void; lg?: boolean; label?: string }) {
   return (
-    <div className={`seg${lg ? " lg" : ""}`} role="group" aria-label="Результат">
+    <div className={`seg${lg ? " lg" : ""}`} role="group" aria-label={label}>
       {MARKS.map((k) => (
         <button key={k} type="button" className={`r-${k}`} aria-pressed={value === k} onClick={() => onPick(k)} title={value === k ? "Нажмите ещё раз, чтобы сбросить" : undefined}>
           {find(RESULTS, k).label}
@@ -209,6 +215,10 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
     const result = r.result === v ? "untested" : v;
     await write(() => api("PATCH", paths.result(p, run.num, c.num), dirty ? { result, comment } : { result }));
   };
+  // пункт чек-листа: повторное нажатие на ту же отметку снимает её
+  const items = checklistItems(c);
+  const pickItem = (item: string, v: ResultValue) =>
+    write(() => api("PATCH", paths.result(p, run.num, c.num), { item, result: itemMark(r, item) === v ? "untested" : v }));
 
   return (
     <Drawer
@@ -218,7 +228,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
       onClose={props.onClose}
       footer={
         <>
-          {canEdit && (r.result === "failed" || r.result === "blocked") && (
+          {canEdit && c.kind !== "checklist" && (r.result === "failed" || r.result === "blocked") && (
             <button className="btn" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(c, run, { ...r, comment: comment.trim() })); }}>Завести баг</button>
           )}
           <a className="btn ghost" href={href("p", p, "cases", c.num)} style={{ textDecoration: "none" }}>Открыть кейс</a>
@@ -229,13 +239,44 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
     >
       <div className="view-block">
         <span className="label">Результат в {run.id}</span>
-        {open ? <ResultButtons value={r.result} onPick={pick} lg /> : <ResultPill r={r.result} />}
+        {c.kind === "checklist" ? (
+          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <ResultPill r={r.result} /><span className="muted small">Отмечено {checkedCount(items, r)} из {items.length}. Итог считается по пунктам</span>
+          </span>
+        ) : open ? <ResultButtons value={r.result} onPick={pick} lg /> : <ResultPill r={r.result} />}
         {r.executed && <span className="muted small">Отметил <Who login={r.executedBy} /> · {fmt(r.executed)}</span>}
         {prev && <span className="muted small">В прошлый раз ({p}-R{prev.runNum}): <ResultPill r={prev.result} sm /></span>}
       </div>
-      <TextBlock label="Предусловия" text={c.pre} empty="Не указаны" />
-      <TextBlock label="Шаги" text={c.steps} empty="Не указаны" steps />
-      <TextBlock label="Ожидаемый результат" text={c.expected} empty="Не указан" />
+      {c.kind === "checklist" ? (
+        <div className="view-block">
+          <span className="label">Пункты</span>
+          <ol className="items-list">
+            {items.map((item) => {
+              const m = itemMark(r, item);
+              const was = prev && itemMark(prev, item);
+              return (
+                <li key={item}>
+                  <span className="item-text">{item}</span>
+                  <div className="item-acts">
+                    {open ? <ResultButtons value={m} onPick={(v) => pickItem(item, v)} label={`Результат: ${item}`} /> : <ResultPill r={m} sm />}
+                    {was === "passed" && m === "failed" && <span className="small" style={{ color: "var(--crit)", fontWeight: 600 }}>Регресс</span>}
+                    {was && was !== "untested" && was !== m && m !== "failed" && <span className="muted small">ранее: <ResultPill r={was} sm /></span>}
+                    {canEdit && (m === "failed" || m === "blocked") && (
+                      <button className="btn sm" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(c, run, { ...r, comment: comment.trim() }, item)); }}>+ Баг</button>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      ) : (
+        <>
+          <TextBlock label="Предусловия" text={c.pre} empty="Не указаны" />
+          <TextBlock label="Шаги" text={c.steps} empty="Не указаны" steps />
+          <TextBlock label="Ожидаемый результат" text={c.expected} empty="Не указан" />
+        </>
+      )}
       <div className="field">
         <label htmlFor="rr-comment">Комментарий / фактический результат</label>
         <textarea className="input" id="rr-comment" rows={3} value={comment} disabled={!open} onChange={(e) => setComment(e.target.value)} onBlur={() => open && saveComment()}

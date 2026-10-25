@@ -6,7 +6,7 @@
 //   use: { screenshot: "only-on-failure", trace: "retain-on-failure" },
 //
 // Настройки — переменные окружения TESTBOL_URL, TESTBOL_TOKEN, TESTBOL_PROJECT (или опции репортера url, token, project).
-// Необязательные: TESTBOL_TITLE, TESTBOL_BUILD, TESTBOL_ENV, TESTBOL_BRANCH,
+// Необязательные: TESTBOL_TITLE (по умолчанию «Локальный запуск <адрес сайта>»), TESTBOL_BUILD, TESTBOL_ENV, TESTBOL_BRANCH,
 // TESTBOL_APP_URL — адрес тестируемого приложения (или опция appUrl; по умолчанию baseURL из конфига).
 // Шаги теста (test.step) уходят вместе с результатом: видно, какие шаги прошли и на каком тест упал.
 // Если настройки не заданы, репортер молча выключается и тесты работают как обычно.
@@ -109,14 +109,21 @@ class TestbolReporter {
     const running = suite.suites.filter((s) => s.allTests().length).map((s) => s.project());
     const urls = [...new Set(running.map((p) => p?.use?.baseURL).filter(Boolean))];
     const branch = this.opts.branch ?? git("rev-parse --abbrev-ref HEAD");
+    const appUrl = this.opts.appUrl ?? urls.join(", ");
+    // по умолчанию запуск называется по проверяемому сайту: «Локальный запуск disrupt.fxtun.ru».
+    // Ветка уходит отдельным полем и видна в описании запуска; без адреса — по-старому, по ветке
+    let host = "";
+    try {
+      host = new URL(appUrl.split(",")[0].trim()).host;
+    } catch {}
     this.enqueue(async () => {
       this.run = await this.call("POST", "/autoruns", {
-        title: this.opts.title || `Локальный запуск${branch ? ` ${branch}` : ""}`,
+        title: this.opts.title || `Локальный запуск${host ? ` ${host}` : branch ? ` ${branch}` : ""}`,
         build: this.opts.build ?? git("rev-parse --short HEAD"),
         env: this.opts.env ?? "",
         branch,
         scope: running.map((p) => p?.name).filter(Boolean).join(", "),
-        url: this.opts.appUrl ?? urls.join(", "),
+        url: appUrl,
       });
       this.log(`запуск ${this.run.id}: ${this.url}/#/p/${encodeURIComponent(this.project)}/auto/${this.run.num}`);
     });

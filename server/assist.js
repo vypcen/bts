@@ -38,6 +38,7 @@ const BUG_SCHEMA = {
   properties: { title: { type: "string" }, steps: STEPS, actual: { type: "string" }, expected: { type: "string" }, severity: { enum: SEVERITIES } },
   required: ["title", "steps", "actual", "expected", "severity"],
 };
+const CHECKLIST_SCHEMA = { type: "object", properties: { items: STEPS }, required: ["items"] };
 const CASE_SCHEMA = {
   type: "object",
   properties: { pre: { type: "string" }, steps: STEPS, expected: { type: "string" } },
@@ -104,6 +105,20 @@ router.post("/case-draft", wrap(async (req, res) => {
     expected: str(req.body.expected, 2000),
   };
   if (!input.title) return res.status(400).json({ error: "Сначала напишите название кейса" });
+  if (req.body.kind === "checklist") {
+    const out = await llm.chat([
+      {
+        role: "system",
+        content: `Ты опытный QA-инженер и составляешь чек-лист по его названию. ${RULES}
+- items: 5–15 пунктов, каждый — одна короткая проверка, которую можно отметить «прошло / не прошло», без номеров.
+Если пункты уже написаны — сохрани их и допиши недостающие.`,
+      },
+      { role: "user", content: fields([["Название", "Смоук корзины"], ["Пункты", ""]]) },
+      { role: "assistant", content: JSON.stringify({ items: ["Товар добавляется в корзину", "Количество меняется кнопками + и −", "Сумма пересчитывается", "Товар удаляется из корзины", "Кнопка «Оформить» ведёт к оплате"] }) },
+      { role: "user", content: fields([["Название", input.title], ["Пункты", input.steps]]) },
+    ], { schema: CHECKLIST_SCHEMA, temperature: 0.3 });
+    return res.json({ pre: "", steps: stepsText(out.items) || input.steps, expected: "" });
+  }
   const out = await llm.chat([
     {
       role: "system",

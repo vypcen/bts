@@ -163,7 +163,7 @@ export function CasePicker({ cases, picked, setPicked }: { cases: TestCase[]; pi
                 <label key={c.num} style={g.title !== null ? { paddingLeft: 26 + g.depth * 14 } : undefined}>
                   <input type="checkbox" checked={picked.has(c.num)} onChange={() => toggle(c.num)} />
                   <span className="mono muted small" style={{ width: 64 }}>{c.id}</span>
-                  <span style={{ flex: 1, minWidth: 0 }}>{c.title}{c.status === "draft" && <span className="muted small"> · черновик</span>}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>{c.kind === "checklist" && "☑ "}{c.title}{c.status === "draft" && <span className="muted small"> · черновик</span>}</span>
                   <Prio p={c.priority} />
                 </label>
               ))}
