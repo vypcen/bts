@@ -29,8 +29,9 @@ export async function api<T = any>(method: string, url: string, body?: unknown):
     res = await fetch(url, {
       method,
       credentials: "same-origin",
-      headers: body !== undefined ? { "Content-Type": "application/json" } : {},
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      // изменяющие запросы сервер принимает только как JSON (защита от CSRF) — даже без данных шлём {}
+      headers: method !== "GET" ? { "Content-Type": "application/json" } : {},
+      body: method !== "GET" ? JSON.stringify(body ?? {}) : undefined,
     });
   } catch {
     throw new ApiError(0, NO_NET);

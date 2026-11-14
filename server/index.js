@@ -23,6 +23,8 @@ const ci = require("./ci");
 const projectio = require("./projectio");
 const state = require("./state");
 const lists = require("./lists");
+const audit = require("./audit");
+const trash = require("./trash");
 const { wrap, str, num, HttpError } = require("./util");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -72,6 +74,8 @@ app.use((req, res, next) => {
 
 // Сначала — кто пришёл. Тело запроса разбирается после: без входа нельзя заставить сервер разбирать мегабайты JSON
 app.use(auth.loadUser);
+// журнал аудита для изменяющих запросов к пользователям, интеграциям, токенам, удалениям (server/audit.js)
+app.use(audit.middleware());
 // Результаты автотестов приходят пачками вместе со стектрейсами — им нужен лимит побольше
 const bigJson = express.json({ limit: "10mb" });
 app.use("/api/projects/:key/autoruns", (req, res, next) => (req.user ? bigJson(req, res, next) : next()));
@@ -147,6 +151,7 @@ app.post("/api/auth/register", wrap(async (req, res) => {
   if (!rows[0]) return res.status(409).json({ error: "Логин уже занят. Выберите другой или войдите" });
   if (rows[0].role === "admin") auth.setupDone();
   await auth.createSession(res, req, rows[0].id);
+  audit.log(req, "auth.register", { actor: { id: rows[0].id, login }, project: null, target: login, details: { role: rows[0].role } });
   broadcast("users");
   res.status(201).json({ user: { login, name, role: rows[0].role } });
 }));
@@ -172,6 +177,7 @@ app.post("/api/auth/login", wrap(async (req, res) => {
     }
   }
   if (!check.ok) {
+    audit.log(req, "auth.login_failed", { actor: { id: u?.id, login }, project: null, target: login });
     limits.loginIpLogin.hit(key);
     limits.loginIp.hit(req.ip);
     limits.loginAny.hit(login);
@@ -185,6 +191,7 @@ app.post("/api/auth/login", wrap(async (req, res) => {
   }
   await pool.query("UPDATE users SET last_login_at=now() WHERE id=$1", [u.id]);
   await auth.createSession(res, req, u.id);
+  audit.log(req, "auth.login", { actor: u, project: null, target: u.login, details: { provider: u.auth_provider || "local" } });
   res.json({ user: me(u) });
 }));
 
@@ -192,6 +199,7 @@ app.post("/api/auth/login", wrap(async (req, res) => {
 app.use("/api/auth", sso.router);
 
 app.post("/api/auth/logout", wrap(async (req, res) => {
+  if (req.user) audit.log(req, "auth.logout", { project: null, target: req.user.login });
   await auth.destroySession(req, res);
   res.json({ ok: true });
 }));
@@ -207,6 +215,7 @@ app.post("/api/auth/password", auth.requireUser, wrap(async (req, res) => {
   if (!(await auth.verifyPassword(current, rows[0].password_hash)).ok) return res.status(403).json({ error: "Текущий пароль указан неверно" });
   await pool.query("UPDATE users SET password_hash=$1 WHERE id=$2", [await auth.hashPassword(req.body.password), req.user.id]);
   await auth.destroyOtherSessions(req, req.user.id);
+  audit.log(req, "auth.password", { project: null, target: req.user.login });
   res.json({ ok: true });
 }));
 
@@ -231,7 +240,10 @@ app.post("/api/projects", auth.requireUser, access.requireWriter, wrap(async (re
     if (rows[0]) await db.query("INSERT INTO project_members(project_key, user_id) VALUES ($1,$2)", [key, req.user.id]);
     return Boolean(rows[0]);
   });
-  if (!created) return res.status(409).json({ error: `Ключ ${key} уже занят другим проектом` });
+  if (!created) {
+    const { rows } = await pool.query("SELECT deleted_at FROM projects WHERE key=$1", [key]);
+    return res.status(409).json({ error: rows[0]?.deleted_at ? `Ключ ${key} занят проектом в корзине: восстановите его или удалите навсегда` : `Ключ ${key} уже занят другим проектом` });
+  }
   broadcast("projects");
   res.status(201).json({ id: key });
 }));
@@ -241,7 +253,7 @@ app.use("/api/projects-import", auth.requireUser, access.requireWriter, projecti
 
 // Всё внутри проекта: доступ только участникам и админам, изменения — только тестировщикам и админам (кроме комментариев)
 app.use("/api/projects/:key", auth.requireUser, access.project, live.inProject);
-app.use("/api/projects/:key", state.router, lists.router);
+app.use("/api/projects/:key", state.router, lists.router, trash.router);
 app.use("/api/search", auth.requireUser, lists.searchRouter);
 // Настройки интеграций содержат адреса и заголовки внутренних систем — их видят только те, кто может менять проект
 app.use(["/api/projects/:key/webhooks", "/api/projects/:key/tracker"], (req, res, next) =>
@@ -257,13 +269,8 @@ app.patch("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.delete("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
-  // кейсы, прогоны и баги удалятся каскадно
-  const r = await pool.query("DELETE FROM projects WHERE key=$1", [req.params.key]);
-  if (!r.rowCount) return res.status(404).json({ error: "Проект не найден" });
-  broadcast("projects");
-  res.json({ ok: true });
-}));
+// Проект — в корзину (только админ, с подтверждением ключом). Навсегда — из корзины в «Пользователи» → «Корзина»
+app.delete("/api/projects/:key", auth.requireUser, wrap(trash.deleteProject));
 
 function readCase(body) {
   const c = {
@@ -368,11 +375,12 @@ app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, r
     [req.params.key, num(req.params.num)]
   );
   if (locked.rows[0]) return res.status(409).json({ error: `Кейс входит в заблокированный тест-план ${req.params.key}-P${locked.rows[0].num}. Пометьте его устаревшим вместо удаления` });
-  const r = await pool.query("DELETE FROM test_cases WHERE project_key=$1 AND num=$2 RETURNING title", [req.params.key, num(req.params.num)]);
-  if (!r.rowCount) return res.status(404).json({ error: "Тест-кейс не найден" });
+  // в корзину: кейс с версиями, результатами и комментариями можно восстановить (server/trash.js)
+  const r = await trash.remove(req, "case", num(req.params.num));
+  if (!r) return res.status(404).json({ error: "Тест-кейс не найден" });
   broadcast("cases");
-  events.emit(req.params.key, "case.deleted", { case: { id: `${req.params.key}-${req.params.num}`, num: num(req.params.num), title: r.rows[0].title } }, req.user);
-  res.json({ ok: true });
+  events.emit(req.params.key, "case.deleted", { case: { id: `${req.params.key}-${req.params.num}`, num: num(req.params.num), title: r.title } }, req.user);
+  res.json({ ok: true, trashId: r.trashId });
 }));
 
 // ---------- версии тест-кейса ----------
@@ -416,7 +424,7 @@ app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bu
 app.use("/api/projects/:key", auth.requireUser, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics"), projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
-app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"));
+app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"), audit.router, trash.adminRouter);
 app.use("/api/llm", auth.requireUser, llm.router);
 // подключения к языковым моделям (облачные сервисы и свои модели) — только администратор
 app.use("/api/admin/llm", auth.requireUser, access.requireAdmin, llm.adminRouter);
@@ -470,6 +478,10 @@ app.use((err, _req, res, _next) => {
   await require("./storage").check();
   await live.listen();
   attachments.startSweeper();
+  // корзина и журнал аудита: старое удаляется раз в час (на каждой реплике — запросы идемпотентны)
+  const housekeeping = () => Promise.all([trash.purgeExpired(), audit.purge()]).catch((e) => console.error("[housekeeping]", e.message));
+  setTimeout(housekeeping, 60 * 1000).unref();
+  setInterval(housekeeping, 60 * 60 * 1000).unref();
   trackers.startSync();
   const server = app.listen(PORT, "0.0.0.0", () => {
     ready = true;

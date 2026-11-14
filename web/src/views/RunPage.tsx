@@ -200,7 +200,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
       {modal === "delete" && (
         <Confirm
           title={`Удалить прогон ${run.id}?`}
-          text={`Будут удалены все ${results.length} результатов и вложения к ним. Связанные баги останутся, но потеряют ссылку на прогон.`}
+          text={`Прогон с ${results.length} результатами и вложениями уйдёт в корзину проекта — оттуда его можно восстановить в течение 30 дней.`}
           onClose={() => setModal(null)}
           onYes={async () => {
             setModal(null);

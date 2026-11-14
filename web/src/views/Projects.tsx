@@ -3,7 +3,7 @@ import { api, paths } from "../api";
 import { go, href } from "../router";
 import { useCanEdit, useData, useStore } from "../store";
 import type { Project } from "../types";
-import { Confirm, Empty, Modal, ResultBar, useNames } from "../ui";
+import { Empty, Modal, ResultBar, useNames } from "../ui";
 
 export function Projects({ missing }: { missing?: string }) {
   const data = useData();
@@ -71,7 +71,8 @@ export function ProjectModal({ project, onClose }: { project?: Project; onClose:
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
-  const canDelete = Boolean(project);
+  const { me } = useStore();
+  const canDelete = Boolean(project) && me?.role === "admin"; // удаляет только админ (в корзину)
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -98,17 +99,7 @@ export function ProjectModal({ project, onClose }: { project?: Project; onClose:
   }
 
   if (confirmDel && project) {
-    const s = project.stats;
-    return (
-      <Confirm
-        title={`Удалить проект «${project.name}»?`}
-        text={`Вместе с ним будут удалены ${s.cases} тест-кейсов, ${s.runs} прогонов и ${s.bugs} багов со всеми вложениями. Это действие нельзя отменить.`}
-        onClose={() => setConfirmDel(false)}
-        onYes={async () => {
-          if (await write(() => api("DELETE", paths.project(project.id), {}), "Проект удалён")) go();
-        }}
-      />
-    );
+    return <DeleteProject project={project} onClose={() => setConfirmDel(false)} />;
   }
 
   return (
@@ -242,6 +233,33 @@ function ImportProjectModal({ onClose }: { onClose: () => void }) {
           <button className="btn primary" type="submit" disabled={busy || !text}>{busy ? "Подождите…" : "Создать проект"}</button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+// Удаление проекта: только админ, нужно ввести ключ. Проект уходит в корзину и восстанавливается в «Пользователи» → «Корзина»
+function DeleteProject({ project, onClose }: { project: Project; onClose: () => void }) {
+  const { write } = useStore();
+  const [key, setKey] = useState("");
+  const s = project.stats;
+  return (
+    <Modal onClose={onClose}>
+      <h2>Удалить проект «{project.name}»?</h2>
+      <p className="muted" style={{ margin: 0 }}>
+        Проект пропадёт у всех участников вместе с {s.cases} тест-кейсами, {s.runs} прогонами и {s.bugs} багами. Его можно восстановить
+        в течение 30 дней: «Пользователи» → «Удалённые проекты».
+      </p>
+      <div className="field">
+        <label htmlFor="del-key">Чтобы подтвердить, введите ключ проекта: <b className="mono">{project.id}</b></label>
+        <input className="input mono" id="del-key" value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} autoFocus autoComplete="off" />
+      </div>
+      <div className="acts">
+        <button className="btn" onClick={onClose}>Отмена</button>
+        <button className="btn danger solid" disabled={key !== project.id}
+          onClick={async () => {
+            if (await write(() => api("DELETE", paths.project(project.id), { confirm: project.id }), "Проект удалён в корзину")) go();
+          }}>Удалить проект</button>
+      </div>
     </Modal>
   );
 }

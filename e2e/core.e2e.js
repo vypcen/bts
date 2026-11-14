@@ -52,13 +52,16 @@ test("все вкладки проекта открываются без оши�
   const api = page.request;
   const k = await (await api.post("/api/projects/LK/cases", { data: { title: "Обход", priority: "low", status: "ready" } })).json();
   const run = await (await api.post("/api/projects/LK/runs", { data: { title: "Обход вкладок", caseNums: [k.num] } })).json();
-  for (const tab of ["cases", "plans", "runs", "bugs", "auto", "analytics", "integrations", `runs/${run.num}`, `cases/${k.num}`]) {
+  for (const tab of ["cases", "plans", "runs", "bugs", "auto", "analytics", "integrations", "trash", `runs/${run.num}`, `cases/${k.num}`]) {
     await page.goto(`/#/p/LK/${tab}`);
     await page.waitForTimeout(400); // networkidle не наступает: открыт поток живых обновлений
     await expect(page.locator(".skel")).toHaveCount(0);
   }
-  await page.goto("/#/users");
-  await page.waitForTimeout(400);
+  for (const sub of ["users", "users/audit", "users/trash"]) {
+    await page.goto(`/#/${sub}`);
+    await page.waitForTimeout(400);
+    await expect(page.locator(".skel")).toHaveCount(0);
+  }
   await page.goto("/#/");
   await expect(page.getByText("Личный кабинет").first()).toBeVisible();
   expect(errors).toEqual([]);
@@ -86,4 +89,20 @@ test("карточка и редактор кейса догружают шаг�
   await expect.poll(async () => (await (await api.get(`/api/projects/LK/cases/${k.num}`)).json()).title).toBe("Шаги на месте — правка");
   const full = await (await api.get(`/api/projects/LK/cases/${k.num}`)).json();
   expect(full.steps).toBe("Первый шаг\nВторой шаг");
+});
+
+test("удалённый кейс восстанавливается из корзины проекта", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const k = await (await api.post("/api/projects/LK/cases", { data: { title: "Кейс для корзины E2E", priority: "low", status: "ready" } })).json();
+  await page.goto(`/#/p/LK/cases/${k.num}`);
+  await page.locator("aside.drawer").getByRole("button", { name: "Удалить", exact: true }).click();
+  await expect(page.getByText(/уйдёт в корзину проекта/)).toBeVisible();
+  await page.locator(".modal").getByRole("button", { name: "Удалить", exact: true }).click();
+  await expect.poll(async () => (await api.get(`/api/projects/LK/cases/${k.num}`)).status()).toBe(404);
+  await expect(page.locator("aside.drawer")).toHaveCount(0);
+  await page.getByRole("link", { name: "Корзина" }).click();
+  const row = page.getByRole("row", { name: /Кейс для корзины E2E/ });
+  await row.getByRole("button", { name: "Восстановить" }).click();
+  await expect.poll(async () => (await api.get(`/api/projects/LK/cases/${k.num}`)).status()).toBe(200);
 });

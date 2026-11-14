@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { api } from "../api";
 import { find, PROJECT_ROLES, PROVIDERS, ROLES } from "../labels";
-import { href } from "../router";
+import { href, useRoute } from "../router";
 import { useData, useLoad, useStore } from "../store";
 import type { ProjectRole, Role } from "../types";
 import { Avatar, Confirm, Empty, fmt, Modal, Pill } from "../ui";
 import { NewUserModal, PasswordModal } from "./Password";
+import { AuditLog, DeletedProjects } from "./Admin";
 
 // Ответ GET /api/admin/users
 interface AdminUser {
@@ -30,7 +31,24 @@ const usersUrl = "/api/admin/users";
 const userUrl = (login: string) => `${usersUrl}/${encodeURIComponent(login)}`;
 
 // Раздел администратора: роли, блокировка, удаление и доступ к проектам
+// Раздел администратора: пользователи, журнал аудита, удалённые проекты (#/users, #/users/audit, #/users/trash)
 export function Users() {
+  const { me } = useStore();
+  const [, sub] = useRoute();
+  if (me?.role !== "admin") return <UsersList />;
+  return (
+    <>
+      <nav className="nav wrap" style={{ paddingBottom: 0 }}>
+        <a href={href("users")} aria-current={!sub ? "page" : undefined}>Пользователи</a>
+        <a href={href("users", "audit")} aria-current={sub === "audit" ? "page" : undefined}>Журнал аудита</a>
+        <a href={href("users", "trash")} aria-current={sub === "trash" ? "page" : undefined}>Удалённые проекты</a>
+      </nav>
+      {sub === "audit" ? <main className="wrap"><AuditLog /></main> : sub === "trash" ? <main className="wrap"><DeletedProjects /></main> : <UsersList />}
+    </>
+  );
+}
+
+function UsersList() {
   const { me, write, liveError } = useStore();
   const { value, error } = useLoad<{ users: AdminUser[]; seats: Seats }>(usersUrl);
   const [q, setQ] = useState("");

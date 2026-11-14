@@ -12,6 +12,7 @@ import { CasesTab } from "./Cases";
 import { ProjectModal } from "./Projects";
 import { RunPage } from "./RunPage";
 import { RunsTab } from "./Runs";
+import { TrashTab } from "./Trash";
 
 export function ProjectPage({ project, tab, id }: { project: Project; tab: string; id?: string }) {
   const data = useData();
@@ -39,7 +40,7 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
     ["bugs", "Баги", count.bugs],
     ["auto", "Автотесты", count.auto],
     ["analytics", "Аналитика", null],
-    ...(canEdit ? [["integrations", "Интеграции", null] as [string, string, null]] : []),
+    ...(canEdit ? [["integrations", "Интеграции", null] as [string, string, null], ["trash", "Корзина", null] as [string, string, null]] : []),
   ];
 
   return (
@@ -65,6 +66,7 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
       {tab === "plans" ? <PlansTab project={project} openNum={n} />
         : tab === "analytics" ? <AnalyticsTab project={project} />
         : tab === "integrations" ? <IntegrationsTab project={project} />
+        : tab === "trash" ? <TrashTab project={project} />
         : tab === "runs" ? <RunsTab project={project} />
         : tab === "bugs" ? <BugsTab project={project} openNum={n} />
         : tab === "auto" ? <AutotestsTab project={project} view={id === "tests" ? "tests" : "runs"} />

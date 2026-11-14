@@ -147,7 +147,14 @@ async function sweep() {
   const cutoff = Date.now() - 60 * 60 * 1000;
   const files = await storage.list();
   const ids = files.map((f) => f.name).filter((n) => UUID_RE.test(n));
-  const { rows } = ids.length ? await pool.query("SELECT id::text FROM attachments WHERE id = ANY($1::uuid[])", [ids]) : { rows: [] };
+  // файлы удалённого в корзину (server/trash.js) не трогаем, пока снимок в корзине
+  const { rows } = ids.length
+    ? await pool.query(
+        `SELECT id::text FROM attachments WHERE id = ANY($1::uuid[])
+         UNION SELECT f::text FROM trash, unnest(files) f WHERE f = ANY($1::uuid[])`,
+        [ids]
+      )
+    : { rows: [] };
   const known = new Set(rows.map((r) => r.id));
   let removed = 0;
   for (const { name: n, mtimeMs } of files) {

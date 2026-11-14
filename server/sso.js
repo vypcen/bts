@@ -412,6 +412,7 @@ router.get("/oidc/callback", wrap(async (req, res) => {
       groups: Array.isArray(groups) ? groups.map(String) : typeof groups === "string" ? [groups] : [],
     });
     await auth.createSession(res, req, user.id);
+    require("./audit").log(req, "auth.login", { actor: user, project: null, target: user.login, details: { provider: "oidc" } });
     res.redirect(st.return_to || "/");
   } catch (e) {
     console.error("[sso] OIDC:", e.message);
@@ -440,6 +441,7 @@ router.get("/kerberos", wrap(async (req, res) => {
       groups: [...(dir?.groups || []), ...headerGroups],
     });
     await auth.createSession(res, req, user.id);
+    require("./audit").log(req, "auth.login", { actor: user, project: null, target: user.login, details: { provider: "kerberos" } });
     res.redirect(safeReturn(req.query.return));
   } catch (e) {
     console.error("[sso] Kerberos:", e.message);

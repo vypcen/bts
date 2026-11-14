@@ -15,9 +15,16 @@ const canWrite = (userOrRole) => ["tester", "admin"].includes(roleOf(userOrRole)
 const canComment = (userOrRole) => ["tester", "admin", "developer"].includes(roleOf(userOrRole));
 
 // Ключи проектов, доступных пользователю; null — все (админ)
+// Удалённые в корзину проекты (projects.deleted_at) не видны никому, в том числе админу: их список — в корзине
 async function projectKeys(user) {
-  if (isAdmin(user)) return null;
-  const { rows } = await pool.query("SELECT project_key FROM project_members WHERE user_id=$1", [user.id]);
+  if (isAdmin(user) && !user.tokenProject) {
+    const { rows } = await pool.query("SELECT key FROM projects WHERE deleted_at IS NULL");
+    return rows.map((r) => r.key);
+  }
+  const { rows } = await pool.query(
+    "SELECT m.project_key FROM project_members m JOIN projects p ON p.key=m.project_key WHERE m.user_id=$1 AND p.deleted_at IS NULL",
+    [user.id]
+  );
   return rows.map((r) => r.project_key).filter((k) => !user.tokenProject || k === user.tokenProject);
 }
 
@@ -25,9 +32,14 @@ async function projectKeys(user) {
 async function projectRole(user, key) {
   if (!user) return null;
   if (user.tokenProject && user.tokenProject !== key) return null;
+  const { rows } = await pool.query(
+    `SELECT p.deleted_at, m.user_id AS member, m.role FROM projects p
+     LEFT JOIN project_members m ON m.project_key=p.key AND m.user_id=$2 WHERE p.key=$1`,
+    [key, user.id]
+  );
+  if (!rows[0] || rows[0].deleted_at) return null;
   if (isAdmin(user)) return "admin";
-  const { rows } = await pool.query("SELECT role FROM project_members WHERE project_key=$1 AND user_id=$2", [key, user.id]);
-  if (!rows[0]) return null;
+  if (!rows[0].member) return null;
   return rows[0].role || user.role;
 }
 

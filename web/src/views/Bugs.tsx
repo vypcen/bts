@@ -232,7 +232,7 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
       {deleting && (
         <Confirm
           title={`Удалить ${bug.id}?`}
-          text={`Баг «${bug.title}» и его вложения будут удалены у всех участников. Обычно вместо удаления баг закрывают или отклоняют.`}
+          text={`Баг «${bug.title}» уйдёт в корзину проекта (восстановить можно в течение 30 дней). Обычно вместо удаления баг закрывают или отклоняют.`}
           onClose={() => setDeleting(false)}
           onYes={async () => {
             setDeleting(false);

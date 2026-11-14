@@ -176,7 +176,7 @@ async function syncAll() {
     if (!lock[0].ok) return;
     try {
       const { rows } = await c.query(
-        `SELECT b.id, b.num, b.status, b.external_key, b.project_key FROM bugs b JOIN trackers t ON t.project_key=b.project_key
+        `SELECT b.id, b.num, b.status, b.external_key, b.project_key FROM bugs b JOIN trackers t ON t.project_key=b.project_key JOIN projects pr ON pr.key=b.project_key AND pr.deleted_at IS NULL
          WHERE b.external_key IS NOT NULL AND b.status NOT IN ('closed','rejected','duplicate')
          ORDER BY b.external_synced_at NULLS FIRST LIMIT 200`
       );

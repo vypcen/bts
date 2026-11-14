@@ -236,7 +236,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
       {deleting && (
         <Confirm
           title={`Удалить ${deleting.id}?`}
-          text={`Тест-кейс «${deleting.title}» и его результаты во всех прогонах будут удалены у всех участников. Связанные баги останутся.`}
+          text={`Тест-кейс «${deleting.title}» с историей результатов уйдёт в корзину проекта — оттуда его можно восстановить в течение 30 дней.`}
           onClose={() => setDeleting(null)}
           onYes={async () => {
             const c = deleting;

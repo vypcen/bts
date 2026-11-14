@@ -138,10 +138,11 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
 }));
 
 router.delete("/bugs/:num", wrap(async (req, res) => {
-  const r = await pool.query("DELETE FROM bugs WHERE project_key=$1 AND num=$2", [req.params.key, num(req.params.num)]);
-  if (!r.rowCount) return res.status(404).json({ error: "Баг не найден" });
+  // в корзину: баг с комментариями, вложениями и историей статусов можно восстановить (server/trash.js)
+  const r = await require("./trash").remove(req, "bug", num(req.params.num));
+  if (!r) return res.status(404).json({ error: "Баг не найден" });
   broadcast("bugs");
-  res.json({ ok: true });
+  res.json({ ok: true, trashId: r.trashId });
 }));
 
 module.exports = router;

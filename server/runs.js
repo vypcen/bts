@@ -78,10 +78,11 @@ router.patch("/runs/:num", wrap(async (req, res) => {
 router.delete("/runs/:num", wrap(async (req, res) => {
   const run = await findRun(pool, req.params.key, num(req.params.num));
   if (run?.locked) return res.status(409).json({ error: "Прогон создан из заблокированного тест-плана — удалить его нельзя" });
-  const r = await pool.query("DELETE FROM test_runs WHERE project_key=$1 AND num=$2", [req.params.key, num(req.params.num)]);
-  if (!r.rowCount) return res.status(404).json({ error: "Прогон не найден" });
+  // в корзину: прогон с результатами и вложениями можно восстановить (server/trash.js)
+  const r = await require("./trash").remove(req, "run", num(req.params.num));
+  if (!r) return res.status(404).json({ error: "Прогон не найден" });
   broadcast("runs");
-  res.json({ ok: true });
+  res.json({ ok: true, trashId: r.trashId });
 }));
 
 // Добавить кейсы в открытый прогон (уже включённые пропускаются)

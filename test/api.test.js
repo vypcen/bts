@@ -260,3 +260,88 @@ test("списки: постраничная выдача, фильтры, по�
   r = await u.tester.get(`/api/search?q=LK-${one.num}`);
   assert.equal(r.data.cases[0].num, one.num);
 });
+
+test("корзина: кейс, прогон и баг восстанавливаются с результатами, комментариями и номерами", async () => {
+  const k = await u.tester.post("/api/projects/LK/cases", { title: "В корзину", priority: "low", status: "ready", steps: "шаг" });
+  const run = await u.tester.post("/api/projects/LK/runs", { title: "Прогон для корзины", caseNums: [k.data.num] });
+  await u.tester.patch(`/api/projects/LK/runs/${run.data.num}/results/${k.data.num}`, { result: "failed", comment: "упал" });
+  const bug = await u.tester.post("/api/projects/LK/bugs", { title: "Баг кейса", severity: "minor", caseNum: k.data.num, runNum: run.data.num });
+  await u.dev.post(`/api/projects/LK/cases/${k.data.num}/comments`, { text: "заметка" });
+  await u.tester.patch(`/api/projects/LK/cases/${k.data.num}`, { title: "В корзину v2" });
+
+  let r = await u.tester.del(`/api/projects/LK/cases/${k.data.num}`);
+  assert.equal(r.status, 200);
+  assert.equal((await u.tester.get(`/api/projects/LK/cases/${k.data.num}`)).status, 404);
+  let ps = await u.tester.get("/api/projects/LK/state");
+  assert.equal(ps.data.bugs.find((b) => b.num === bug.data.num).caseNum, null, "ссылка бага на кейс снята");
+
+  const trash = await u.tester.get("/api/projects/LK/trash");
+  const item = trash.data.items.find((i) => i.ref === `LK-${k.data.num}`);
+  assert.ok(item);
+  assert.equal((await u.dev.post(`/api/projects/LK/trash/${item.id}/restore`)).status, 403);
+  r = await u.tester.post(`/api/projects/LK/trash/${item.id}/restore`);
+  assert.equal(r.status, 200);
+
+  const full = await u.tester.get(`/api/projects/LK/cases/${k.data.num}`);
+  assert.equal(full.data.title, "В корзину v2");
+  assert.equal(full.data.steps, "шаг");
+  assert.equal((await u.tester.get(`/api/projects/LK/cases/${k.data.num}/versions`)).data.versions.length, 2);
+  const rr = await u.tester.get(`/api/projects/LK/runs/${run.data.num}/results`);
+  assert.equal(rr.data.results.find((x) => x.caseNum === k.data.num).comment, "упал");
+  ps = await u.tester.get("/api/projects/LK/state");
+  assert.equal(ps.data.bugs.find((b) => b.num === bug.data.num).caseNum, k.data.num, "ссылка бага вернулась");
+  assert.ok(ps.data.comments.some((c) => c.caseNum === k.data.num && c.text === "заметка"));
+  assert.equal(ps.data.results.find((x) => x.caseNum === k.data.num).result, "failed", "последний результат пересчитан");
+
+  // баг и прогон
+  await u.tester.del(`/api/projects/LK/bugs/${bug.data.num}`);
+  await u.tester.del(`/api/projects/LK/runs/${run.data.num}`);
+  const t2 = (await u.tester.get("/api/projects/LK/trash")).data.items;
+  for (const ref of [`LK-B${bug.data.num}`, `LK-R${run.data.num}`]) {
+    const it = t2.find((i) => i.ref === ref);
+    assert.equal((await u.tester.post(`/api/projects/LK/trash/${it.id}/restore`)).status, 200, ref);
+  }
+  ps = await u.tester.get("/api/projects/LK/state");
+  const back = ps.data.bugs.find((b) => b.num === bug.data.num);
+  assert.equal(back.runNum, run.data.num, "баг снова ссылается на результат прогона");
+  assert.equal((await u.tester.del(`/api/projects/LK/trash/1`)).status, 403, "навсегда удаляет только админ");
+});
+
+test("проект: удаляет только админ с подтверждением, проект исчезает и восстанавливается", async () => {
+  await u.admin.post("/api/projects", { key: "DEL", name: "Удаляемый" });
+  await u.admin.put("/api/admin/users/tester/projects", { projects: ["LK", "DEL"] });
+  assert.equal((await u.tester.del("/api/projects/DEL", { confirm: "DEL" })).status, 403);
+  assert.equal((await u.admin.del("/api/projects/DEL", {})).status, 400);
+  assert.equal((await u.admin.del("/api/projects/DEL", { confirm: "DEL" })).status, 200);
+  assert.equal((await u.tester.get("/api/projects/DEL/state")).status, 404);
+  assert.equal((await u.admin.get("/api/projects/DEL/state")).status, 404, "и админу тоже");
+  assert.ok(!(await u.admin.get("/api/state")).data.projects.some((p) => p.id === "DEL"));
+  const r = await u.admin.post("/api/projects", { key: "DEL", name: "Новый" });
+  assert.equal(r.status, 409);
+  assert.match(r.data.error, /корзин/);
+  const list = await u.admin.get("/api/admin/trash/projects");
+  assert.ok(list.data.items.some((p) => p.key === "DEL"));
+  assert.equal((await u.admin.post("/api/admin/projects/DEL/restore")).status, 200);
+  assert.equal((await u.tester.get("/api/projects/DEL/state")).status, 200);
+  await u.admin.put("/api/admin/users/tester/projects", { projects: ["LK"] });
+});
+
+test("журнал аудита: входы, неудачи, роли и удаления; фильтр и CSV; только админ", async () => {
+  await client(srv.base).post("/api/auth/login", { login: "dev", password: "wrong-pass" });
+  await u.admin.patch("/api/admin/users/viewer", { role: "developer" });
+  const k = await u.tester.post("/api/projects/LK/cases", { title: "Для аудита", priority: "low", status: "ready" });
+  await u.tester.del(`/api/projects/LK/cases/${k.data.num}`);
+  await new Promise((r) => setTimeout(r, 200));
+  let r = await u.admin.get("/api/admin/audit?limit=200");
+  const acts = r.data.items.map((e) => e.action);
+  for (const a of ["auth.login", "auth.login_failed", "user.update", "case.delete", "user.projects"]) assert.ok(acts.includes(a), a);
+  const failed = r.data.items.find((e) => e.action === "auth.login_failed" && e.target === "dev");
+  assert.ok(failed, "неудачный вход виден с логином");
+  r = await u.admin.get("/api/admin/audit?action=case.&project=LK");
+  assert.ok(r.data.items.every((e) => e.action.startsWith("case.") && e.project === "LK"));
+  assert.equal(r.data.items[0].actor, "tester");
+  const csv = await fetch(srv.base + "/api/admin/audit.csv?actor=tester", { headers: { cookie: u.admin.cookie } });
+  assert.match(await csv.text(), /Тест-кейс удалён в корзину/);
+  assert.equal((await u.tester.get("/api/admin/audit")).status, 403);
+  await u.admin.patch("/api/admin/users/viewer", { role: "viewer" });
+});
