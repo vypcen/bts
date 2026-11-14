@@ -8,6 +8,7 @@ import { go, href } from "../router";
 import { countBy, folderPath, lastResults } from "../selectors";
 import { useCanEdit, useData, useLoad, useStore } from "../store";
 import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } from "../types";
+import { CaseRequirements } from "./Requirements";
 import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { ImportModal } from "./CaseImport";
@@ -333,6 +334,7 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
       }
     >
       {c.folder !== null && <div className="view-block"><span className="label">Папка</span><span>{folderPath(data, c.folder)}</span></div>}
+      <CaseRequirements pid={p} caseNum={c.num} />
       <div className="row2">
         <div className="view-block"><span className="label">Приоритет</span><Prio p={c.priority} /></div>
         <div className="view-block">

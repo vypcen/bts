@@ -165,3 +165,26 @@ test("лицензия и система: админ видит редакцию
   await page.getByRole("button", { name: "Применить" }).click();
   await expect(page.getByText(/Ключ повреждён|Подпись ключа не сходится/)).toBeVisible();
 });
+
+test("требования: создать, связать с кейсом, увидеть покрытие и требование в карточке кейса", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const kase = await (await api.post("/api/projects/LK/cases", { data: { title: "E2E: трассировка корзины", priority: "high", status: "ready" } })).json();
+  await page.goto("/#/p/LK/reqs");
+  await page.getByRole("button", { name: "+ Требование" }).click();
+  await page.locator("#reqForm").getByLabel("Название *").fill("Корзина сохраняется между сессиями");
+  await page.getByLabel("Ключ во внешней системе").fill("SHOP-7");
+  await page.getByPlaceholder("Найти кейс по названию или номеру").fill("трассировка корзины");
+  await page.locator("#reqForm").getByRole("button", { name: /E2E: трассировка корзины/ }).click();
+  await page.locator("#reqForm").getByRole("button", { name: "Создать" }).click();
+  const row = page.getByRole("row", { name: /Корзина сохраняется/ });
+  await expect(row.getByText("Не проверено")).toBeVisible();
+  // прогон с упавшим кейсом → «Провалено»
+  const run = await (await api.post("/api/projects/LK/runs", { data: { title: "E2E трассировка", caseNums: [kase.num] } })).json();
+  await api.patch(`/api/projects/LK/runs/${run.num}/results/${kase.num}`, { data: { result: "failed" } });
+  await expect(row.getByText("Провалено")).toBeVisible();
+  await row.click();
+  await expect(page.locator("aside.drawer").getByText("SHOP-7")).toBeVisible();
+  await page.locator("aside.drawer").getByRole("link", { name: `LK-${kase.num}` }).click();
+  await expect(page.locator("aside.drawer").getByRole("link", { name: /Корзина сохраняется/ })).toBeVisible();
+});

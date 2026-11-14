@@ -215,6 +215,59 @@ test("лицензия: бесплатная редакция ограничив
   for (const login of ["licx", ...Array.from({ length: license.COMMUNITY.full }, (_, i) => `lic${i}`)]) await u.admin.del(`/api/admin/users/${login}`);
 });
 
+test("требования: связь с кейсами, покрытие по результатам, баги, матрица, импорт", async () => {
+  const mk = async (title) => (await u.tester.post("/api/projects/LK/cases", { title, priority: "high", status: "ready" })).data.num;
+  const c1 = await mk("Трассировка: вход");
+  const c2 = await mk("Трассировка: выход");
+  let r = await u.tester.post("/api/projects/LK/requirements", { title: "Пользователь входит по паролю", extRef: "AUTH-1", cases: [c1, c2] });
+  assert.equal(r.status, 201);
+  const req1 = r.data.num;
+  r = await u.tester.post("/api/projects/LK/requirements", { title: "Без кейсов" });
+  const req2 = r.data.num;
+  assert.equal((await u.tester.post("/api/projects/LK/requirements", { title: "x", cases: [99999] })).status, 400);
+  assert.equal((await u.viewer.post("/api/projects/LK/requirements", { title: "x" })).status, 403);
+  assert.equal((await u.outsider.get("/api/projects/LK/requirements")).status, 404);
+
+  const cov = async () => Object.fromEntries((await u.viewer.get("/api/projects/LK/requirements")).data.items.map((x) => [x.num, x.coverage]));
+  assert.deepEqual([(await cov())[req1], (await cov())[req2]], ["untested", "none"]);
+  // прогон: первый кейс прошёл → частично; второй упал → провалено, баг по нему виден в требовании
+  r = await u.tester.post("/api/projects/LK/runs", { title: "Трассировка", caseNums: [c1, c2] });
+  const run = r.data.num;
+  await u.tester.patch(`/api/projects/LK/runs/${run}/results/${c1}`, { result: "passed" });
+  assert.equal((await cov())[req1], "partial");
+  await u.tester.patch(`/api/projects/LK/runs/${run}/results/${c2}`, { result: "failed" });
+  assert.equal((await cov())[req1], "failed");
+  await u.tester.post("/api/projects/LK/bugs", { title: "Выход не работает", severity: "major", caseNum: c2, runNum: run });
+  r = await u.viewer.get(`/api/projects/LK/requirements/${req1}`);
+  assert.equal(r.data.caseList.length, 2);
+  assert.equal(r.data.bugs.length, 1);
+  assert.equal(r.data.openBugs, 1);
+  await u.tester.patch(`/api/projects/LK/runs/${run}/results/${c2}`, { result: "passed" });
+  assert.equal((await cov())[req1], "passed");
+  // связь из карточки кейса
+  assert.equal((await u.tester.post(`/api/projects/LK/requirements/${req2}/link`, { caseNum: c1 })).status, 200);
+  r = await u.viewer.get(`/api/projects/LK/cases/${c1}/requirements`);
+  assert.deepEqual(r.data.items.map((x) => x.num), [req1, req2]);
+  await u.tester.post(`/api/projects/LK/requirements/${req2}/link`, { caseNum: c1, linked: false });
+  assert.equal((await cov())[req2], "none");
+  // матрица трассировки
+  const csv = (await u.tester.get("/api/projects/LK/requirements/matrix.csv")).data;
+  assert.match(csv, /AUTH-1/);
+  assert.match(csv, new RegExp(`LK-${c2};Трассировка: выход;Пройден`));
+  // импорт: тот же ключ обновляет, новый — создаёт
+  r = await u.tester.post("/api/projects/LK/requirements/import", { items: [
+    { title: "Вход по паролю и коду", extRef: "AUTH-1" },
+    { title: "Восстановление пароля", extRef: "AUTH-2", cases: [c1] },
+    { title: "", extRef: "AUTH-3" },
+  ] });
+  assert.deepEqual([r.data.created, r.data.updated, r.data.errors.length], [1, 1, 1]);
+  r = await u.viewer.get(`/api/projects/LK/requirements/${req1}`);
+  assert.equal(r.data.title, "Вход по паролю и коду");
+  assert.equal(r.data.cases.length, 2, "связи при импорте не теряются");
+  assert.equal((await u.tester.del(`/api/projects/LK/requirements/${req2}`)).status, 200);
+  assert.equal((await u.viewer.get(`/api/projects/LK/requirements/${req2}`)).status, 404);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);
@@ -540,6 +593,11 @@ test("экспорт и импорт проекта переносят шаги,
   const comp = st.customFields.find((f) => f.name === "Компонент");
   assert.ok(comp);
   assert.ok(st.cases.some((c) => c.fields[comp.id] === "Оплата"));
+  // требования и их связи с кейсами
+  const reqs = (await u.admin.get("/api/projects/CPY/requirements")).data.items;
+  const srcReqs = (await u.admin.get("/api/projects/LK/requirements")).data.items;
+  assert.deepEqual(reqs.map((x) => [x.num, x.title, x.extRef, x.cases.length]), srcReqs.map((x) => [x.num, x.title, x.extRef, x.cases.length]));
+  assert.ok(reqs.length >= 2);
 });
 
 test("allure-results: шаги, повторы, параметры, вложения и связь с кейсом через report.js", async () => {

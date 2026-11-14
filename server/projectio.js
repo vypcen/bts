@@ -27,6 +27,10 @@ async function exportProject(key, withFiles) {
   // значения пользовательских полей — по названию поля: id в другой установке будут другими
   const fieldName = new Map(customFields.map((f) => [String(f.id), f.name]));
   const byName = (vals) => Object.fromEntries(Object.entries(vals || {}).filter(([id]) => fieldName.has(id)).map(([id, v]) => [fieldName.get(id), v]));
+  const [requirements, reqCases] = await Promise.all([
+    q("SELECT r.*, u.login AS cb FROM requirements r LEFT JOIN users u ON u.id=r.created_by WHERE r.project_key=$1 ORDER BY r.num"),
+    q("SELECT r.num AS req, c.num FROM requirement_cases rc JOIN requirements r ON r.id=rc.requirement_id JOIN test_cases c ON c.id=rc.case_id WHERE r.project_key=$1"),
+  ]);
   const [folders, cases, versions, plans, planCases, runs, results, bugs, bugLog, comments, autotests, autoruns, autoresults, files] = await Promise.all([
     q("SELECT id, parent_id, name FROM case_folders WHERE project_key=$1 ORDER BY id"),
     q(`SELECT c.*, cu.login AS cb, uu.login AS ub FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by
@@ -89,6 +93,10 @@ async function exportProject(key, withFiles) {
         expected: v.expected, stepList: v.step_list, tags: v.tags, fields: byName(v.fields), changedBy: v.by, changed: iso(v.changed_at),
       })),
     })),
+    requirements: requirements.map((r) => ({
+      num: r.num, title: r.title, description: r.description, status: r.status, priority: r.priority, extRef: r.ext_ref, url: r.url, tags: r.tags,
+      createdBy: r.cb, created: iso(r.created_at), cases: reqCases.filter((x) => x.req === r.num).map((x) => x.num),
+    })),
     plans: plans.map((p) => ({
       num: p.num, title: p.title, description: p.description, mode: p.mode, filter: p.filter, locked: p.locked, lockedBy: p.lb,
       lockedAt: iso(p.locked_at), created: iso(p.created_at),
@@ -135,7 +143,7 @@ function summarize(data) {
   if (!data || data.format !== FORMAT) throw new HttpError(400, "Это не файл экспорта проекта TestBall");
   if (data.version !== 1) throw new HttpError(400, `Версия формата ${data.version} не поддерживается`);
   return {
-    folders: arr(data.folders).length, cases: arr(data.cases).length, plans: arr(data.plans).length, runs: arr(data.runs).length,
+    folders: arr(data.folders).length, requirements: arr(data.requirements).length, cases: arr(data.cases).length, plans: arr(data.plans).length, runs: arr(data.runs).length,
     bugs: arr(data.bugs).length, comments: arr(data.comments).length, autotests: arr(data.autotests).length, autoruns: arr(data.autoruns).length,
     attachments: Object.keys(data.attachments || {}).length,
     files: Object.values(data.attachments || {}).filter((f) => f.data).length,
@@ -222,6 +230,20 @@ async function importProject(data, { key, name }, user) {
               oneOf(v.status, ["draft", "ready", "deprecated"], "draft"), str(v.pre), str(v.steps), str(v.expected), u(v.changedBy), date(v.changed),
               JSON.stringify(stepListOf(v, oneOf(v.kind, ["case", "checklist"], "case"))), casemodel.normalizeTags(v.tags) || [], fieldsOf("case", v.fields)]
           );
+        }
+      }
+
+      const reqs = arr(data.requirements);
+      if (reqs.length) await db.query("UPDATE projects SET req_seq=$2 WHERE key=$1", [key, maxNum(reqs)]);
+      for (const r of reqs) {
+        const { rows } = await db.query(
+          `INSERT INTO requirements(project_key, num, title, description, status, priority, ext_ref, url, tags, created_by, updated_by, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,COALESCE($11, now())) RETURNING id`,
+          [key, num(r.num), str(r.title, 500) || "Требование", str(r.description, 20000), oneOf(r.status, ["draft", "approved", "implemented", "obsolete"], "draft"),
+            oneOf(r.priority, ["low", "medium", "high"], "medium"), str(r.extRef, 100), str(r.url, 2000), casemodel.normalizeTags(r.tags) || [], u(r.createdBy) ?? user.id, date(r.created)]
+        );
+        for (const n of arr(r.cases)) {
+          if (caseId.has(num(n))) await db.query("INSERT INTO requirement_cases VALUES ($1,$2) ON CONFLICT DO NOTHING", [rows[0].id, caseId.get(num(n))]);
         }
       }
 

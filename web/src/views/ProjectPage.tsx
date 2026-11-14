@@ -13,6 +13,7 @@ import { ProjectModal } from "./Projects";
 import { RunPage } from "./RunPage";
 import { RunsTab } from "./Runs";
 import { TrashTab } from "./Trash";
+import { RequirementsTab } from "./Requirements";
 
 export function ProjectPage({ project, tab, id }: { project: Project; tab: string; id?: string }) {
   const data = useData();
@@ -35,6 +36,7 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
   };
   const tabs: [string, string, number | null][] = [
     ["cases", "Тест-кейсы", count.cases],
+    ["reqs", "Требования", null],
     ["plans", "Тест-планы", count.plans],
     ["runs", "Прогоны", count.runs],
     ["bugs", "Баги", count.bugs],
@@ -64,6 +66,7 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
         ))}
       </nav>
       {tab === "plans" ? <PlansTab project={project} openNum={n} />
+        : tab === "reqs" ? <RequirementsTab project={project} openNum={n} />
         : tab === "analytics" ? <AnalyticsTab project={project} />
         : tab === "integrations" ? <IntegrationsTab project={project} />
         : tab === "trash" ? <TrashTab project={project} />
