@@ -511,3 +511,32 @@ test("allure-results: шаги, повторы, параметры, вложен
   assert.equal(flakyRes.status, "passed");
   assert.ok(flakyRes.flaky || flakyRes.retries >= 1);
 });
+
+test("отчёты по прогону и плану: PDF и Excel", async () => {
+  const k = await u.tester.post("/api/projects/LK/cases", { title: "Для отчёта: оплата картой", priority: "high", status: "ready", stepList: [{ action: "Открыть" }, { action: "Оплатить", expected: "Успех" }] });
+  const run = (await u.tester.post("/api/projects/LK/runs", { title: "Отчётный прогон", build: "3.1", caseNums: [k.data.num] })).data.num;
+  await u.tester.patch(`/api/projects/LK/runs/${run}/results/${k.data.num}`, { step: 1, result: "failed", actual: "Ошибка 500" });
+  await u.tester.post("/api/projects/LK/bugs", { title: "Оплата падает", severity: "critical", caseNum: k.data.num, runNum: run });
+  const get = (url) => fetch(srv.base + url, { headers: { cookie: u.dev.cookie } });
+  let r = await get(`/api/projects/LK/runs/${run}/report?format=pdf`);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("content-type"), "application/pdf");
+  assert.match(r.headers.get("content-disposition"), /filename\*=UTF-8''LK-R\d+-/);
+  const pdfBuf = Buffer.from(await r.arrayBuffer());
+  assert.equal(pdfBuf.subarray(0, 5).toString(), "%PDF-");
+  assert.ok(pdfBuf.length > 5000);
+  r = await get(`/api/projects/LK/runs/${run}/report?format=xlsx`);
+  assert.equal(r.status, 200);
+  const ExcelJS = require("exceljs");
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(Buffer.from(await r.arrayBuffer()));
+  const res = wb.getWorksheet("Результаты");
+  assert.equal(res.getRow(2).getCell(4).value, "Упал");
+  assert.match(String(res.getRow(2).getCell(5).value), /2\. Оплатить — Ошибка 500/);
+  assert.equal(wb.getWorksheet("Баги").getRow(2).getCell(3).value, "Критический");
+  const plan = (await u.tester.post("/api/projects/LK/plans", { title: "План отчёта", mode: "static", caseNums: [k.data.num] })).data.num;
+  await u.tester.post(`/api/projects/LK/plans/${plan}/runs`, { title: "Из плана" });
+  r = await get(`/api/projects/LK/plans/${plan}/report?format=pdf`);
+  assert.equal(r.status, 200);
+  assert.equal((await get(`/api/projects/LK/runs/99999/report`)).status, 404);
+});

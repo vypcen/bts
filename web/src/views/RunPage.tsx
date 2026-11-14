@@ -89,6 +89,8 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
         <div className="spacer" />
         <div className="acts">
           {open ? <Pill tone="info" label="Идёт" /> : <Pill tone="neutral" label={`Закрыт ${fmt(run.closed)}`} />}
+          <a className="btn" href={`${paths.run(p, num)}/report?format=pdf`} download style={{ textDecoration: "none" }} title="Отчёт для руководителя: сводка, упавшие кейсы, баги">Отчёт PDF</a>
+          <a className="btn" href={`${paths.run(p, num)}/report?format=xlsx`} download style={{ textDecoration: "none" }}>Excel</a>
           {canEdit && (
             <>
               <button className="btn" onClick={() => setModal("edit")}>Параметры</button>

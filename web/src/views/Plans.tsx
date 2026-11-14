@@ -266,6 +266,8 @@ function PlanPage({ project, num }: { project: Project; num: number }) {
           {plan.locked ? <Pill tone="warn" label={`Заблокирован ${fmt(plan.lockedAt)}`} /> : null}
           <a className="btn" href={`${paths.plan(p, num)}/export`} style={{ textDecoration: "none" }}>Экспорт CSV</a>
           <a className="btn" href={`${paths.plan(p, num)}/export?format=json`} style={{ textDecoration: "none" }}>JSON</a>
+          <a className="btn" href={`${paths.plan(p, num)}/report?format=pdf`} download style={{ textDecoration: "none" }} title="Последний результат каждого кейса во всех прогонах плана">Отчёт PDF</a>
+          <a className="btn" href={`${paths.plan(p, num)}/report?format=xlsx`} download style={{ textDecoration: "none" }}>Отчёт Excel</a>
           {canEdit && <button className="btn primary" disabled={!plan.caseCount} onClick={() => setModal("run")}>Создать прогон</button>}
           {canEdit && !plan.locked && <button className="btn" onClick={() => setModal("edit")}>Параметры</button>}
           {canEdit && !plan.locked && plan.mode === "static" && <button className="btn" onClick={() => setModal("compose")}>Состав</button>}

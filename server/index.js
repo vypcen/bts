@@ -255,7 +255,7 @@ app.use("/api/projects-import", auth.requireUser, access.requireWriter, projecti
 
 // Всё внутри проекта: доступ только участникам и админам, изменения — только тестировщикам и админам (кроме комментариев)
 app.use("/api/projects/:key", auth.requireUser, access.project, live.inProject);
-app.use("/api/projects/:key", state.router, lists.router, trash.router, casemodel.router);
+app.use("/api/projects/:key", state.router, lists.router, trash.router, casemodel.router, require("./reports").router);
 app.use("/api/search", auth.requireUser, lists.searchRouter);
 // Настройки интеграций содержат адреса и заголовки внутренних систем — их видят только те, кто может менять проект
 app.use(["/api/projects/:key/webhooks", "/api/projects/:key/tracker"], (req, res, next) =>
