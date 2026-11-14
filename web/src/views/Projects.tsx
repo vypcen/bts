@@ -1,10 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { api, paths } from "../api";
-import { isOpenBug } from "../labels";
 import { go, href } from "../router";
-import { lastResults } from "../selectors";
 import { useCanEdit, useData, useStore } from "../store";
-import type { Project, ResultValue } from "../types";
+import type { Project } from "../types";
 import { Confirm, Empty, Modal, ResultBar, useNames } from "../ui";
 
 export function Projects({ missing }: { missing?: string }) {
@@ -17,11 +15,10 @@ export function Projects({ missing }: { missing?: string }) {
   const list = [...data.projects].sort((a, b) => b.created - a.created);
 
   const card = (p: Project) => {
-    const cases = data.cases.filter((c) => c.pid === p.id && c.status !== "deprecated");
-    const last = lastResults(data, p.id);
-    const counts: Record<ResultValue, number> = { untested: 0, passed: 0, failed: 0, blocked: 0, skipped: 0 };
-    for (const c of cases) counts[last.get(c.num)?.result || "untested"]++;
-    const openBugs = data.bugs.filter((b) => b.pid === p.id && isOpenBug(b.status)).length;
+    // сводку считает сервер: в браузер не грузятся кейсы всех проектов
+    const counts = p.stats.last;
+    const active = Object.values(counts).reduce((a, b) => a + b, 0);
+    const openBugs = p.stats.openBugs;
     return (
       <a className="proj" key={p.id} href={href("p", p.id)} style={{ color: "inherit", textDecoration: "none" }}>
         <span className="key">{p.id}</span>
@@ -29,7 +26,7 @@ export function Projects({ missing }: { missing?: string }) {
         <p>{p.desc || "Без описания"}</p>
         <ResultBar counts={counts} title="Последние результаты тест-кейсов" />
         <div className="meta">
-          <span>{cases.length} тест-кейсов</span>
+          <span>{active} тест-кейсов</span>
           <span>Упало: {counts.failed}</span>
           <span style={openBugs ? { color: "var(--crit)" } : undefined}>Открытых багов: {openBugs}</span>
         </div>
@@ -101,11 +98,11 @@ export function ProjectModal({ project, onClose }: { project?: Project; onClose:
   }
 
   if (confirmDel && project) {
-    const n = (list: { pid: string }[]) => list.filter((x) => x.pid === project.id).length;
+    const s = project.stats;
     return (
       <Confirm
         title={`Удалить проект «${project.name}»?`}
-        text={`Вместе с ним будут удалены ${n(data.cases)} тест-кейсов, ${n(data.runs)} прогонов и ${n(data.bugs)} багов со всеми вложениями. Это действие нельзя отменить.`}
+        text={`Вместе с ним будут удалены ${s.cases} тест-кейсов, ${s.runs} прогонов и ${s.bugs} багов со всеми вложениями. Это действие нельзя отменить.`}
         onClose={() => setConfirmDel(false)}
         onYes={async () => {
           if (await write(() => api("DELETE", paths.project(project.id), {}), "Проект удалён")) go();

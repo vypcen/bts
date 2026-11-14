@@ -20,7 +20,8 @@ const webhooks = require("./webhooks");
 const trackers = require("./trackers");
 const ci = require("./ci");
 const projectio = require("./projectio");
-const { wrap, str, num, ms, HttpError } = require("./util");
+const state = require("./state");
+const { wrap, str, num, HttpError } = require("./util");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
@@ -205,116 +206,9 @@ app.post("/api/auth/password", auth.requireUser, wrap(async (req, res) => {
 }));
 
 // ---------- данные ----------
-const caseSql = `SELECT c.project_key, c.num, c.kind, c.checked, c.folder_id, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected, c.version,
-  EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id) AS automated,
-  cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at
-  FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by`;
-const toCase = (r) => ({
-  id: `${r.project_key}-${r.num}`, pid: r.project_key, num: r.num, kind: r.kind, checked: r.checked, folder: r.folder_id, title: r.title, priority: r.priority, status: r.status,
-  pre: r.preconditions, steps: r.steps, expected: r.expected, createdBy: r.created_by, updatedBy: r.updated_by, version: r.version, automated: r.automated,
-  created: r.created_at.getTime(), updated: r.updated_at.getTime(),
-});
-
-// Всё состояние одним запросом: для MVP-объёмов это проще и надёжнее точечной синхронизации
-// Пользователь получает только свои проекты и всё, что в них; админ — всё
+// Общее состояние (проекты со сводкой, пользователи, планы). Данные проекта — GET /api/projects/:key/state (server/state.js)
 app.get("/api/state", auth.requireUser, wrap(async (req, res) => {
-  // $1 — список доступных ключей или NULL, если доступны все
-  const only = [await access.projectKeys(req.user)];
-  const mine = (col) => `($1::text[] IS NULL OR ${col} = ANY($1::text[]))`;
-  const [projects, cases, users, runs, results, bugs, files, autoruns, comments, caseFolders, testPlans] = await Promise.all([
-    // myRole — действующая роль текущего пользователя в проекте (роль в проекте или глобальная)
-    pool.query(`SELECT p.key, p.name, p.description, p.created_at, u.login AS created_by,
-                  ARRAY(SELECT mu.login FROM project_members m JOIN users mu ON mu.id=m.user_id WHERE m.project_key=p.key ORDER BY mu.login) AS members,
-                  COALESCE(json_object_agg(mu2.login, m2.role) FILTER (WHERE m2.role IS NOT NULL), '{}') AS member_roles,
-                  CASE WHEN $3 = 'admin' THEN 'admin' ELSE COALESCE((SELECT role FROM project_members WHERE project_key=p.key AND user_id=$2), $3) END AS my_role
-                FROM projects p LEFT JOIN users u ON u.id=p.created_by
-                LEFT JOIN project_members m2 ON m2.project_key=p.key LEFT JOIN users mu2 ON mu2.id=m2.user_id
-                WHERE ${mine("p.key")} GROUP BY p.key, u.login ORDER BY p.created_at DESC`, [only[0], req.user.id, req.user.role]),
-    pool.query(`${caseSql} WHERE ${mine("c.project_key")} ORDER BY c.project_key, c.num`, only),
-    // Пользователи — те, с кем есть общий проект, и админы (их можно назначить исполнителем). Админ видит всех.
-    // Новичок без проектов видит только себя: список логинов и админов не должен доставаться любому зарегистрировавшемуся
-    pool.query(
-      `SELECT login, name, role FROM users u WHERE $1::text[] IS NULL OR u.id=$2
-         OR (u.role='admin' AND cardinality($1::text[]) > 0)
-         OR EXISTS (SELECT 1 FROM project_members m WHERE m.user_id=u.id AND m.project_key = ANY($1::text[]))`,
-      [only[0], req.user.id]
-    ),
-    pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at,
-                  p.num AS plan_num, COALESCE(p.locked, false) AS plan_locked
-                FROM test_runs r LEFT JOIN users u ON u.id=r.created_by LEFT JOIN test_plans p ON p.id=r.plan_id
-                WHERE ${mine("r.project_key")} ORDER BY r.project_key, r.num`, only),
-    pool.query(`SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, rr.items, u.login AS executed_by, rr.executed_at,
-                  au.login AS assignee, rr.case_version
-                FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
-                LEFT JOIN users u ON u.id=rr.executed_by LEFT JOIN users au ON au.id=rr.assignee_id WHERE ${mine("t.project_key")}`, only),
-    pool.query(`SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
-                  c.num AS case_num, t.num AS run_num, b.run_result_id, d.num AS dup_num, b.external_key, b.external_url, b.external_status,
-                  cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at
-                FROM bugs b LEFT JOIN users au ON au.id=b.assignee_id LEFT JOIN test_cases c ON c.id=b.case_id
-                LEFT JOIN run_results rr ON rr.id=b.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
-                LEFT JOIN bugs d ON d.id=b.duplicate_of
-                LEFT JOIN users cu ON cu.id=b.created_by LEFT JOIN users uu ON uu.id=b.updated_by
-                WHERE ${mine("b.project_key")} ORDER BY b.project_key, b.num`, only),
-    pool.query(`SELECT a.id, COALESCE(b.project_key, t.project_key) AS project_key, b.num AS bug_num, a.run_result_id,
-                  a.filename, a.mime, a.size, u.login AS uploaded_by, a.created_at
-                FROM attachments a LEFT JOIN bugs b ON b.id=a.bug_id
-                LEFT JOIN run_results rr ON rr.id=a.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
-                LEFT JOIN users u ON u.id=a.uploaded_by
-                WHERE a.auto_result_id IS NULL AND ${mine("COALESCE(b.project_key, t.project_key)")} ORDER BY a.created_at`, only),
-    // запуски автотестов — только сводка; сами результаты отдаёт GET /api/projects/:key/autoruns/:num
-    pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.branch, r.scope, r.app_url, r.state, u.login AS created_by, r.created_at, r.finished_at,
-                  r.params, r.ci_url, count(ar.id) FILTER (WHERE ar.flaky)::int AS flaky,
-                  count(ar.id) FILTER (WHERE ar.status='passed')::int AS passed, count(ar.id) FILTER (WHERE ar.status='failed')::int AS failed,
-                  count(ar.id) FILTER (WHERE ar.status='broken')::int AS broken, count(ar.id) FILTER (WHERE ar.status='skipped')::int AS skipped,
-                  COALESCE(sum(ar.duration_ms), 0)::bigint AS duration
-                FROM auto_runs r LEFT JOIN auto_results ar ON ar.run_id=r.id LEFT JOIN users u ON u.id=r.created_by
-                WHERE ${mine("r.project_key")} GROUP BY r.id, u.login ORDER BY r.project_key, r.num`, only),
-    pool.query(`SELECT cm.id, COALESCE(b.project_key, c.project_key) AS project_key, b.num AS bug_num, c.num AS case_num,
-                  u.login AS author, cm.body, cm.created_at, cm.edited_at
-                FROM comments cm LEFT JOIN bugs b ON b.id=cm.bug_id LEFT JOIN test_cases c ON c.id=cm.case_id
-                LEFT JOIN users u ON u.id=cm.author_id
-                WHERE ${mine("COALESCE(b.project_key, c.project_key)")} ORDER BY cm.created_at, cm.id`, only),
-    pool.query(`SELECT id, project_key, parent_id, name FROM case_folders WHERE ${mine("project_key")} ORDER BY project_key, name`, only),
-    pool.query(`SELECT project_key, num, title, mode, locked FROM test_plans WHERE ${mine("project_key")} ORDER BY project_key, num`, only),
-  ]);
-  res.json({
-    projects: projects.rows.map((p) => ({
-      id: p.key, name: p.name, desc: p.description, createdBy: p.created_by, created: p.created_at.getTime(), members: p.members,
-      memberRoles: p.member_roles, myRole: p.my_role,
-    })),
-    plans: testPlans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked })),
-    cases: cases.rows.map(toCase),
-    folders: caseFolders.rows.map((f) => ({ id: f.id, pid: f.project_key, parent: f.parent_id, name: f.name })),
-    runs: runs.rows.map((r) => ({
-      id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
-      state: r.state, createdBy: r.created_by, created: ms(r.created_at), closed: ms(r.closed_at), planNum: r.plan_num, planLocked: r.plan_locked,
-    })),
-    results: results.rows.map((r) => ({
-      id: r.id, pid: r.project_key, runNum: r.run_num, caseNum: r.case_num, result: r.result, comment: r.comment, items: r.items,
-      executedBy: r.executed_by, executed: ms(r.executed_at), assignee: r.assignee, caseVersion: r.case_version,
-    })),
-    bugs: bugs.rows.map((b) => ({
-      id: `${b.project_key}-B${b.num}`, pid: b.project_key, num: b.num, title: b.title, status: b.status, severity: b.severity,
-      assignee: b.assignee, env: b.environment, steps: b.steps, actual: b.actual, expected: b.expected,
-      caseNum: b.case_num, runNum: b.run_num, resultId: b.run_result_id, duplicateOf: b.dup_num,
-      createdBy: b.created_by, updatedBy: b.updated_by, created: ms(b.created_at), updated: ms(b.updated_at),
-      external: b.external_key ? { key: b.external_key, url: b.external_url, status: b.external_status || "" } : null,
-    })),
-    attachments: files.rows.map((a) => ({
-      id: a.id, pid: a.project_key, bugNum: a.bug_num, resultId: a.run_result_id, name: a.filename, mime: a.mime, size: a.size,
-      uploadedBy: a.uploaded_by, created: ms(a.created_at),
-    })),
-    autoruns: autoruns.rows.map((r) => ({
-      id: `${r.project_key}-A${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment, branch: r.branch,
-      scope: r.scope, url: r.app_url, state: r.state, createdBy: r.created_by, created: ms(r.created_at), finished: ms(r.finished_at), durationMs: Number(r.duration),
-      counts: { passed: r.passed, failed: r.failed, broken: r.broken, skipped: r.skipped }, flaky: r.flaky, params: r.params, ciUrl: r.ci_url,
-    })),
-    comments: comments.rows.map((c) => ({
-      id: c.id, pid: c.project_key, bugNum: c.bug_num, caseNum: c.case_num, author: c.author, text: c.body,
-      created: ms(c.created_at), edited: ms(c.edited_at),
-    })),
-    users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name, role: u.role }])),
-  });
+  res.json(await state.meta(req.user));
 }));
 
 app.post("/api/projects", auth.requireUser, access.requireWriter, wrap(async (req, res) => {
@@ -341,7 +235,8 @@ app.post("/api/projects", auth.requireUser, access.requireWriter, wrap(async (re
 app.use("/api/projects-import", auth.requireUser, access.requireWriter, projectio.importRouter);
 
 // Всё внутри проекта: доступ только участникам и админам, изменения — только тестировщикам и админам (кроме комментариев)
-app.use("/api/projects/:key", auth.requireUser, access.project);
+app.use("/api/projects/:key", auth.requireUser, access.project, live.inProject);
+app.use("/api/projects/:key", state.router);
 // Настройки интеграций содержат адреса и заголовки внутренних систем — их видят только те, кто может менять проект
 app.use(["/api/projects/:key/webhooks", "/api/projects/:key/tracker"], (req, res, next) =>
   access.canWrite(req.projectRole) ? next() : res.status(403).json({ error: access.READ_ONLY }));

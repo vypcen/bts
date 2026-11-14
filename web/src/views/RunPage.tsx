@@ -3,9 +3,9 @@ import { api, paths } from "../api";
 import { checkedCount, checklistItems, itemMark } from "../checklist";
 import { BUG_STATUSES, find, RESULTS } from "../labels";
 import { go, href } from "../router";
-import { countResults, previousResults, runResults } from "../selectors";
+import { countResults } from "../selectors";
 import { useCanEdit, useData, useLoad, useStore } from "../store";
-import type { CaseVersion, Project, Result, ResultValue, Run, TestCase } from "../types";
+import type { Attachment, CaseVersion, Project, Result, ResultValue, Run, RunResults, TestCase } from "../types";
 import { Confirm, Drawer, fmt, Modal, Pill, Prio, ResultBar, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { AssignPicker, executorsOf, type Assign } from "./Plans";
 import { Attachments } from "./Attachments";
@@ -28,6 +28,8 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const [who, setWho] = useState("");
   const nameOf = useNames();
   const [bugDraft, setBugDraft] = useState<BugDraft | null>(null);
+  // результаты прогона грузятся отдельно и перечитываются вместе с данными проекта
+  const loaded = useLoad<RunResults>(run ? paths.runResults(p, num) : null);
 
   if (!run) {
     return (
@@ -40,9 +42,13 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
 
   const open = run.state === "open";
   const editable = open && canEdit;
-  const results = runResults(data, p, num);
+  if (!loaded.value) {
+    return <main className="wrap">{loaded.error ? <div className="banner">{loaded.error}</div> : <div className="skel">Загружаем прогон…</div>}</main>;
+  }
+  const results = loaded.value.results;
   const counts = countResults(results);
-  const prev = previousResults(data, p, num);
+  const prev = new Map(loaded.value.previous.map((r) => [r.caseNum, r]));
+  const runFiles = loaded.value.attachments;
   const caseOf = (r: Result) => data.cases.find((c) => c.pid === p && c.num === r.caseNum)!;
   const needle = q.trim().toLowerCase();
   const rows = results
@@ -176,6 +182,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
           r={sel}
           c={caseOf(sel)}
           prev={prev.get(sel.caseNum)}
+          files={runFiles}
           onClose={() => setSelected(null)}
           onBug={setBugDraft}
           onNext={() => {
@@ -185,7 +192,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
         />
       ) : null}
       {modal === "edit" && <RunModal pid={p} run={run} onClose={() => setModal(null)} />}
-      {modal === "add" && <AddCasesModal run={run} onClose={() => setModal(null)} />}
+      {modal === "add" && <AddCasesModal run={run} inRunNums={results.map((r) => r.caseNum)} onClose={() => setModal(null)} />}
       {modal === "distribute" && <DistributeModal run={run} onClose={() => setModal(null)} />}
       {modal === "delete" && (
         <Confirm
@@ -214,7 +221,7 @@ function ResultButtons({ value, onPick, lg, label = "Результат" }: { va
   );
 }
 
-function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; onClose: () => void; onBug: (d: BugDraft) => void; onNext: () => void }) {
+function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; files: Attachment[]; onClose: () => void; onBug: (d: BugDraft) => void; onNext: () => void }) {
   const { run, r, c, prev } = props;
   const data = useData();
   const { write } = useStore();
@@ -223,7 +230,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   const p = run.pid;
   // разработчик видит результат так же, как в закрытом прогоне: без кнопок и правки
   const open = run.state === "open" && canEdit;
-  const files = data.attachments.filter((a) => a.resultId === r.id);
+  const files = props.files.filter((a) => a.resultId === r.id);
   const bugs = data.bugs.filter((b) => b.pid === p && (b.resultId === r.id || (b.caseNum === c.num && b.runNum === run.num)));
   const dirty = comment.trim() !== r.comment;
   // blur поля и клик по кнопке приходят подряд: второй вызов ждёт уже начатое сохранение
@@ -348,10 +355,10 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   );
 }
 
-function AddCasesModal({ run, onClose }: { run: Run; onClose: () => void }) {
+function AddCasesModal({ run, inRunNums, onClose }: { run: Run; inRunNums: number[]; onClose: () => void }) {
   const data = useData();
   const { write } = useStore();
-  const inRun = new Set(runResults(data, run.pid, run.num).map((r) => r.caseNum));
+  const inRun = new Set(inRunNums);
   const cases = data.cases.filter((c) => c.pid === run.pid && !inRun.has(c.num) && c.status !== "deprecated").sort((a, b) => a.num - b.num);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   return (

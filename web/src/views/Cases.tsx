@@ -6,7 +6,7 @@ import { BUG_STATUSES, CASE_STATUSES, find, isOpenBug, PRIORITIES, RESULTS } fro
 import { go, href } from "../router";
 import { countBy, folderPath, lastResults } from "../selectors";
 import { useCanEdit, useData, useLoad, useStore } from "../store";
-import type { CaseKind, CaseVersion, Project, ResultValue, TestCase } from "../types";
+import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } from "../types";
 import { CommentCount, Confirm, Drawer, Empty, fmt, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { ImportModal } from "./CaseImport";
@@ -271,9 +271,9 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
       });
     }
   };
-  const history = data.results
-    .filter((r) => r.pid === p && r.caseNum === c.num)
-    .sort((a, b) => b.runNum - a.runNum);
+  // история по прогонам грузится отдельно: в данных проекта только последний результат кейса
+  const historyLoad = useLoad<{ results: Result[] }>(paths.caseHistory(p, c.num));
+  const history = historyLoad.value?.results || data.results.filter((r) => r.pid === p && r.caseNum === c.num);
   const bugs = data.bugs.filter((b) => b.pid === p && b.caseNum === c.num).sort((a, b) => b.num - a.num);
   const latest = history.find((r) => r.result !== "untested");
   const comments = data.comments.filter((x) => x.pid === p && x.caseNum === c.num);

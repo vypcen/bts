@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, setUnauthorizedHandler } from "./api";
 import { useRoute } from "./router";
-import type { State, User } from "./types";
+import type { MetaState, ProjectState, State, User } from "./types";
 
 interface Store {
   me: User | null | undefined; // undefined — ещё не знаем, вошёл ли пользователь
@@ -10,6 +10,7 @@ interface Store {
   canComment: boolean; // разработчик комментирует, наблюдатель — нет
   bootError: boolean;
   data: State | null;
+  projectLoading: boolean; // данные открытого проекта ещё не пришли
   liveError: string;
   setMe: (u: User | null) => void;
   reload: () => Promise<void>;
@@ -46,7 +47,8 @@ export function useLoad<T>(url: string | null) {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<User | null | undefined>(undefined);
   const [bootError, setBootError] = useState(false);
-  const [data, setData] = useState<State | null>(null);
+  const [meta, setMeta] = useState<MetaState | null>(null);
+  const [proj, setProj] = useState<ProjectState | null>(null);
   const [liveError, setLiveError] = useState("");
   const [toastMsg, setToastMsg] = useState("");
   const toastTimer = useRef<number>();
@@ -59,14 +61,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     toastTimer.current = window.setTimeout(() => setToastMsg(""), 2600);
   }, []);
 
-  const reload = useCallback(async () => {
+  // открытый проект (#/p/KEY/...): его данные грузятся отдельно и перечитываются только по его сигналам
+  const [section, key] = useRoute();
+  const pid = section === "p" && key ? key : null;
+  const pidRef = useRef(pid);
+  pidRef.current = pid;
+
+  const loadMeta = useCallback(async () => {
     try {
-      setData(await api<State>("GET", "/api/state"));
+      setMeta(await api<MetaState>("GET", "/api/state"));
       setLiveError("");
     } catch (e: any) {
       if (e.status !== 401) setLiveError(e.message);
     }
   }, []);
+
+  const loadProject = useCallback(async (k: string | null = pidRef.current) => {
+    if (!k) return setProj(null);
+    try {
+      const next = await api<ProjectState>("GET", `/api/projects/${encodeURIComponent(k)}/state`);
+      if (pidRef.current === k) setProj(next);
+      setLiveError("");
+    } catch (e: any) {
+      // проект удалили или забрали доступ — экраны покажут «не найден»
+      if (e.status === 404) setProj((cur) => (cur?.pid === k ? null : cur));
+      else if (e.status !== 401) setLiveError(e.message);
+    }
+  }, []);
+
+  const reload = useCallback(async () => {
+    await Promise.all([loadMeta(), loadProject()]);
+  }, [loadMeta, loadProject]);
 
   const write = useCallback(
     async (fn: () => Promise<unknown>, okMsg?: string) => {
@@ -98,15 +123,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const login = me?.login;
   useEffect(() => {
     if (!login) {
-      setData(null);
+      setMeta(null);
+      setProj(null);
       return;
     }
-    reload();
+    loadMeta();
+    // сигналы копятся 150 мс: пачка изменений — одно перечитывание
     let timer: number | undefined;
+    let needMeta = false;
+    let needProject = false;
+    const flush = () => {
+      if (needMeta) loadMeta();
+      if (needProject) loadProject();
+      needMeta = needProject = false;
+    };
+    // то, что видно вне проекта: список проектов, сводка, пользователи, планы
+    const META = new Set(["projects", "users", "plans", "cases", "runs", "bugs"]);
     const es = new EventSource("/api/events");
-    es.addEventListener("change", () => {
+    es.addEventListener("change", (ev) => {
+      let msg: { type?: string; pid?: string | null } = {};
+      try {
+        msg = JSON.parse((ev as MessageEvent).data);
+      } catch {}
+      if (!msg.pid || msg.pid === pidRef.current) needProject = true;
+      if (!msg.pid ? true : META.has(msg.type || "") && (!pidRef.current || ["projects", "users", "plans"].includes(msg.type || ""))) needMeta = true;
       clearTimeout(timer);
-      timer = window.setTimeout(reload, 150);
+      timer = window.setTimeout(flush, 150);
     });
     es.onopen = () => {
       if (lost.current) {
@@ -122,20 +164,44 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       es.close();
       clearTimeout(timer);
     };
-  }, [login, reload]);
+  }, [login, reload, loadMeta, loadProject]);
+
+  // перешли в другой проект — грузим его данные, старые не показываем
+  useEffect(() => {
+    if (!login) return;
+    setProj((cur) => (cur?.pid === pid ? cur : null));
+    loadProject(pid);
+  }, [login, pid, loadProject]);
+
+  const data: State | null = !meta
+    ? null
+    : {
+        projects: meta.projects,
+        users: meta.users,
+        plans: proj ? proj.plans : meta.plans,
+        cases: proj?.cases || [],
+        folders: proj?.folders || [],
+        runs: proj?.runs || [],
+        results: proj?.results || [],
+        bugs: proj?.bugs || [],
+        attachments: proj?.attachments || [],
+        autoruns: proj?.autoruns || [],
+        comments: proj?.comments || [],
+      };
+  // данные проекта ещё грузятся: экраны проекта ждут, чтобы не мигнуть «пусто»
+  const projectLoading = Boolean(pid && meta?.projects.some((p) => p.id === pid) && proj?.pid !== pid);
 
   // роль могут поменять, пока вкладка открыта: свежая приходит с каждым обновлением состояния
   const role = me && data?.users[me.login]?.role;
   const user = me && role && role !== me.role ? { ...me, role } : me;
   // роль в открытом проекте (#/p/KEY/...) может отличаться от глобальной
-  const [section, key] = useRoute();
   const projectRole = section === "p" ? data?.projects.find((p) => p.id === key)?.myRole : undefined;
   const effective = projectRole || user?.role;
   const canEdit = effective === "tester" || effective === "admin";
   const canComment = canEdit || effective === "developer";
 
   return (
-    <Ctx.Provider value={{ me: user, canEdit, canComment, bootError, data, liveError, setMe, reload, toast, write }}>
+    <Ctx.Provider value={{ me: user, canEdit, canComment, bootError, data, projectLoading, liveError, setMe, reload, toast, write }}>
       {children}
       <div className="toast" hidden={!toastMsg} role="status">
         {toastMsg}

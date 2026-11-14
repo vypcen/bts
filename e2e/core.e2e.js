@@ -33,7 +33,7 @@ test("кейс → прогон → упал → баг", async ({ page, request
   await page.getByRole("button", { name: "Создать баг" }).click();
 
   await expect.poll(async () => {
-    const st = await (await api.get("/api/state")).json();
+    const st = await (await api.get("/api/projects/LK/state")).json();
     return st.bugs.some((b) => b.caseNum === kase.num && b.runNum === run.num);
   }).toBe(true);
 });
@@ -42,4 +42,24 @@ test("разработчик видит проект только на чтен�
   await login(page, "dev");
   await page.goto("/#/p/LK/cases");
   await expect(page.getByRole("button", { name: /Новый тест-кейс|\+ Тест-кейс/ })).toHaveCount(0);
+});
+
+test("все вкладки проекта открываются без ошибок в консоли", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  await login(page, "admin");
+  const api = page.request;
+  const k = await (await api.post("/api/projects/LK/cases", { data: { title: "Обход", priority: "low", status: "ready" } })).json();
+  const run = await (await api.post("/api/projects/LK/runs", { data: { title: "Обход вкладок", caseNums: [k.num] } })).json();
+  for (const tab of ["cases", "plans", "runs", "bugs", "auto", "analytics", "integrations", `runs/${run.num}`, `cases/${k.num}`]) {
+    await page.goto(`/#/p/LK/${tab}`);
+    await page.waitForTimeout(400); // networkidle не наступает: открыт поток живых обновлений
+    await expect(page.locator(".skel")).toHaveCount(0);
+  }
+  await page.goto("/#/users");
+  await page.waitForTimeout(400);
+  await page.goto("/#/");
+  await expect(page.getByText("Личный кабинет").first()).toBeVisible();
+  expect(errors).toEqual([]);
 });

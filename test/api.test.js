@@ -41,6 +41,7 @@ test("доступ: чужой проект — 404, разработчик не
   assert.equal((await u.outsider.get("/api/projects/LK/plans")).status, 404);
   const st = await u.outsider.get("/api/state");
   assert.equal(st.data.projects.length, 0);
+  assert.equal((await u.outsider.get("/api/projects/LK/state")).status, 404);
   let r = await u.dev.post("/api/projects/LK/cases", { title: "x", priority: "low", status: "draft" });
   assert.equal(r.status, 403);
   r = await u.tester.post("/api/projects/LK/cases", { title: "Комментируемый", priority: "low", status: "ready" });
@@ -82,12 +83,12 @@ test("прогон: результаты, чек-лист по пунктам, �
   await u.tester.patch(`/api/projects/LK/runs/${run}/results/${b.data.num}`, { item: "Вход", result: "passed" });
   r = await u.tester.patch(`/api/projects/LK/runs/${run}/results/${b.data.num}`, { item: "Нет такого", result: "passed" });
   assert.equal(r.status, 404);
-  let st = await u.tester.get("/api/state");
+  let st = await u.tester.get(`/api/projects/LK/runs/${run}/results`);
   const res = (num) => st.data.results.find((x) => x.runNum === run && x.caseNum === num);
   assert.equal(res(a.data.num).result, "failed");
   assert.equal(res(b.data.num).result, "untested");
   await u.tester.patch(`/api/projects/LK/runs/${run}/results/${b.data.num}`, { item: "Выход", result: "passed" });
-  st = await u.tester.get("/api/state");
+  st = await u.tester.get(`/api/projects/LK/runs/${run}/results`);
   assert.equal(res(b.data.num).result, "passed");
   await u.tester.patch(`/api/projects/LK/runs/${run}`, { state: "closed" });
   r = await u.tester.patch(`/api/projects/LK/runs/${run}/results/${a.data.num}`, { result: "passed" });
@@ -168,4 +169,65 @@ test("служебное: проверки готовности и заголо�
   const page = await fetch(srv.base + "/api/auth/me");
   assert.match(page.headers.get("content-security-policy"), /default-src 'self'/);
   assert.equal(page.headers.get("x-frame-options"), "DENY");
+});
+
+test("состояние: общее без данных проектов, проект — отдельно, сводка и история", async () => {
+  const k = await u.tester.post("/api/projects/LK/cases", { title: "История", priority: "low", status: "ready" });
+  const r1 = await u.tester.post("/api/projects/LK/runs", { title: "R1", caseNums: [k.data.num] });
+  await u.tester.patch(`/api/projects/LK/runs/${r1.data.num}/results/${k.data.num}`, { result: "failed" });
+  const r2 = await u.tester.post("/api/projects/LK/runs", { title: "R2", caseNums: [k.data.num] });
+  await u.tester.patch(`/api/projects/LK/runs/${r2.data.num}/results/${k.data.num}`, { result: "passed" });
+
+  const meta = await u.tester.get("/api/state");
+  assert.equal(meta.data.cases, undefined, "общее состояние не тащит кейсы");
+  const lk = meta.data.projects.find((p) => p.id === "LK");
+  assert.ok(lk.stats.cases >= 1 && lk.stats.last.passed >= 1);
+
+  const ps = await u.tester.get("/api/projects/LK/state");
+  const last = ps.data.results.filter((r) => r.caseNum === k.data.num);
+  assert.equal(last.length, 1, "в состоянии проекта только последний результат кейса");
+  assert.equal(last[0].result, "passed");
+  const run2 = ps.data.runs.find((r) => r.num === r2.data.num);
+  assert.equal(run2.counts.passed, 1);
+
+  const rr = await u.tester.get(`/api/projects/LK/runs/${r2.data.num}/results`);
+  assert.equal(rr.data.previous.find((r) => r.caseNum === k.data.num).result, "failed");
+  const h = await u.tester.get(`/api/projects/LK/cases/${k.data.num}/history`);
+  assert.deepEqual(h.data.results.map((r) => r.result), ["passed", "failed"]);
+
+  // ETag: повторный запрос без изменений — 304
+  const raw = await fetch(srv.base + "/api/projects/LK/state", { headers: { cookie: u.tester.cookie } });
+  const etag = raw.headers.get("etag");
+  // fetch сам помечает условные запросы как no-cache, поэтому — через http, как браузер с кэшем
+  const status = await new Promise((resolve, reject) =>
+    require("node:http").get(srv.base + "/api/projects/LK/state", { headers: { cookie: u.tester.cookie, "if-none-match": etag } }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    }).on("error", reject)
+  );
+  assert.equal(status, 304);
+});
+
+test("живые события: несут проект и не приходят о чужих проектах", async () => {
+  await u.admin.post("/api/projects", { key: "XX", name: "Чужой" });
+  const ctrl = new AbortController();
+  const got = [];
+  const r = await fetch(srv.base + "/api/events", { headers: { cookie: u.tester.cookie }, signal: ctrl.signal });
+  const reader = r.body.getReader();
+  const pump = (async () => {
+    const dec = new TextDecoder();
+    for (;;) {
+      const { value, done } = await reader.read().catch(() => ({ done: true }));
+      if (done) break;
+      for (const m of dec.decode(value).matchAll(/data: (\{.*\})/g)) got.push(JSON.parse(m[1]));
+    }
+  })();
+  await new Promise((res) => setTimeout(res, 400));
+  await u.admin.post("/api/projects/XX/cases", { title: "секрет", priority: "low", status: "ready" });
+  await u.tester.post("/api/projects/LK/cases", { title: "наш", priority: "low", status: "ready" });
+  await new Promise((res) => setTimeout(res, 600));
+  ctrl.abort();
+  await pump;
+  assert.ok(got.some((e) => e.type === "cases" && e.pid === "LK"));
+  assert.ok(!got.some((e) => e.pid === "XX"), "о чужом проекте сигналов нет");
 });

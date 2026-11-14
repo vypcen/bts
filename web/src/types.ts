@@ -38,6 +38,15 @@ export interface Project {
   members: string[]; // логины участников; админы видят проект и без этого
   memberRoles: Record<string, ProjectRole>; // роли участников в этом проекте (если отличаются от глобальной)
   myRole: Role; // действующая роль текущего пользователя в проекте
+  stats: ProjectStats; // сводка для карточки проекта (считает сервер)
+}
+
+export interface ProjectStats {
+  cases: number;
+  runs: number;
+  bugs: number;
+  openBugs: number;
+  last: Record<ResultValue, number>; // последние результаты активных кейсов
 }
 
 // Папка тест-кейсов; parent: null — в корне проекта
@@ -85,6 +94,7 @@ export interface Run {
   closed: number | null;
   planNum: number | null; // прогон создан из тест-плана
   planLocked: boolean; // план заблокирован: состав зафиксирован, удалить прогон нельзя
+  counts: Record<ResultValue, number>; // сколько кейсов прогона в каждом результате
 }
 
 export interface Result {
@@ -215,6 +225,35 @@ export interface PlanSummary {
   locked: boolean;
 }
 
+// GET /api/state — общее: проекты, пользователи, планы
+export interface MetaState {
+  projects: Project[];
+  plans: PlanSummary[];
+  users: Record<string, { name: string; role: Role }>;
+}
+
+// GET /api/projects/:key/state — данные одного проекта. results — последний результат каждого кейса
+// и результаты, на которые ссылаются баги; результаты прогона целиком — GET …/runs/:num/results
+export interface ProjectState {
+  pid: string;
+  plans: PlanSummary[];
+  cases: TestCase[];
+  folders: CaseFolder[];
+  runs: Run[];
+  results: Result[];
+  bugs: Bug[];
+  attachments: Attachment[];
+  autoruns: AutoRun[];
+  comments: Comment[];
+}
+
+export interface RunResults {
+  results: Result[];
+  previous: Result[]; // результат каждого кейса в ближайшем более раннем прогоне, где его проверяли
+  attachments: Attachment[];
+}
+
+// Что видят экраны: общее состояние и данные открытого проекта (вне проекта списки пустые)
 export interface State {
   projects: Project[];
   plans: PlanSummary[];

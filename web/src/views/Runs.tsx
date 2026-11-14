@@ -1,7 +1,7 @@
 import { Fragment, useState, type FormEvent } from "react";
 import { api, paths } from "../api";
 import { href, go } from "../router";
-import { countResults, folderTree, runResults, withSubfolders } from "../selectors";
+import { folderTree, withSubfolders } from "../selectors";
 import { useCanEdit, useData, useStore } from "../store";
 import type { Project, Run, TestCase } from "../types";
 import { Empty, fmt, Modal, Pill, Prio, ResultBar, Who } from "../ui";
@@ -37,7 +37,7 @@ export function RunsTab({ project }: { project: Project }) {
             </thead>
             <tbody>
               {runs.map((r) => {
-                const c = countResults(runResults(data, p, r.num));
+                const c = r.counts;
                 const total = Object.values(c).reduce((a, b) => a + b, 0);
                 return (
                   <tr key={r.id} className="click" onClick={() => go("p", p, "runs", r.num)}>

@@ -11,17 +11,6 @@ export function lastResults(data: State, pid: string): Map<number, Result> {
   return out;
 }
 
-// Результат кейса в ближайшем более раннем прогоне, где его проверяли: «что было в прошлый раз»
-export function previousResults(data: State, pid: string, runNum: number): Map<number, Result> {
-  const out = new Map<number, Result>();
-  for (const r of data.results) {
-    if (r.pid !== pid || r.runNum >= runNum || r.result === "untested") continue;
-    const cur = out.get(r.caseNum);
-    if (!cur || r.runNum > cur.runNum) out.set(r.caseNum, r);
-  }
-  return out;
-}
-
 export function countResults(list: { result: ResultValue }[]) {
   const c: Record<ResultValue, number> = { untested: 0, passed: 0, failed: 0, blocked: 0, skipped: 0 };
   for (const r of list) c[r.result]++;
@@ -81,6 +70,3 @@ export function folderPath(data: State, id: number | null): string {
   for (let f = data.folders.find((x) => x.id === id); f && parts.length < 50; f = data.folders.find((x) => x.id === f!.parent)) parts.unshift(f.name);
   return parts.join(" / ");
 }
-
-export const runResults = (data: State, pid: string, runNum: number) =>
-  data.results.filter((r) => r.pid === pid && r.runNum === runNum);

@@ -12,7 +12,7 @@ import { Users } from "./views/Users";
 import { roleOf } from "./labels";
 
 export function App() {
-  const { me, bootError, data } = useStore();
+  const { me, bootError, data, projectLoading } = useStore();
   const route = useRoute();
 
   if (bootError) {
@@ -40,6 +40,8 @@ export function App() {
         <Users />
       ) : section === "settings" ? (
         <Settings />
+      ) : section === "p" && project && projectLoading ? (
+        <main className="wrap"><div className="skel">Загружаем проект…</div></main>
       ) : section === "p" && project ? (
         <ProjectPage project={project} tab={tab || "cases"} id={id} />
       ) : (
