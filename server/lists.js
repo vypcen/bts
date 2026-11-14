@@ -38,6 +38,22 @@ async function page(sql, params, req, mapRow, countSql) {
   return out;
 }
 
+// Фильтры по тегам (tag=a,b — любой из) и пользовательским полям (field.<id>=значение) для кейсов и багов
+function tagFieldFilters(req, alias, params, where) {
+  const tags = listOf(req.query.tag);
+  if (tags.length) {
+    params.push(tags);
+    where.push(`${alias}.tags && $${params.length}::text[]`);
+  }
+  for (const [k, v] of Object.entries(req.query)) {
+    const m = k.match(/^field\.(\d+)$/);
+    if (!m) continue;
+    params.push(String(v));
+    // значение поля, элемент списка (multiselect) или «да/нет»
+    where.push(`(${alias}.fields->>'${m[1]}' = $${params.length} OR ${alias}.fields->'${m[1]}' ? $${params.length})`);
+  }
+}
+
 const router = express.Router({ mergeParams: true });
 
 router.get("/cases", wrap(async (req, res) => {
@@ -63,6 +79,7 @@ router.get("/cases", wrap(async (req, res) => {
       where.push(`${col} = ANY($${params.length}::text[])`);
     }
   }
+  tagFieldFilters(req, "c", params, where);
   const countSql = { sql: `SELECT count(*)::int AS n FROM test_cases c WHERE ${where.join(" AND ")}`, params: [...params] };
   if (num(req.query.after)) {
     params.push(num(req.query.after));
@@ -72,12 +89,12 @@ router.get("/cases", wrap(async (req, res) => {
 }));
 
 const bugSql = `SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
-    c.num AS case_num, b.created_at, b.updated_at, cu.login AS created_by, b.external_key, b.external_url, b.external_status
+    c.num AS case_num, b.created_at, b.updated_at, cu.login AS created_by, b.external_key, b.external_url, b.external_status, b.tags, b.fields
   FROM bugs b LEFT JOIN users au ON au.id=b.assignee_id LEFT JOIN test_cases c ON c.id=b.case_id LEFT JOIN users cu ON cu.id=b.created_by`;
 const toBug = (b) => ({
   id: `${b.project_key}-B${b.num}`, pid: b.project_key, num: b.num, title: b.title, status: b.status, severity: b.severity, assignee: b.assignee,
   env: b.environment, steps: b.steps, actual: b.actual, expected: b.expected, caseNum: b.case_num, createdBy: b.created_by,
-  created: ms(b.created_at), updated: ms(b.updated_at),
+  created: ms(b.created_at), updated: ms(b.updated_at), tags: b.tags, fields: b.fields,
   external: b.external_key ? { key: b.external_key, url: b.external_url, status: b.external_status || "" } : null,
 });
 
@@ -104,6 +121,7 @@ router.get("/bugs", wrap(async (req, res) => {
       where.push(`au.login = $${params.length}`);
     }
   }
+  tagFieldFilters(req, "b", params, where);
   const countSql = { sql: `SELECT count(*)::int AS n FROM bugs b LEFT JOIN users au ON au.id=b.assignee_id WHERE ${where.join(" AND ")}`, params: [...params] };
   if (num(req.query.after)) {
     params.push(num(req.query.after));

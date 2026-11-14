@@ -106,3 +106,51 @@ test("удалённый кейс восстанавливается из кор
   await row.getByRole("button", { name: "Восстановить" }).click();
   await expect.poll(async () => (await api.get(`/api/projects/LK/cases/${k.num}`)).status()).toBe(200);
 });
+
+test("модель кейса: поле в настройках, кейс со структурными шагами и тегами, шаг упал → баг", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  // пользовательское поле
+  await page.goto("/#/p/LK/integrations");
+  await page.getByRole("button", { name: "+ Поле" }).click();
+  await page.getByLabel("Название *").fill("Компонент");
+  await page.getByLabel("Варианты").fill("Оплата\nВход");
+  await page.locator(".modal").getByRole("button", { name: "Добавить" }).click();
+  await expect(page.getByText("Оплата, Вход")).toBeVisible();
+
+  // кейс через форму
+  await page.goto("/#/p/LK/cases");
+  await page.getByRole("button", { name: "+ Тест-кейс" }).first().click();
+  await page.getByLabel("Название *").fill("E2E: оплата картой");
+  await page.getByLabel("Шаг 1: действие").fill("Открыть корзину");
+  await page.getByLabel("Шаг 1: ожидаемый результат").fill("Корзина открыта");
+  await page.getByLabel("Шаг 1: действие").press("Enter");
+  await page.getByLabel("Шаг 2: действие").fill("Нажать «Оплатить»");
+  await page.getByLabel("Шаг 2: ожидаемый результат").fill("Форма оплаты");
+  await page.getByLabel("Теги").fill("оплата");
+  await page.getByLabel("Теги").press("Enter");
+  await page.locator("#caseForm").getByLabel("Компонент").selectOption("Оплата");
+  await page.getByRole("button", { name: "Создать", exact: true }).click();
+  await expect(page.locator("aside.drawer").getByText("Форма оплаты")).toBeVisible();
+  const st = await (await api.get("/api/projects/LK/state")).json();
+  const k = st.cases.find((c) => c.title === "E2E: оплата картой");
+  const full = await (await api.get(`/api/projects/LK/cases/${k.num}`)).json();
+  expect(full.stepList.map((s) => s.expected)).toEqual(["Корзина открыта", "Форма оплаты"]);
+  expect(full.tags).toEqual(["оплата"]);
+  expect(Object.values(full.fields)).toEqual(["Оплата"]);
+
+  // прогон: первый шаг прошёл, второй упал → баг из шага
+  const run = await (await api.post("/api/projects/LK/runs", { data: { title: "E2E шаги", caseNums: [k.num] } })).json();
+  await page.goto(`/#/p/LK/runs/${run.num}`);
+  await page.getByText("E2E: оплата картой").first().click();
+  await page.getByRole("group", { name: "Результат шага 1" }).getByRole("button", { name: /Пройден/ }).click();
+  await page.getByRole("group", { name: "Результат шага 2" }).getByRole("button", { name: /Упал/ }).click();
+  await page.getByLabel("Фактический результат шага 2").fill("Ошибка 500");
+  await page.getByLabel("Фактический результат шага 2").blur();
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run.num}/results`)).json()).results[0].steps?.["1"]?.actual).toBe("Ошибка 500");
+  await page.locator("aside.drawer").getByRole("button", { name: "+ Баг" }).click();
+  await expect(page.getByLabel("Фактический результат")).toHaveValue("Ошибка 500");
+  await expect(page.getByLabel("Ожидаемый результат")).toHaveValue("Форма оплаты");
+  await page.getByRole("button", { name: "Создать баг" }).click();
+  await expect.poll(async () => (await (await api.get("/api/projects/LK/state")).json()).bugs.some((b) => b.title.includes("шаг 2"))).toBe(true);
+});

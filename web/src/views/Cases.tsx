@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { AI_NOTE, AiBar, useAi, useAiReady } from "../ai";
+import { emptyStep, FieldsEditor, FieldsView, missingRequired, StepsEditor, StepsView, stepsOf, TagInput, Tags, useFields, useProjectTags } from "../casekit";
 import { api, paths } from "../api";
 import { checklistItems, doneCount, itemsWord } from "../checklist";
 import { BUG_STATUSES, CASE_STATUSES, find, isOpenBug, PRIORITIES, RESULTS } from "../labels";
@@ -21,6 +22,16 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const [q, setQ] = useState("");
   const [fResult, setFResult] = useState<ResultFilter>("all");
   const [fPrio, setFPrio] = useState("all");
+  const [fTag, setFTag] = useState("");
+  // фильтры по полям-спискам: {id поля: значение}
+  const [fFields, setFFields] = useState<Record<number, string>>({});
+  const projectTags = useProjectTags("cases");
+  const listFields = useFields("case").filter((d) => d.type === "select" || d.type === "multiselect" || d.type === "user");
+  const fieldMatch = (c: TestCase) =>
+    Object.entries(fFields).every(([id, want]) => {
+      const v = c.fields?.[id];
+      return !want || (Array.isArray(v) ? v.includes(want) : String(v ?? "") === want);
+    });
   const [fStatus, setFStatus] = useState("active");
   // новый тест-кейс или чек-лист — по виду, существующий — сам кейс
   const [editing, setEditing] = useState<TestCase | CaseKind | null>(null);
@@ -43,7 +54,8 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const bugsByCase = new Map<number, typeof data.bugs>();
   for (const b of data.bugs) if (b.pid === p && b.caseNum !== null && isOpenBug(b.status)) bugsByCase.set(b.caseNum, [...(bugsByCase.get(b.caseNum) || []), b]);
   const openBugs = (c: TestCase) => bugsByCase.get(c.num) || [];
-  const scoped = all.filter((c) => (fStatus === "all" || (fStatus === "active" ? c.status !== "deprecated" : c.status === fStatus)) && (fPrio === "all" || c.priority === fPrio));
+  const scoped = all.filter((c) => (fStatus === "all" || (fStatus === "active" ? c.status !== "deprecated" : c.status === fStatus)) && (fPrio === "all" || c.priority === fPrio)
+    && (!fTag || c.tags?.includes(fTag)) && fieldMatch(c));
   const base = scoped.filter(inFolder(data, sel));
   const needle = q.trim().toLowerCase();
   const rows = base
@@ -107,6 +119,18 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
           <option value="all">Любой статус</option>
           {CASE_STATUSES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
         </select>
+        {projectTags.length > 0 && (
+          <select className="input" aria-label="Тег" value={fTag} onChange={(e) => setFTag(e.target.value)}>
+            <option value="">Любой тег</option>
+            {projectTags.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        )}
+        {listFields.map((d) => (
+          <select key={d.id} className="input" aria-label={d.name} value={fFields[d.id] || ""} onChange={(e) => setFFields({ ...fFields, [d.id]: e.target.value })}>
+            <option value="">{d.name}: любое</option>
+            {(d.type === "user" ? Object.keys(data.users) : d.options).map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        ))}
       </div>
       {canEdit && shown.length > 0 && (
         <div className="bulk">
@@ -172,7 +196,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
                       </tr>
                     </thead>
                     <tbody>
-                      <PagedRows items={list} reset={`${kind}|${sel}|${needle}|${fResult}|${fPrio}|${fStatus}`}>{(c) => {
+                      <PagedRows items={list} reset={`${kind}|${sel}|${needle}|${fResult}|${fPrio}|${fStatus}|${fTag}|${JSON.stringify(fFields)}`}>{(c) => {
                         const lr = last.get(c.num);
                         const bugs = openBugs(c);
                         const st = find(CASE_STATUSES, c.status);
@@ -183,7 +207,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
                             {canEdit && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Отметить ${c.id}`} checked={picked.has(c.num)} onChange={() => togglePick(c.num)} /></td>}
                             <td className="id">{c.id}</td>
                             <td className="title">
-                              {c.title}<CommentCount n={talk.get(c.num)} />
+                              {c.title}<CommentCount n={talk.get(c.num)} /> <Tags tags={c.tags} />
                               {isList && (
                                 <span className="muted small" style={{ fontWeight: 400 }}>
                                   {" · "}{done ? `выполнено ${done} из ${n}` : `${n} ${itemsWord(n)}`}
@@ -342,10 +366,12 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
       ) : (
         <>
           <TextBlock label="Предусловия" text={c.pre} empty="Не указаны" />
-          <TextBlock label="Шаги" text={c.steps} empty="Не указаны" steps />
+          <div className="view-block"><span className="label">Шаги</span><StepsView steps={stepsOf(c)} /></div>
           <TextBlock label="Ожидаемый результат" text={c.expected} empty="Не указан" />
         </>
       )}
+      {c.tags?.length > 0 && <div className="view-block"><span className="label">Теги</span><Tags tags={c.tags} /></div>}
+      <FieldsView entity="case" values={c.fields} />
 
       <div className="view-block">
         <span className="label">История прогонов</span>
@@ -412,7 +438,10 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
   const [f, setF] = useState({
     kind, title: c?.title || "", priority: c?.priority || "medium", status: c?.status || "draft",
     pre: c?.pre || "", steps: c?.steps || "", expected: c?.expected || "", folder: String((c ? c.folder : folder) ?? ""),
+    stepList: c ? stepsOf(c) : [emptyStep()], tags: c?.tags || [], fields: c?.fields || {},
   });
+  const fieldDefs = useFields("case");
+  const tagSuggestions = useProjectTags("cases");
   const [err, setErr] = useState("");
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const list = f.kind === "checklist";
@@ -423,10 +452,10 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
   async function draft() {
     if (!f.title.trim()) return setErr(`Сначала напишите название: по нему модель составит ${list ? "пункты" : "шаги"}`);
     setErr("");
-    const r = await ai.run(() => api<{ pre: string; steps: string; expected: string }>("POST", paths.aiCaseDraft(pid), f));
+    const r = await ai.run(() => api<{ pre: string; steps: string; expected: string }>("POST", paths.aiCaseDraft(pid), { ...f, steps: list ? f.steps : f.stepList.map((s) => s.action).filter(Boolean).join("\n") }));
     if (!r) return;
     setBeforeAi(f);
-    setF((cur) => ({ ...cur, ...r }));
+    setF((cur) => ({ ...cur, ...r, stepList: list ? cur.stepList : stepsOf({ steps: r.steps }) }));
     toast(AI_NOTE);
   }
 
@@ -434,7 +463,11 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
     e.preventDefault();
     if (!f.title.trim()) return setErr(list ? "Укажите название чек-листа" : "Укажите название тест-кейса");
     if (list && !f.steps.trim()) return setErr("Добавьте хотя бы один пункт");
-    const body = { ...f, folder: f.folder ? Number(f.folder) : null };
+    const missing = missingRequired(fieldDefs, f.fields);
+    if (missing) return setErr(missing);
+    // у тест-кейса шаги уходят структурой, у чек-листа — пункты текстом
+    const { stepList, ...rest } = f;
+    const body = { ...rest, ...(list ? {} : { stepList: stepList.filter((s) => s.action.trim() || s.expected.trim()) }), folder: f.folder ? Number(f.folder) : null };
     if (c) {
       // baseVersion: если кейс успели поменять, сервер не даст затереть чужую правку
       if (await write(() => api("PATCH", paths.testCase(pid, c.num), { ...body, baseVersion: c.version }), "Изменения сохранены")) {
@@ -485,10 +518,14 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
         ) : (
           <>
             <div className="field"><label htmlFor="c-pre">Предусловия</label><textarea className="input" id="c-pre" rows={2} value={f.pre} onChange={set("pre")} /></div>
-            <div className="field"><label htmlFor="c-steps">Шаги</label><textarea className="input" id="c-steps" rows={5} placeholder="Каждый шаг с новой строки" value={f.steps} onChange={set("steps")} /></div>
-            <div className="field"><label htmlFor="c-exp">Ожидаемый результат</label><textarea className="input" id="c-exp" rows={3} value={f.expected} onChange={set("expected")} /></div>
+            <div className="field"><span className="label-like">Шаги</span>
+              <StepsEditor value={f.stepList} onChange={(stepList) => setF({ ...f, stepList })} />
+              <span className="muted" style={{ fontSize: 12 }}>Enter в последнем шаге добавляет следующий. В прогоне каждый шаг отмечается отдельно</span></div>
+            <div className="field"><label htmlFor="c-exp">Итоговый ожидаемый результат</label><textarea className="input" id="c-exp" rows={2} value={f.expected} onChange={set("expected")} /></div>
           </>
         )}
+        <div className="field"><label htmlFor="c-tags">Теги</label><TagInput id="c-tags" value={f.tags} onChange={(tags) => setF({ ...f, tags })} suggestions={tagSuggestions} /></div>
+        <FieldsEditor entity="case" values={f.fields} onChange={(fields) => setF({ ...f, fields })} />
         <div className="err">{err}</div>
       </form>
     </Drawer>

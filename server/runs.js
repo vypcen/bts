@@ -1,5 +1,6 @@
 // Тест-прогоны и результаты кейсов в них. Монтируется на /api/projects/:key
 const express = require("express");
+const casemodel = require("./casemodel");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const checklist = require("./checklist");
@@ -35,6 +36,8 @@ function readRun(body) {
 router.post("/runs", wrap(async (req, res) => {
   const { r, error } = readRun(req.body);
   if (error) return res.status(400).json({ error });
+  const cf = await casemodel.readFields(pool, req.params.key, "run", req.body.fields, {});
+  if (cf.error) return res.status(400).json({ error: cf.error });
   const out = await tx(async (db) => {
     const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [req.params.key]);
     if (!seq.rows[0]) return { status: 404, error: "Проект не найден" };
@@ -42,8 +45,8 @@ router.post("/runs", wrap(async (req, res) => {
     if (!ids.length) return { status: 400, error: "Выберите хотя бы один тест-кейс" };
     const n = seq.rows[0].run_seq;
     const run = await db.query(
-      "INSERT INTO test_runs(project_key, num, title, build, environment, created_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
-      [req.params.key, n, r.title, r.build, r.env, req.user.id]
+      "INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
+      [req.params.key, n, r.title, r.build, r.env, req.user.id, cf.fields]
     );
     await db.query("INSERT INTO run_results(run_id, case_id) SELECT $1, unnest($2::int[])", [run.rows[0].id, ids]);
     // {"assign": {"users": [...], "strategy": "balanced"}} — сразу распределить кейсы
@@ -58,17 +61,19 @@ router.post("/runs", wrap(async (req, res) => {
 
 router.patch("/runs/:num", wrap(async (req, res) => {
   const n = num(req.params.num);
-  const { rows } = await pool.query("SELECT title, build, environment AS env, state FROM test_runs WHERE project_key=$1 AND num=$2", [req.params.key, n]);
+  const { rows } = await pool.query("SELECT title, build, environment AS env, state, fields FROM test_runs WHERE project_key=$1 AND num=$2", [req.params.key, n]);
   if (!rows[0]) return res.status(404).json({ error: "Прогон не найден" });
   const { r, error } = readRun({ ...rows[0], ...req.body });
   if (error) return res.status(400).json({ error });
+  const cf = await casemodel.readFields(pool, req.params.key, "run", req.body.fields, rows[0].fields);
+  if (cf.error) return res.status(400).json({ error: cf.error });
   const state = req.body.state === undefined ? rows[0].state : req.body.state;
   if (!["open", "closed"].includes(state)) return res.status(400).json({ error: "Неизвестное состояние прогона" });
   await pool.query(
-    `UPDATE test_runs SET title=$1, build=$2, environment=$3, state=$4,
+    `UPDATE test_runs SET title=$1, build=$2, environment=$3, state=$4, fields=$7,
        closed_at = CASE WHEN $4='closed' THEN COALESCE(closed_at, now()) ELSE NULL END
      WHERE project_key=$5 AND num=$6`,
-    [r.title, r.build, r.env, state, req.params.key, n]
+    [r.title, r.build, r.env, state, req.params.key, n, cf.fields]
   );
   broadcast("runs");
   if (state === "closed" && rows[0].state !== "closed") events.emit(req.params.key, "run.closed", { run: await events.snap.run(req.params.key, n) }, req.user);
@@ -106,7 +111,10 @@ router.patch("/runs/:num/results/:case", wrap(async (req, res) => {
   if (!run) return res.status(404).json({ error: "Прогон не найден" });
   if (run.state !== "open") return res.status(409).json({ error: "Прогон закрыт. Откройте его, чтобы менять результаты" });
   const { rows } = await pool.query(
-    `SELECT rr.id, rr.result, rr.comment, rr.items, rr.assignee_id, c.kind, c.steps FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
+    `SELECT rr.id, rr.result, rr.comment, rr.items, rr.step_results, rr.assignee_id, c.kind, c.steps,
+       COALESCE(v.step_list, c.step_list) AS step_list
+     FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
+     LEFT JOIN test_case_versions v ON v.case_id=c.id AND v.version=rr.case_version
      WHERE rr.run_id=$1 AND c.num=$2`,
     [run.id, num(req.params.case)]
   );
@@ -132,14 +140,29 @@ router.patch("/runs/:num/results/:case", wrap(async (req, res) => {
   } else if (cur.kind === "checklist" && req.body.result !== undefined) {
     return res.status(400).json({ error: "У чек-листа отмечаются пункты, итог считается сам" });
   }
+  // результат шага тест-кейса: {"step": 2, "result": "failed", "actual": "что произошло"} (шаги с 0, по проверяемой версии).
+  // Итог кейса считается по шагам, как у чек-листа; отметить итог целиком без шагов тоже можно
+  let stepResults = cur.step_results;
+  if (req.body.step !== undefined) {
+    if (cur.kind !== "case") return res.status(400).json({ error: "Шаги есть только у тест-кейса" });
+    const i = Number(req.body.step);
+    if (!Number.isInteger(i) || i < 0 || i >= cur.step_list.length) return res.status(404).json({ error: "Такого шага нет: возможно, кейс изменили" });
+    stepResults = { ...cur.step_results };
+    const prev = stepResults[i] || {};
+    const actual = req.body.actual === undefined ? prev.actual || "" : str(req.body.actual, 5000);
+    if (result === "untested" && !actual) delete stepResults[i];
+    else stepResults[i] = { result, actual };
+    const marks = Object.fromEntries(Object.entries(stepResults).map(([k, v]) => [k, v.result]).filter(([, r]) => r !== "untested"));
+    result = checklist.verdict(cur.step_list.map((_, k) => String(k)), marks);
+  }
   const changed = result !== cur.result;
   // исполнитель и время фиксируются, когда меняется сам результат, а не комментарий
   await pool.query(
-    `UPDATE run_results SET result=$1, comment=$2, items=$6, assignee_id=$7,
+    `UPDATE run_results SET result=$1, comment=$2, items=$6, assignee_id=$7, step_results=$8,
        executed_by = CASE WHEN $3 THEN (CASE WHEN $1='untested' THEN NULL ELSE $4::int END) ELSE executed_by END,
        executed_at = CASE WHEN $3 THEN (CASE WHEN $1='untested' THEN NULL ELSE now() END) ELSE executed_at END
      WHERE id=$5`,
-    [result, comment, changed, req.user.id, cur.id, JSON.stringify(items), assignee]
+    [result, comment, changed, req.user.id, cur.id, JSON.stringify(items), assignee, JSON.stringify(stepResults)]
   );
   broadcast("runs");
   if (changed) {

@@ -5,6 +5,7 @@ const express = require("express");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const checklist = require("./checklist");
+const casemodel = require("./casemodel");
 const { wrap, str } = require("./util");
 
 const router = express.Router({ mergeParams: true });
@@ -23,6 +24,9 @@ const COLUMNS = [
   { key: "expected", header: "Ожидаемый результат", aliases: ["ожидаемый результат", "expected", "expected result", "expected result(s)"] },
   // в конце, чтобы файлы, выгруженные до появления чек-листов, читались так же
   { key: "kind", header: "Тип", aliases: ["тип", "вид", "type", "kind"] },
+  // ожидаемый результат каждого шага — по строке на шаг, напротив строк «Шагов»
+  { key: "stepExpected", header: "Ожидаемые результаты шагов", aliases: ["ожидаемые результаты шагов", "ожидаемый результат шагов", "expected results (steps)", "steps (expected result)"] },
+  { key: "tags", header: "Теги", aliases: ["теги", "метки", "tags", "labels", "references"] },
 ];
 
 // Значения → ключи. Свои подписи, ключи API и привычные слова других систем
@@ -123,6 +127,8 @@ const csvRow = (key, c, pathOf) => ({
   id: `${key}-${c.num}`, folder: c.folder_id ? pathOf(c.folder_id) : "", title: c.title,
   priority: LABEL.priority[c.priority], status: LABEL.status[c.status], pre: c.preconditions, steps: c.steps, expected: c.expected,
   kind: LABEL.kind[c.kind],
+  stepExpected: (c.step_list || []).some((s) => s.expected) ? c.step_list.map((s) => s.expected.replace(/\s*\n\s*/g, " ")).join("\n") : "",
+  tags: (c.tags || []).join(", "),
 });
 
 function sendCsv(res, rows, name, asciiName) {
@@ -150,7 +156,7 @@ router.get("/cases/export", wrap(async (req, res) => {
   } else {
     const sel = String(req.query.folder || "all");
     const { rows: cases } = await pool.query(
-      "SELECT num, kind, folder_id, title, priority, status, preconditions, steps, expected FROM test_cases WHERE project_key=$1 ORDER BY num", [key]
+      "SELECT num, kind, folder_id, title, priority, status, preconditions, steps, expected, step_list, tags FROM test_cases WHERE project_key=$1 ORDER BY num", [key]
     );
     // папка вместе со всеми вложенными
     const inside = (id) => {
@@ -183,7 +189,7 @@ async function plan(db, key, text) {
   if (data.length > MAX_ROWS) return { errors: [{ line: 1, error: `Больше ${MAX_ROWS} кейсов за раз — разбейте файл` }] };
 
   const { rows: existing } = await db.query(
-    "SELECT num, kind, folder_id, title, priority, status, preconditions AS pre, steps, expected FROM test_cases WHERE project_key=$1", [key]
+    "SELECT num, kind, folder_id, title, priority, status, preconditions AS pre, steps, expected, step_list, tags FROM test_cases WHERE project_key=$1", [key]
   );
   const byNum = new Map(existing.map((c) => [c.num, c]));
   const folders = await folderPaths(db, key);
@@ -218,6 +224,7 @@ async function plan(db, key, text) {
       else item[k] = v;
     }
     for (const k of ["pre", "steps", "expected"]) if (get(k) !== undefined) item[k] = str(get(k));
+    if (get("tags") !== undefined) item.tags = casemodel.normalizeTags(get("tags"));
     // чек-лист: шаги — это пункты; предусловий и ожидаемого результата у него нет
     const kind = item.kind || (item.num !== undefined ? byNum.get(item.num).kind : "case");
     if (kind === "checklist") {
@@ -228,6 +235,17 @@ async function plan(db, key, text) {
       }
       if (item.pre !== undefined || item.kind) item.pre = "";
       if (item.expected !== undefined || item.kind) item.expected = "";
+    } else if (item.steps !== undefined || get("stepExpected") !== undefined) {
+      // структурные шаги: действия из «Шагов», ожидаемые результаты — построчно из «Ожидаемых результатов шагов»
+      const prev = item.num !== undefined ? byNum.get(item.num).step_list : [];
+      const list = casemodel.stepsFromText(item.steps ?? byNum.get(item.num)?.steps ?? "", prev);
+      if (get("stepExpected") !== undefined) {
+        const exp = String(get("stepExpected")).split("\n").map((x) => x.trim());
+        if (exp.filter(Boolean).length > list.length) err("Ожидаемых результатов шагов больше, чем шагов");
+        list.forEach((s, n) => (s.expected = exp[n] || ""));
+      }
+      item.stepList = list;
+      item.steps = casemodel.stepsText(list);
     }
     if (get("folder") !== undefined) {
       const parts = splitPath(get("folder"));
@@ -246,7 +264,9 @@ async function plan(db, key, text) {
   const changed = toUpdate.filter((i) => {
     const c = byNum.get(i.num);
     const folderChanged = i.folder !== undefined && i.folder !== (c.folder_id ? folders.pathOf(c.folder_id) : "");
-    return folderChanged || ["kind", "title", "priority", "status", "pre", "steps", "expected"].some((k) => i[k] !== undefined && i[k] !== c[k]);
+    return folderChanged || ["kind", "title", "priority", "status", "pre", "steps", "expected"].some((k) => i[k] !== undefined && i[k] !== c[k])
+      || (i.tags !== undefined && i.tags.join("\n") !== (c.tags || []).join("\n"))
+      || (i.stepList !== undefined && JSON.stringify(i.stepList) !== JSON.stringify(c.step_list));
   });
   return {
     errors,
@@ -280,10 +300,11 @@ async function apply(db, key, userId, { items, folders }) {
     await db.query(
       `UPDATE test_cases SET title=$1, priority=COALESCE($2, priority), status=COALESCE($3, status), preconditions=COALESCE($4, preconditions),
          steps=COALESCE($5, steps), expected=COALESCE($6, expected), folder_id=CASE WHEN $7 THEN $8 ELSE folder_id END,
-         updated_by=$9, updated_at=now(), kind=COALESCE($12, kind)
+         updated_by=$9, updated_at=now(), kind=COALESCE($12, kind), step_list=COALESCE($13::jsonb, step_list), tags=COALESCE($14::text[], tags)
        WHERE project_key=$10 AND num=$11`,
       [i.title, i.priority ?? null, i.status ?? null, i.pre ?? null, i.steps ?? null, i.expected ?? null,
-        i.folder !== undefined, i.folder !== undefined ? folderOf(i) : null, userId, key, i.num, i.kind ?? null]
+        i.folder !== undefined, i.folder !== undefined ? folderOf(i) : null, userId, key, i.num, i.kind ?? null,
+        i.stepList ? JSON.stringify(i.stepList) : null, i.tags ?? null]
     );
   }
 
@@ -293,12 +314,17 @@ async function apply(db, key, userId, { items, folders }) {
     const { rows } = await db.query("UPDATE projects SET seq=seq+$1 WHERE key=$2 RETURNING seq", [fresh.length, key]);
     const first = rows[0].seq - fresh.length + 1;
     await db.query(
-      `INSERT INTO test_cases(project_key, num, folder_id, title, priority, status, preconditions, steps, expected, kind, created_by, updated_by)
-       SELECT $1, u.*, $11, $11 FROM unnest($2::int[], $3::int[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[]) AS u`,
+      `INSERT INTO test_cases(project_key, num, folder_id, title, priority, status, preconditions, steps, expected, kind, step_list, tags, created_by, updated_by)
+       SELECT $1, u.num, u.folder, u.title, u.priority, u.status, u.pre, u.steps, u.expected, u.kind, u.step_list,
+         ARRAY(SELECT jsonb_array_elements_text(u.tags)), $11, $11
+       FROM unnest($2::int[], $3::int[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $12::jsonb[], $13::jsonb[])
+         AS u(num, folder, title, priority, status, pre, steps, expected, kind, step_list, tags)`,
       [
         key, fresh.map((_, n) => first + n), fresh.map(folderOf), fresh.map((i) => i.title), fresh.map((i) => i.priority || "medium"),
         fresh.map((i) => i.status || "draft"), fresh.map((i) => i.pre || ""), fresh.map((i) => i.steps || ""), fresh.map((i) => i.expected || ""),
         fresh.map((i) => i.kind || "case"), userId,
+        fresh.map((i) => JSON.stringify(i.stepList || ((i.kind || "case") === "case" ? casemodel.stepsFromText(i.steps || "") : []))),
+        fresh.map((i) => JSON.stringify(i.tags || [])),
       ]
     );
   }

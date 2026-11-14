@@ -7,7 +7,8 @@ import { Confirm, fmt, fmtSize, useNames } from "../ui";
 const isImage = (m: string) => /^image\/(png|jpeg|gif|webp)$/.test(m);
 
 // Список вложений с загрузкой: кнопка, перетаскивание и вставка скриншота из буфера (Ctrl+V)
-export function Attachments({ list, uploadUrl, paste, label = "Вложения" }: { list: Attachment[]; uploadUrl?: string; paste?: boolean; label?: string }) {
+// compact — для шага результата: без заголовка, вместо зоны перетаскивания — небольшая кнопка
+export function Attachments({ list, uploadUrl, paste, label = "Вложения", compact }: { list: Attachment[]; uploadUrl?: string; paste?: boolean; label?: string; compact?: boolean }) {
   const { write, toast, reload } = useStore();
   const nameOf = useNames();
   const [busy, setBusy] = useState(0);
@@ -55,6 +56,22 @@ export function Attachments({ list, uploadUrl, paste, label = "Вложения"
     setOver(false);
     send(Array.from(e.dataTransfer.files));
   };
+
+  if (compact) {
+    return (
+      <span className="files compact" onDragOver={(e) => uploadUrl && e.preventDefault()} onDrop={(e) => uploadUrl && drop(e)}>
+        {list.map((a) => (
+          <a key={a.id} className="chip" href={paths.file(a.id)} target="_blank" rel="noopener" title={`${a.name} · ${fmtSize(a.size)}`}>📎 {a.name.slice(0, 24)}</a>
+        ))}
+        {uploadUrl && (
+          <>
+            <button type="button" className="btn ghost sm" onClick={() => input.current?.click()} disabled={busy > 0}>{busy ? "Загружаем…" : "📎 Файл"}</button>
+            <input ref={input} type="file" multiple hidden onChange={(e) => { send(Array.from(e.target.files || [])); e.target.value = ""; }} />
+          </>
+        )}
+      </span>
+    );
+  }
 
   return (
     <div className="view-block">

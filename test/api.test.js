@@ -345,3 +345,123 @@ test("журнал аудита: входы, неудачи, роли и уда�
   assert.equal((await u.tester.get("/api/admin/audit")).status, 403);
   await u.admin.patch("/api/admin/users/viewer", { role: "viewer" });
 });
+
+test("структурные шаги: создание, правка текстом сохраняет ожидаемые результаты, версии", async () => {
+  const stepList = [
+    { action: "Открыть страницу входа", expected: "Форма входа" },
+    { action: "Ввести логин и пароль", expected: "", data: "user / secret" },
+    { action: "Нажать «Войти»", expected: "Открылся профиль" },
+  ];
+  let r = await u.tester.post("/api/projects/LK/cases", { title: "Структурные шаги", priority: "high", status: "ready", stepList, tags: ["smoke", "Вход", "smoke"] });
+  const n = r.data.num;
+  let c = (await u.tester.get(`/api/projects/LK/cases/${n}`)).data;
+  assert.equal(c.stepList.length, 3);
+  assert.equal(c.stepList[1].data, "user / secret");
+  assert.equal(c.steps, "Открыть страницу входа\nВвести логин и пароль\nНажать «Войти»");
+  assert.deepEqual(c.tags, ["smoke", "Вход"]);
+  // старый клиент шлёт steps текстом с теми же действиями — ожидаемые результаты шагов не теряются
+  await u.tester.patch(`/api/projects/LK/cases/${n}`, { steps: c.steps, title: "Структурные шаги v2" });
+  c = (await u.tester.get(`/api/projects/LK/cases/${n}`)).data;
+  assert.equal(c.stepList[2].expected, "Открылся профиль");
+  // правка без шагов не трогает шаги
+  await u.tester.patch(`/api/projects/LK/cases/${n}`, { priority: "low" });
+  c = (await u.tester.get(`/api/projects/LK/cases/${n}`)).data;
+  assert.equal(c.stepList.length, 3);
+  const v = (await u.tester.get(`/api/projects/LK/cases/${n}/versions`)).data.versions;
+  assert.equal(v[v.length - 1].stepList[0].expected, "Форма входа");
+  // теги — тоже содержимое: версия растёт
+  r = await u.tester.patch(`/api/projects/LK/cases/${n}`, { tags: ["regress"] });
+  assert.equal(r.data.version, 4);
+});
+
+test("результат по шагам: итог считается сам, вложение к шагу, баг-фильтры по тегам", async () => {
+  const k = await u.tester.post("/api/projects/LK/cases", { title: "По шагам", priority: "low", status: "ready", stepList: [{ action: "a" }, { action: "b" }, { action: "c" }], tags: ["шаги"] });
+  const run = (await u.tester.post("/api/projects/LK/runs", { title: "Шаги", caseNums: [k.data.num] })).data.num;
+  const mark = (body) => u.tester.patch(`/api/projects/LK/runs/${run}/results/${k.data.num}`, body);
+  const res = async () => (await u.tester.get(`/api/projects/LK/runs/${run}/results`)).data.results[0];
+  await mark({ step: 0, result: "passed" });
+  assert.equal((await res()).result, "untested");
+  await mark({ step: 1, result: "failed", actual: "кнопки нет" });
+  let r = await res();
+  assert.equal(r.result, "failed");
+  assert.deepEqual(r.steps["1"], { result: "failed", actual: "кнопки нет" });
+  await mark({ step: 1, result: "passed" });
+  await mark({ step: 2, result: "passed" });
+  r = await res();
+  assert.equal(r.result, "passed");
+  assert.equal(r.steps["1"].actual, "кнопки нет", "фактический результат шага сохраняется");
+  assert.equal((await mark({ step: 7, result: "passed" })).status, 404);
+  // можно и без шагов — итог целиком
+  assert.equal((await mark({ result: "blocked" })).status, 200);
+  // вложение к шагу
+  const up = await fetch(`${srv.base}/api/projects/LK/runs/${run}/results/${k.data.num}/attachments?step=1`, {
+    method: "POST", headers: { cookie: u.tester.cookie, "x-upload": "1", "content-type": "image/png", "x-filename": "step.png" }, body: Buffer.from("png"),
+  });
+  assert.equal(up.status, 201);
+  const files = (await u.tester.get(`/api/projects/LK/runs/${run}/results`)).data.attachments;
+  assert.equal(files.find((f) => f.name === "step.png").step, 1);
+
+  const list = await u.tester.get("/api/projects/LK/cases?tag=" + encodeURIComponent("шаги") + "&count=1");
+  assert.equal(list.data.total, 1);
+  const plan = await u.tester.post("/api/projects/LK/plans", { title: "По тегу", mode: "dynamic", filter: { tags: ["шаги"] } });
+  assert.equal((await u.tester.get(`/api/projects/LK/plans/${plan.data.num}/cases`)).data.cases.length, 1);
+  const bug = await u.tester.post("/api/projects/LK/bugs", { title: "С тегом", severity: "minor", tags: ["ui"] });
+  assert.equal((await u.tester.get("/api/projects/LK/bugs?tag=ui")).data.items[0].num, bug.data.num);
+});
+
+test("пользовательские поля: настройка, проверка значений, обязательность, фильтр", async () => {
+  assert.equal((await u.dev.post("/api/projects/LK/fields", { entity: "case", name: "x", type: "text" })).status, 403);
+  let r = await u.tester.post("/api/projects/LK/fields", { entity: "case", name: "Компонент", type: "select", options: ["Оплата", "Вход"] });
+  assert.equal(r.status, 201);
+  const comp = r.data.id;
+  const story = (await u.tester.post("/api/projects/LK/fields", { entity: "case", name: "История", type: "url" })).data.id;
+  const sp = (await u.tester.post("/api/projects/LK/fields", { entity: "bug", name: "Оценка", type: "number", required: true })).data.id;
+  assert.equal((await u.tester.post("/api/projects/LK/fields", { entity: "case", name: "Компонент", type: "text" })).status, 409);
+
+  r = await u.tester.post("/api/projects/LK/cases", { title: "С полями", priority: "low", status: "ready", fields: { [comp]: "Доставка" } });
+  assert.equal(r.status, 400);
+  assert.match(r.data.error, /нет варианта/);
+  r = await u.tester.post("/api/projects/LK/cases", { title: "С полями", priority: "low", status: "ready", fields: { [comp]: "Оплата", [story]: "ftp://x" } });
+  assert.equal(r.status, 400);
+  r = await u.tester.post("/api/projects/LK/cases", { title: "С полями", priority: "low", status: "ready", fields: { [comp]: "Оплата", [story]: "https://jira/PAY-1" } });
+  assert.equal(r.status, 201);
+  const n = r.data.num;
+  await u.tester.patch(`/api/projects/LK/cases/${n}`, { title: "С полями v2" });
+  const c = (await u.tester.get(`/api/projects/LK/cases/${n}`)).data;
+  assert.equal(c.fields[comp], "Оплата", "правка без fields не стирает значения");
+  assert.equal((await u.tester.get(`/api/projects/LK/cases?field.${comp}=${encodeURIComponent("Оплата")}&count=1`)).data.total, 1);
+
+  assert.equal((await u.tester.post("/api/projects/LK/bugs", { title: "Без оценки", severity: "minor" })).status, 400, "обязательное поле");
+  assert.equal((await u.tester.post("/api/projects/LK/bugs", { title: "С оценкой", severity: "minor", fields: { [sp]: "3" } })).status, 201);
+  const ps = (await u.tester.get("/api/projects/LK/state")).data;
+  assert.ok(ps.customFields.some((f) => f.name === "Компонент"));
+  await u.tester.patch(`/api/projects/LK/fields/${sp}`, { required: false });
+});
+
+test("CSV: теги и ожидаемые результаты шагов туда и обратно", async () => {
+  const csv = "Название;Шаги;Ожидаемые результаты шагов;Теги\nCSV шаги;\"Открыть\nНажать\";\"Открылось\nНажалось\";\"api, csv\"\n";
+  const r = await u.tester.post("/api/projects/LK/cases/import", { csv });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const found = (await u.tester.get("/api/projects/LK/cases?q=" + encodeURIComponent("CSV шаги"))).data.items[0];
+  assert.deepEqual(found.stepList.map((s) => s.expected), ["Открылось", "Нажалось"]);
+  assert.deepEqual(found.tags, ["api", "csv"]);
+  const raw = await fetch(srv.base + "/api/projects/LK/cases/export", { headers: { cookie: u.tester.cookie } });
+  const text = await raw.text();
+  assert.match(text, /Ожидаемые результаты шагов;Теги/);
+  assert.match(text, /"Открылось\r?\nНажалось";api, csv/);
+});
+
+test("экспорт и импорт проекта переносят шаги, теги, поля и результаты шагов", async () => {
+  const exp = await u.tester.get("/api/projects/LK/export");
+  assert.equal(exp.status, 200);
+  const r = await u.admin.post("/api/projects-import", { source: "testball", data: exp.data, key: "CPY" });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const src = (await u.admin.get("/api/projects/LK/cases?q=" + encodeURIComponent("Структурные шаги"))).data.items[0];
+  const dst = (await u.admin.get("/api/projects/CPY/cases?q=" + encodeURIComponent("Структурные шаги"))).data.items[0];
+  assert.deepEqual(dst.stepList, src.stepList);
+  assert.deepEqual(dst.tags, src.tags);
+  const st = (await u.admin.get("/api/projects/CPY/state")).data;
+  const comp = st.customFields.find((f) => f.name === "Компонент");
+  assert.ok(comp);
+  assert.ok(st.cases.some((c) => c.fields[comp.id] === "Оплата"));
+});

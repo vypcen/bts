@@ -40,7 +40,7 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
     ["bugs", "Баги", count.bugs],
     ["auto", "Автотесты", count.auto],
     ["analytics", "Аналитика", null],
-    ...(canEdit ? [["integrations", "Интеграции", null] as [string, string, null], ["trash", "Корзина", null] as [string, string, null]] : []),
+    ...(canEdit ? [["integrations", "Настройки", null] as [string, string, null], ["trash", "Корзина", null] as [string, string, null]] : []),
   ];
 
   return (

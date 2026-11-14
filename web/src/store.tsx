@@ -16,7 +16,7 @@ interface Store {
   reload: () => Promise<void>;
   toast: (msg: string) => void;
   // Выполняет изменение, показывает ошибку тостом и перечитывает состояние. true — если удалось
-  write: (fn: () => Promise<unknown>, okMsg?: string) => Promise<boolean>;
+  write: (fn: () => Promise<unknown>, okMsg?: string, opts?: { queue?: boolean }) => Promise<boolean>;
 }
 
 const Ctx = createContext<Store>(null!);
@@ -93,8 +93,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await Promise.all([loadMeta(), loadProject()]);
   }, [loadMeta, loadProject]);
 
+  // Пока идёт сохранение, повторный вызов игнорируется: защита от двойной отправки формы.
+  // Отметки в прогоне (queue: true) не теряются, а встают в очередь: быстрые клики по шагам и пунктам сохранятся по порядку
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
   const write = useCallback(
-    async (fn: () => Promise<unknown>, okMsg?: string) => {
+    async (fn: () => Promise<unknown>, okMsg?: string, opts?: { queue?: boolean }) => {
+      if (opts?.queue) {
+        const run = queue.current.then(async () => {
+          try {
+            await fn();
+            if (okMsg) toast(okMsg);
+            return true;
+          } catch (e: any) {
+            toast(e.message || "Не удалось сохранить");
+            return false;
+          }
+        });
+        queue.current = run;
+        const ok = await run;
+        // перечитываем, когда очередь опустела: одно обновление на пачку кликов
+        if (queue.current === run) await reload();
+        return ok;
+      }
       if (busy.current) return false;
       busy.current = true;
       try {
@@ -187,6 +207,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         attachments: proj?.attachments || [],
         autoruns: proj?.autoruns || [],
         comments: proj?.comments || [],
+        customFields: proj?.customFields || [],
       };
   // данные проекта ещё грузятся: экраны проекта ждут, чтобы не мигнуть «пусто»
   const projectLoading = Boolean(pid && meta?.projects.some((p) => p.id === pid) && proj?.pid !== pid);

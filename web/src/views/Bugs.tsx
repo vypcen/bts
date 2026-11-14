@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from "react";
+import { FieldsEditor, FieldsView, missingRequired, TagInput, Tags, useFields, useProjectTags } from "../casekit";
 import { AI_NOTE, AiBar, useAi, useAiReady } from "../ai";
 import { api, paths } from "../api";
 import { BUG_FLOW, BUG_STATUSES, find, isOpenBug, SEVERITIES, transitionLabel } from "../labels";
 import { go, href } from "../router";
 import { assigneesOf, countBy } from "../selectors";
 import { useCanEdit, useData, useLoad, useStore } from "../store";
-import type { Bug, BugStatus, Project, Result, Run, Severity, TestCase } from "../types";
+import type { Bug, BugStatus, FieldValues, Project, Result, Run, Severity, TestCase } from "../types";
 import { CommentCount, Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who, PagedRows } from "../ui";
 import { Attachments } from "./Attachments";
 import { Comments } from "./Comments";
@@ -20,13 +21,32 @@ export interface BugDraft {
   expected: string;
   caseNum?: number;
   runNum?: number;
+  tags?: string[];
+  fields?: FieldValues;
 }
 
 const SEV_BY_PRIO: Record<TestCase["priority"], Severity> = { critical: "critical", high: "major", medium: "major", low: "minor" };
 
 // Баг из упавшего кейса: шаги, ожидаемый результат и окружение переносятся из кейса и прогона.
 // item — упавший пункт чек-листа: баг про него, а сам пункт и есть ожидаемый результат
-export function draftFromCase(c: TestCase, run?: Run, result?: Result, item?: string): BugDraft {
+export function draftFromCase(c: TestCase, run?: Run, result?: Result, item?: string, step?: number): BugDraft {
+  // баг из упавшего шага: шаги до него включительно, фактический — что записали у шага, ожидаемый — ожидаемый шага
+  const list = c.stepList?.length ? c.stepList : [];
+  if (step !== undefined && list[step]) {
+    const st = list[step];
+    const sr = result?.steps?.[step];
+    return {
+      title: `${c.title}: шаг ${step + 1}`.slice(0, 500),
+      severity: SEV_BY_PRIO[c.priority],
+      assignee: "",
+      env: run ? [run.build && `Сборка ${run.build}`, run.env].filter(Boolean).join(", ") : "",
+      steps: [c.pre && `Предусловия: ${c.pre}`, ...list.slice(0, step + 1).map((s) => s.action + (s.data ? ` (${s.data})` : ""))].filter(Boolean).join("\n"),
+      actual: sr?.actual || result?.comment || "",
+      expected: st.expected || c.expected,
+      caseNum: c.num,
+      runNum: run?.num,
+    };
+  }
   return {
     title: item ? `${c.title}: ${item}`.slice(0, 500) : c.title,
     severity: SEV_BY_PRIO[c.priority],
@@ -51,6 +71,8 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
   const [fStatus, setFStatus] = useState("open");
   const [fSev, setFSev] = useState("all");
   const [fWho, setFWho] = useState("all");
+  const [fTag, setFTag] = useState("");
+  const tagList = useProjectTags("bugs");
   const [editing, setEditing] = useState<{ bug?: Bug; draft: BugDraft } | null>(null);
   const nameOf = useNames();
 
@@ -61,6 +83,7 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
       (fStatus === "all" || (fStatus === "open" ? isOpenBug(b.status) : b.status === fStatus)) &&
       (fSev === "all" || b.severity === fSev) &&
       (fWho === "all" || (fWho === "none" ? !b.assignee : b.assignee === fWho)) &&
+      (!fTag || b.tags?.includes(fTag)) &&
       (!needle || b.title.toLowerCase().includes(needle) || b.id.toLowerCase().includes(needle)))
     // сначала самые серьёзные, внутри — свежие
     .sort((a, b) => SEVERITIES.findIndex((s) => s.key === a.severity) - SEVERITIES.findIndex((s) => s.key === b.severity) || b.num - a.num);
@@ -77,6 +100,12 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
           <option value="all">Все статусы</option>
           {BUG_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
         </select>
+        {tagList.length > 0 && (
+          <select className="input" aria-label="Тег" value={fTag} onChange={(e) => setFTag(e.target.value)}>
+            <option value="">Любой тег</option>
+            {tagList.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        )}
         <select className="input" aria-label="Серьёзность" value={fSev} onChange={(e) => setFSev(e.target.value)}>
           <option value="all">Любая серьёзность</option>
           {SEVERITIES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
@@ -104,7 +133,7 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
               </tr>
             </thead>
             <tbody>
-              <PagedRows items={rows} reset={rows.length}>{(b) => {
+              <PagedRows items={rows} reset={`${fStatus}|${fSev}|${fWho}|${fTag}|${needle}`}>{(b) => {
                 const st = find(BUG_STATUSES, b.status);
                 return (
                   <tr key={b.id} className="click" aria-selected={viewing?.num === b.num} onClick={() => go("p", p, "bugs", b.num)}>
@@ -128,7 +157,7 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
       ) : viewing ? (
         <BugDrawer bug={viewing} onClose={() => go("p", p, "bugs")} onEdit={() => {
           const { title, severity, assignee, env, steps, actual, expected } = viewing;
-          setEditing({ bug: viewing, draft: { title, severity, assignee: assignee || "", env, steps, actual, expected } });
+          setEditing({ bug: viewing, draft: { title, severity, assignee: assignee || "", env, steps, actual, expected, tags: viewing.tags, fields: viewing.fields } });
         }} />
       ) : null}
     </>
@@ -209,6 +238,8 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
       <ExternalIssue bug={bug} />
       <TextBlock label="Окружение / версия" text={bug.env} />
       <TextBlock label="Шаги воспроизведения" text={bug.steps} empty="Не указаны" steps />
+      {bug.tags?.length > 0 && <div className="view-block"><span className="label">Теги</span><Tags tags={bug.tags} /></div>}
+      <FieldsView entity="bug" values={bug.fields} />
       <div className="row2">
         <TextBlock label="Фактический результат" text={bug.actual} empty="Не указан" />
         <TextBlock label="Ожидаемый результат" text={bug.expected} empty="Не указан" />
@@ -276,6 +307,8 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
   const nameOf = useNames();
   const [f, setF] = useState(draft);
   const [err, setErr] = useState("");
+  const fieldDefs = useFields("bug");
+  const bugTags = useProjectTags("bugs");
   const set = (k: keyof BugDraft) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const linkedCase = draft.caseNum ? data.cases.find((c) => c.pid === pid && c.num === draft.caseNum) : undefined;
   const aiReady = useAiReady();
@@ -293,6 +326,8 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!f.title.trim()) return setErr("Укажите заголовок бага");
+    const missing = missingRequired(fieldDefs, f.fields || {});
+    if (missing) return setErr(missing);
     if (bug) {
       if (await write(() => api("PATCH", paths.bug(pid, bug.num), f), "Изменения сохранены")) onClose();
       return;
@@ -332,6 +367,8 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
         <div className="field"><label htmlFor="b-steps">Шаги воспроизведения</label><textarea className="input" id="b-steps" rows={5} placeholder="Каждый шаг с новой строки" value={f.steps} onChange={set("steps")} /></div>
         <div className="field"><label htmlFor="b-act">Фактический результат</label><textarea className="input" id="b-act" rows={3} value={f.actual} onChange={set("actual")} placeholder="Что произошло на самом деле" /></div>
         <div className="field"><label htmlFor="b-exp">Ожидаемый результат</label><textarea className="input" id="b-exp" rows={3} value={f.expected} onChange={set("expected")} /></div>
+        <div className="field"><label htmlFor="b-tags">Теги</label><TagInput id="b-tags" value={f.tags || []} onChange={(tags) => setF({ ...f, tags })} suggestions={bugTags} /></div>
+        <FieldsEditor entity="bug" values={f.fields || {}} onChange={(fields) => setF({ ...f, fields })} />
         <div className="err">{err}</div>
       </form>
     </Drawer>

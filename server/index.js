@@ -23,6 +23,7 @@ const ci = require("./ci");
 const projectio = require("./projectio");
 const state = require("./state");
 const lists = require("./lists");
+const casemodel = require("./casemodel");
 const audit = require("./audit");
 const trash = require("./trash");
 const { wrap, str, num, HttpError } = require("./util");
@@ -253,7 +254,7 @@ app.use("/api/projects-import", auth.requireUser, access.requireWriter, projecti
 
 // Всё внутри проекта: доступ только участникам и админам, изменения — только тестировщикам и админам (кроме комментариев)
 app.use("/api/projects/:key", auth.requireUser, access.project, live.inProject);
-app.use("/api/projects/:key", state.router, lists.router, trash.router);
+app.use("/api/projects/:key", state.router, lists.router, trash.router, casemodel.router);
 app.use("/api/search", auth.requireUser, lists.searchRouter);
 // Настройки интеграций содержат адреса и заголовки внутренних систем — их видят только те, кто может менять проект
 app.use(["/api/projects/:key/webhooks", "/api/projects/:key/tracker"], (req, res, next) =>
@@ -272,7 +273,17 @@ app.patch("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
 // Проект — в корзину (только админ, с подтверждением ключом). Навсегда — из корзины в «Пользователи» → «Корзина»
 app.delete("/api/projects/:key", auth.requireUser, wrap(trash.deleteProject));
 
-function readCase(body) {
+// body — присланное (при правке — поверх текущего кейса, prevSteps — его шаги).
+// Шаги принимаются структурой (stepList: [{action, expected, data}]) или текстом по строке на шаг (steps) — так
+// работают CSV, старые клиенты API и языковая модель; из текста ожидаемые результаты шагов сохраняются, если действия те же
+// Логины участников проекта (и админов) — для полей «пользователь»
+async function memberLogins(key) {
+  const { rows } = await pool.query(
+    "SELECT u.login FROM users u WHERE u.role='admin' OR EXISTS (SELECT 1 FROM project_members m WHERE m.user_id=u.id AND m.project_key=$1)", [key]);
+  return new Set(rows.map((r) => r.login));
+}
+
+function readCase(body, prevSteps = [], stepListSent = body.stepList !== undefined) {
   const c = {
     kind: body.kind === undefined ? "case" : str(body.kind, 20),
     title: str(body.title, 500),
@@ -281,7 +292,14 @@ function readCase(body) {
     pre: str(body.pre),
     steps: str(body.steps),
     expected: str(body.expected),
+    stepList: [],
+    tags: casemodel.normalizeTags(body.tags) || [],
   };
+  if (c.kind === "case") {
+    c.stepList = stepListSent ? casemodel.normalizeSteps(body.stepList) : casemodel.stepsFromText(c.steps, prevSteps);
+    if (!c.stepList) return { error: "stepList: ожидается список шагов [{action, expected, data}]" };
+    c.steps = casemodel.stepsText(c.stepList);
+  }
   if (!checklist.KINDS.includes(c.kind)) return { error: "Неизвестный вид: case или checklist" };
   if (!c.title) return { error: c.kind === "checklist" ? "Укажите название чек-листа" : "Укажите название тест-кейса" };
   if (!PRIORITIES.includes(c.priority)) return { error: "Неизвестный приоритет" };
@@ -298,6 +316,8 @@ function readCase(body) {
 app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => {
   const { c, error } = readCase(req.body);
   if (error) return res.status(400).json({ error });
+  const cf = await casemodel.readFields(pool, req.params.key, "case", req.body.fields, {}, { members: await memberLogins(req.params.key) });
+  if (cf.error) return res.status(400).json({ error: cf.error });
   const folder = await folders.folderId(pool, req.params.key, req.body.folder);
   if (folder === undefined) return res.status(400).json({ error: "Папка не найдена" });
   const n = await tx(async (db) => {
@@ -306,9 +326,11 @@ app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => 
     if (!r.rows[0]) return null;
     const next = r.rows[0].seq;
     await db.query(
-      `INSERT INTO test_cases(project_key, num, kind, folder_id, title, priority, status, preconditions, steps, expected, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`,
-      [req.params.key, next, c.kind, folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id]
+      `INSERT INTO test_cases(project_key, num, kind, folder_id, title, priority, status, preconditions, steps, expected, created_by, updated_by,
+         step_list, tags, fields)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,$14)`,
+      [req.params.key, next, c.kind, folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id,
+        JSON.stringify(c.stepList), c.tags, cf.fields]
     );
     return next;
   });
@@ -321,10 +343,16 @@ app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => 
 app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, res) => {
   const n = num(req.params.num);
   // частичное обновление: можно прислать только status
-  const { rows } = await pool.query("SELECT kind, folder_id, title, priority, status, preconditions AS pre, steps, expected, version FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, n]);
+  const { rows } = await pool.query(
+    `SELECT kind, folder_id, title, priority, status, preconditions AS pre, steps, expected, version, step_list, tags, fields
+     FROM test_cases WHERE project_key=$1 AND num=$2`, [req.params.key, n]);
   if (!rows[0]) return res.status(404).json({ error: "Тест-кейс не найден" });
-  const { c, error } = readCase({ ...rows[0], ...req.body });
+  // шаги: прислали structure — берём её; прислали только текст — разбираем, сохраняя ожидаемые результаты; ничего — как были
+  const stepListSent = req.body.stepList !== undefined || req.body.steps === undefined;
+  const { c, error } = readCase({ ...rows[0], stepList: rows[0].step_list, ...req.body }, rows[0].step_list, stepListSent);
   if (error) return res.status(400).json({ error });
+  const cf = await casemodel.readFields(pool, req.params.key, "case", req.body.fields, rows[0].fields, { members: await memberLogins(req.params.key) });
+  if (cf.error) return res.status(400).json({ error: cf.error });
   // folder: null — в корень проекта; не прислали — остаётся где был
   const folder = req.body.folder === undefined ? rows[0].folder_id : await folders.folderId(pool, req.params.key, req.body.folder);
   if (folder === undefined) return res.status(400).json({ error: "Папка не найдена" });
@@ -333,9 +361,11 @@ app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, re
     return res.status(409).json({ error: `Кейс уже изменили (сейчас версия ${rows[0].version}). Обновите страницу и повторите правку`, version: rows[0].version });
   }
   const upd = await pool.query(
-    `UPDATE test_cases SET folder_id=$1, title=$2, priority=$3, status=$4, preconditions=$5, steps=$6, expected=$7, updated_by=$8, updated_at=now(), kind=$11
+    `UPDATE test_cases SET folder_id=$1, title=$2, priority=$3, status=$4, preconditions=$5, steps=$6, expected=$7, updated_by=$8, updated_at=now(), kind=$11,
+       step_list=$12, tags=$13, fields=$14
      WHERE project_key=$9 AND num=$10 RETURNING version`,
-    [folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, n, c.kind]
+    [folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, n, c.kind,
+      JSON.stringify(c.stepList), req.body.tags === undefined ? rows[0].tags : c.tags, cf.fields]
   );
   broadcast("cases");
   const version = upd.rows[0].version;
@@ -386,7 +416,7 @@ app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, r
 // ---------- версии тест-кейса ----------
 const versionOut = (v) => ({
   version: v.version, kind: v.kind, title: v.title, priority: v.priority, status: v.status, pre: v.preconditions, steps: v.steps,
-  expected: v.expected, changedBy: v.changed_by_login, changed: v.changed_at.getTime(),
+  expected: v.expected, stepList: v.step_list, tags: v.tags, fields: v.fields, changedBy: v.changed_by_login, changed: v.changed_at.getTime(),
 });
 const versionSql = `SELECT v.*, u.login AS changed_by_login FROM test_case_versions v JOIN test_cases c ON c.id=v.case_id
   LEFT JOIN users u ON u.id=v.changed_by WHERE c.project_key=$1 AND c.num=$2`;
@@ -409,9 +439,11 @@ app.post("/api/projects/:key/cases/:num/versions/:v/restore", auth.requireUser, 
   if (!rows[0]) return res.status(404).json({ error: "Версия не найдена" });
   const v = rows[0];
   const upd = await pool.query(
-    `UPDATE test_cases SET kind=$1, title=$2, priority=$3, status=$4, preconditions=$5, steps=$6, expected=$7, updated_by=$8, updated_at=now()
+    `UPDATE test_cases SET kind=$1, title=$2, priority=$3, status=$4, preconditions=$5, steps=$6, expected=$7, updated_by=$8, updated_at=now(),
+       step_list=$11, tags=$12, fields=$13
      WHERE project_key=$9 AND num=$10 RETURNING version`,
-    [v.kind, v.title, v.priority, v.status, v.preconditions, v.steps, v.expected, req.user.id, req.params.key, num(req.params.num)]
+    [v.kind, v.title, v.priority, v.status, v.preconditions, v.steps, v.expected, req.user.id, req.params.key, num(req.params.num),
+      JSON.stringify(v.step_list), v.tags, v.fields]
   );
   broadcast("cases");
   events.emit(req.params.key, "case.updated", { case: await events.snap.testCase(req.params.key, num(req.params.num)), restoredFrom: v.version }, req.user);

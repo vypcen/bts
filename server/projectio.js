@@ -4,6 +4,7 @@
 // Импорт создаёт новый проект из такого файла. Тем же путём переносятся данные из других TMS:
 // TestRail (XML-экспорт), TestLink (XML-экспорт), Qase (JSON-экспорт) — они сначала приводятся к формату testball-project.
 const express = require("express");
+const casemodel = require("./casemodel");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const attachments = require("./attachments");
@@ -22,6 +23,10 @@ async function exportProject(key, withFiles) {
   const q = (sql) => pool.query(sql, [key]).then((r) => r.rows);
   const [project] = await q("SELECT key, name, description FROM projects WHERE key=$1");
   if (!project) throw new HttpError(404, "Проект не найден");
+  const [customFields] = [await q("SELECT id, entity, name, type, options, required, position FROM custom_fields WHERE project_key=$1 ORDER BY entity, position, id")];
+  // значения пользовательских полей — по названию поля: id в другой установке будут другими
+  const fieldName = new Map(customFields.map((f) => [String(f.id), f.name]));
+  const byName = (vals) => Object.fromEntries(Object.entries(vals || {}).filter(([id]) => fieldName.has(id)).map(([id, v]) => [fieldName.get(id), v]));
   const [folders, cases, versions, plans, planCases, runs, results, bugs, bugLog, comments, autotests, autoruns, autoresults, files] = await Promise.all([
     q("SELECT id, parent_id, name FROM case_folders WHERE project_key=$1 ORDER BY id"),
     q(`SELECT c.*, cu.login AS cb, uu.login AS ub FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by
@@ -73,13 +78,15 @@ async function exportProject(key, withFiles) {
     format: FORMAT, version: 1, exported: new Date().toISOString(),
     project: { key: project.key, name: project.name, description: project.description },
     folders: folders.map((f) => ({ id: f.id, parent: f.parent_id, name: f.name })),
+    customFields: customFields.map((f) => ({ entity: f.entity, name: f.name, type: f.type, options: f.options, required: f.required, position: f.position })),
     cases: cases.map((c) => ({
       num: c.num, kind: c.kind, folder: c.folder_id, title: c.title, priority: c.priority, status: c.status, pre: c.preconditions,
-      steps: c.steps, expected: c.expected, checked: c.checked, version: c.version, createdBy: c.cb, updatedBy: c.ub,
+      steps: c.steps, expected: c.expected, stepList: c.step_list, tags: c.tags, fields: byName(c.fields),
+      checked: c.checked, version: c.version, createdBy: c.cb, updatedBy: c.ub,
       created: iso(c.created_at), updated: iso(c.updated_at),
       versions: versions.filter((v) => v.num === c.num).map((v) => ({
         version: v.version, kind: v.kind, title: v.title, priority: v.priority, status: v.status, pre: v.preconditions, steps: v.steps,
-        expected: v.expected, changedBy: v.by, changed: iso(v.changed_at),
+        expected: v.expected, stepList: v.step_list, tags: v.tags, fields: byName(v.fields), changedBy: v.by, changed: iso(v.changed_at),
       })),
     })),
     plans: plans.map((p) => ({
@@ -88,16 +95,16 @@ async function exportProject(key, withFiles) {
       cases: planCases.filter((x) => x.plan === p.num).map((x) => ({ num: x.num, version: x.case_version })),
     })),
     runs: runs.map((r) => ({
-      num: r.num, title: r.title, build: r.build, env: r.environment, state: r.state, plan: r.plan_num, createdBy: r.cb,
+      num: r.num, title: r.title, build: r.build, env: r.environment, state: r.state, plan: r.plan_num, createdBy: r.cb, fields: byName(r.fields),
       created: iso(r.created_at), closed: iso(r.closed_at),
       results: results.filter((x) => x.run_num === r.num).map((x) => ({
-        case: x.case_num, result: x.result, comment: x.comment, items: x.items, executedBy: x.eb, executed: iso(x.executed_at),
+        case: x.case_num, result: x.result, comment: x.comment, items: x.items, steps: x.step_results, executedBy: x.eb, executed: iso(x.executed_at),
         assignee: x.ab, caseVersion: x.case_version, attachments: filesOf("run_result_id", x.id),
       })),
     })),
     bugs: bugs.map((b) => ({
       num: b.num, title: b.title, status: b.status, severity: b.severity, assignee: b.ab, env: b.environment, steps: b.steps,
-      actual: b.actual, expected: b.expected, case: b.case_num, run: b.run_num, duplicateOf: b.dup_num,
+      actual: b.actual, expected: b.expected, case: b.case_num, run: b.run_num, duplicateOf: b.dup_num, tags: b.tags, fields: byName(b.fields),
       external: b.external_key ? { key: b.external_key, url: b.external_url, status: b.external_status } : null,
       createdBy: b.cb, updatedBy: b.ub, created: iso(b.created_at), updated: iso(b.updated_at), attachments: filesOf("bug_id", b.id),
       log: bugLog.filter((l) => l.num === b.num).map((l) => ({ from: l.from_status, to: l.to_status, by: l.by, at: iso(l.changed_at) })),
@@ -172,6 +179,23 @@ async function importProject(data, { key, name }, user) {
         }
       }
 
+      // пользовательские поля: создаём и сопоставляем значения по названию
+      const fieldIds = { case: new Map(), bug: new Map(), run: new Map() };
+      for (const f of arr(data.customFields)) {
+        const entity = oneOf(f.entity, ["case", "bug", "run"], null);
+        const type = oneOf(f.type, casemodel.TYPES, null);
+        if (!entity || !type || !str(f.name, 100)) continue;
+        const { rows } = await db.query(
+          `INSERT INTO custom_fields(project_key, entity, name, type, options, required, position) VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT DO NOTHING RETURNING id`,
+          [key, entity, str(f.name, 100), type, JSON.stringify(arr(f.options).map((o) => str(o, 100)).filter(Boolean)), f.required === true, num(f.position) || 0]
+        );
+        if (rows[0]) fieldIds[entity].set(str(f.name, 100), rows[0].id);
+      }
+      const fieldsOf = (entity, vals) =>
+        Object.fromEntries(Object.entries(vals && typeof vals === "object" ? vals : {}).filter(([n]) => fieldIds[entity].has(n)).map(([n, v]) => [fieldIds[entity].get(n), v]));
+      const stepListOf = (c, kind) => (kind === "checklist" ? [] : casemodel.normalizeSteps(c.stepList) || casemodel.stepsFromText(str(c.steps)));
+
       // кейсы: текущая версия создаётся триггером, прошлые версии — отдельно
       const caseId = new Map();
       for (const c of cases) {
@@ -180,20 +204,23 @@ async function importProject(data, { key, name }, user) {
         const kind = oneOf(c.kind, ["case", "checklist"], "case");
         const { rows } = await db.query(
           `INSERT INTO test_cases(project_key, num, kind, folder_id, title, priority, status, preconditions, steps, expected, checked, version,
-             created_by, updated_by, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+             created_by, updated_by, created_at, updated_at, step_list, tags, fields)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
           [key, n, kind, c.folder == null ? null : folderId.get(c.folder) ?? null, str(c.title, 500) || `Кейс ${n}`,
             oneOf(c.priority, PRIORITIES, "medium"), oneOf(c.status, ["draft", "ready", "deprecated"], "draft"),
             kind === "checklist" ? "" : str(c.pre), str(c.steps), kind === "checklist" ? "" : str(c.expected),
-            c.checked && typeof c.checked === "object" ? c.checked : {}, num(c.version) || 1, u(c.createdBy), u(c.updatedBy), date(c.created), date(c.updated)]
+            c.checked && typeof c.checked === "object" ? c.checked : {}, num(c.version) || 1, u(c.createdBy), u(c.updatedBy), date(c.created), date(c.updated),
+            JSON.stringify(stepListOf(c, kind)), casemodel.normalizeTags(c.tags) || [], fieldsOf("case", c.fields)]
         );
         caseId.set(n, rows[0].id);
         for (const v of arr(c.versions)) {
           await db.query(
-            `INSERT INTO test_case_versions(case_id, version, kind, title, priority, status, preconditions, steps, expected, changed_by, changed_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
+            `INSERT INTO test_case_versions(case_id, version, kind, title, priority, status, preconditions, steps, expected, changed_by, changed_at,
+               step_list, tags, fields)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT DO NOTHING`,
             [rows[0].id, num(v.version) || 1, oneOf(v.kind, ["case", "checklist"], "case"), str(v.title, 500) || "—", oneOf(v.priority, PRIORITIES, "medium"),
-              oneOf(v.status, ["draft", "ready", "deprecated"], "draft"), str(v.pre), str(v.steps), str(v.expected), u(v.changedBy), date(v.changed)]
+              oneOf(v.status, ["draft", "ready", "deprecated"], "draft"), str(v.pre), str(v.steps), str(v.expected), u(v.changedBy), date(v.changed),
+              JSON.stringify(stepListOf(v, oneOf(v.kind, ["case", "checklist"], "case"))), casemodel.normalizeTags(v.tags) || [], fieldsOf("case", v.fields)]
           );
         }
       }
@@ -230,19 +257,20 @@ async function importProject(data, { key, name }, user) {
       const resultId = new Map(); // "run:case" → id
       for (const r of runs) {
         const { rows } = await db.query(
-          `INSERT INTO test_runs(project_key, num, title, build, environment, state, plan_id, created_by, created_at, closed_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+          `INSERT INTO test_runs(project_key, num, title, build, environment, state, plan_id, created_by, created_at, closed_at, fields)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
           [key, num(r.num), str(r.title, 300) || "Прогон", str(r.build, 200), str(r.env, 500), oneOf(r.state, ["open", "closed"], "closed"),
-            planId.get(num(r.plan)) ?? null, u(r.createdBy), date(r.created), r.closed ? date(r.closed) : null]
+            planId.get(num(r.plan)) ?? null, u(r.createdBy), date(r.created), r.closed ? date(r.closed) : null, fieldsOf("run", r.fields)]
         );
         for (const x of arr(r.results)) {
           const cid = caseId.get(num(x.case));
           if (!cid) continue;
           const { rows: rr } = await db.query(
-            `INSERT INTO run_results(run_id, case_id, result, comment, items, executed_by, executed_at, assignee_id, case_version)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id`,
+            `INSERT INTO run_results(run_id, case_id, result, comment, items, executed_by, executed_at, assignee_id, case_version, step_results)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING RETURNING id`,
             [rows[0].id, cid, oneOf(x.result, ["untested", "passed", "failed", "blocked", "skipped"], "untested"), str(x.comment),
-              x.items && typeof x.items === "object" ? x.items : {}, u(x.executedBy), x.executed ? date(x.executed) : null, u(x.assignee), num(x.caseVersion)]
+              x.items && typeof x.items === "object" ? x.items : {}, u(x.executedBy), x.executed ? date(x.executed) : null, u(x.assignee), num(x.caseVersion),
+              x.steps && typeof x.steps === "object" && !Array.isArray(x.steps) ? x.steps : {}]
           );
           if (!rr[0]) continue;
           resultId.set(`${num(r.num)}:${num(x.case)}`, rr[0].id);
@@ -255,13 +283,13 @@ async function importProject(data, { key, name }, user) {
         const ext = b.external && typeof b.external === "object" ? b.external : null;
         const { rows } = await db.query(
           `INSERT INTO bugs(project_key, num, title, status, severity, assignee_id, environment, steps, actual, expected, case_id, run_result_id,
-             external_key, external_url, external_status, created_by, updated_by, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+             external_key, external_url, external_status, created_by, updated_by, created_at, updated_at, tags, fields)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
           [key, num(b.num), str(b.title, 500) || "Баг", oneOf(b.status, ["new", "in_progress", "fixed", "verified", "closed", "rejected", "duplicate"], "new"),
             oneOf(b.severity, ["blocker", "critical", "major", "minor"], "major"), u(b.assignee), str(b.env, 500), str(b.steps), str(b.actual), str(b.expected),
             caseId.get(num(b.case)) ?? null, resultId.get(`${num(b.run)}:${num(b.case)}`) ?? null,
             ext ? str(ext.key, 100) : null, ext ? str(ext.url, 1000) : null, ext ? str(ext.status, 100) : null,
-            u(b.createdBy), u(b.updatedBy), date(b.created), date(b.updated)]
+            u(b.createdBy), u(b.updatedBy), date(b.created), date(b.updated), casemodel.normalizeTags(b.tags) || [], fieldsOf("bug", b.fields)]
         );
         bugId.set(num(b.num), rows[0].id);
         for (const l of arr(b.log)) {
@@ -338,10 +366,12 @@ function builder(name) {
 }
 
 // «Шаг / ожидаемое» → шаги по строке и ожидаемый результат с номерами шагов
+// Шаги из другой TMS: действие и ожидаемый результат каждого шага переносятся как есть (структурные шаги)
 function joinSteps(list) {
-  const steps = list.map((s) => s.action.replace(/\n+/g, " ").trim()).filter(Boolean);
-  const expected = list.map((s, i) => (s.expected ? `${i + 1}. ${s.expected.replace(/\n+/g, " ").trim()}` : "")).filter(Boolean);
-  return { steps: steps.join("\n"), expected: expected.join("\n") };
+  const stepList = list
+    .map((s) => ({ action: s.action.replace(/\n+/g, " ").trim(), expected: (s.expected || "").replace(/\n+/g, " ").trim(), data: "" }))
+    .filter((s) => s.action || s.expected);
+  return { steps: stepList.map((s) => s.action).join("\n"), stepList, expected: "" };
 }
 
 const PRIO = {

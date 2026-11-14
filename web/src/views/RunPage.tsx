@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { api, paths } from "../api";
+import { FieldsView, stepsOf, StepsView } from "../casekit";
 import { checkedCount, checklistItems, itemMark } from "../checklist";
 import { BUG_STATUSES, find, RESULTS } from "../labels";
 import { go, href } from "../router";
@@ -60,7 +61,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
     .sort((a, b) => a.c.num - b.c.num);
   const bugsOf = (r: Result) => data.bugs.filter((b) => b.pid === p && (b.resultId === r.id || (b.caseNum === r.caseNum && b.runNum === num)));
   const mark = (r: Result, result: ResultValue) =>
-    write(() => api("PATCH", paths.result(p, num, r.caseNum), { result: r.result === result ? "untested" : result }));
+    write(() => api("PATCH", paths.result(p, num, r.caseNum), { result: r.result === result ? "untested" : result }), undefined, { queue: true });
   const sel = selected !== null ? results.find((r) => r.caseNum === selected) : undefined;
   const done = results.length - counts.untested;
 
@@ -83,6 +84,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
             {run.build ? <>Сборка <span className="mono">{run.build}</span></> : "Сборка не указана"}
             {run.env && <> · {run.env}</>} · создал <Who login={run.createdBy} /> {fmt(run.created)}
           </p>
+          <FieldsView entity="run" values={run.fields} />
         </div>
         <div className="spacer" />
         <div className="acts">
@@ -246,17 +248,29 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   };
   const pick = async (v: ResultValue) => {
     const result = r.result === v ? "untested" : v;
-    await write(() => api("PATCH", paths.result(p, run.num, c.num), dirty ? { result, comment } : { result }));
+    await write(() => api("PATCH", paths.result(p, run.num, c.num), dirty ? { result, comment } : { result }), undefined, { queue: true });
   };
   // пункт чек-листа: повторное нажатие на ту же отметку снимает её
   const items = checklistItems(c);
   const pickItem = (item: string, v: ResultValue) =>
-    write(() => api("PATCH", paths.result(p, run.num, c.num), { item, result: itemMark(r, item) === v ? "untested" : v }));
+    write(() => api("PATCH", paths.result(p, run.num, c.num), { item, result: itemMark(r, item) === v ? "untested" : v }), undefined, { queue: true });
   const nameOf = useNames();
   // кейс изменили после того, как его добавили в прогон или проверили: показываем текст проверяемой версии
   const outdated = r.caseVersion !== null && r.caseVersion !== c.version;
   const ver = useLoad<CaseVersion>(outdated ? `${paths.versions(p, c.num)}/${r.caseVersion}` : null);
-  const shown = outdated && ver.value ? { ...c, pre: ver.value.pre, steps: ver.value.steps, expected: ver.value.expected, kind: ver.value.kind } : c;
+  const shown = outdated && ver.value
+    ? { ...c, pre: ver.value.pre, steps: ver.value.steps, expected: ver.value.expected, kind: ver.value.kind, stepList: ver.value.stepList }
+    : c;
+  const stepList = stepsOf(shown);
+  // результат шага; повторное нажатие на ту же отметку снимает её
+  const pickStep = (i: number, v: ResultValue) =>
+    write(() => api("PATCH", paths.result(p, run.num, c.num), { step: i, result: r.steps?.[i]?.result === v ? "untested" : v }), undefined, { queue: true });
+  const [actuals, setActuals] = useState<Record<number, string>>({});
+  const saveActual = (i: number) => {
+    const text = actuals[i];
+    if (text === undefined || text === (r.steps?.[i]?.actual || "")) return;
+    write(() => api("PATCH", paths.result(p, run.num, c.num), { step: i, result: r.steps?.[i]?.result || "failed", actual: text }), "Сохранено", { queue: true });
+  };
   const people = executorsOf(data, p);
 
   return (
@@ -327,7 +341,30 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
       ) : (
         <>
           <TextBlock label="Предусловия" text={shown.pre} empty="Не указаны" />
-          <TextBlock label="Шаги" text={shown.steps} empty="Не указаны" steps />
+          <div className="view-block">
+            <span className="label">Шаги{stepList.length ? ` · отмечено ${Object.values(r.steps || {}).filter((x) => x.result !== "untested").length} из ${stepList.length}` : ""}</span>
+            <StepsView steps={stepList} render={(_, i) => {
+              const sr = r.steps?.[i];
+              const m: ResultValue = sr?.result || "untested";
+              const bad = m === "failed" || m === "blocked";
+              const stepFiles = files.filter((a) => a.step === i);
+              return (
+                <div className="step-mark">
+                  {open ? <ResultButtons value={m} onPick={(v) => pickStep(i, v)} label={`Результат шага ${i + 1}`} /> : <ResultPill r={m} sm />}
+                  {canEdit && bad && (
+                    <button className="btn sm" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(shown, run, { ...r, comment: comment.trim() }, undefined, i)); }}>+ Баг</button>
+                  )}
+                  {(bad || sr?.actual) && (
+                    <input className="input" aria-label={`Фактический результат шага ${i + 1}`} placeholder="Что произошло на этом шаге" disabled={!open}
+                      value={actuals[i] ?? sr?.actual ?? ""} onChange={(e) => setActuals({ ...actuals, [i]: e.target.value })} onBlur={() => open && saveActual(i)} />
+                  )}
+                  {(bad || stepFiles.length > 0) && (
+                    <Attachments list={stepFiles} uploadUrl={open ? `${paths.result(p, run.num, c.num)}/attachments?step=${i}` : undefined} compact />
+                  )}
+                </div>
+              );
+            }} />
+          </div>
           <TextBlock label="Ожидаемый результат" text={shown.expected} empty="Не указан" />
         </>
       )}
@@ -336,7 +373,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
         <textarea className="input" id="rr-comment" rows={3} value={comment} disabled={!open} onChange={(e) => setComment(e.target.value)} onBlur={() => open && saveComment()}
           placeholder="Что увидели при проверке. Попадёт в поле «Фактический результат», если заведёте баг" />
       </div>
-      <Attachments list={files} uploadUrl={open ? `${paths.result(p, run.num, c.num)}/attachments` : undefined} paste={open} />
+      <Attachments list={files.filter((a) => a.step == null)} uploadUrl={open ? `${paths.result(p, run.num, c.num)}/attachments` : undefined} paste={open} />
       {bugs.length > 0 && (
         <div className="view-block">
           <span className="label">Баги из этого прогона</span>

@@ -1,5 +1,6 @@
 import { Fragment, useState, type FormEvent } from "react";
 import { api, paths } from "../api";
+import { FieldsEditor, missingRequired, useFields } from "../casekit";
 import { href, go } from "../router";
 import { folderTree, withSubfolders } from "../selectors";
 import { useCanEdit, useData, useStore } from "../store";
@@ -70,7 +71,8 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
   const { write, toast } = useStore();
   const cases = data.cases.filter((c) => c.pid === pid && c.status !== "deprecated").sort((a, b) => a.num - b.num);
   const lastRun = data.runs.filter((r) => r.pid === pid).sort((a, b) => b.num - a.num)[0];
-  const [f, setF] = useState({ title: run?.title || "", build: run?.build || "", env: run?.env ?? lastRun?.env ?? "" });
+  const [f, setF] = useState({ title: run?.title || "", build: run?.build || "", env: run?.env ?? lastRun?.env ?? "", fields: run?.fields || {} });
+  const fieldDefs = useFields("run");
   // по умолчанию — все кейсы, готовые к прогону
   const [picked, setPicked] = useState<Set<number>>(() => new Set(cases.filter((c) => c.status === "ready").map((c) => c.num)));
   const [err, setErr] = useState("");
@@ -80,6 +82,8 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!f.title.trim()) return setErr("Укажите название прогона");
+    const missing = missingRequired(fieldDefs, f.fields);
+    if (missing) return setErr(missing);
     if (run) {
       if (await write(() => api("PATCH", paths.run(pid, run.num), f), "Прогон сохранён")) onClose();
       return;
@@ -103,6 +107,7 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
           <div className="field"><label htmlFor="r-build">Сборка / версия</label><input className="input mono" id="r-build" value={f.build} onChange={set("build")} placeholder="1.4.0-rc2" /></div>
           <div className="field"><label htmlFor="r-env">Окружение</label><input className="input" id="r-env" value={f.env} onChange={set("env")} placeholder="staging, Chrome 130" /></div>
         </div>
+        <FieldsEditor entity="run" values={f.fields} onChange={(fields) => setF({ ...f, fields })} />
         {!run && <CasePicker cases={cases} picked={picked} setPicked={setPicked} />}
         {!run && <AssignPicker pid={pid} value={assign} onChange={setAssign} />}
         <div className="err">{err}</div>

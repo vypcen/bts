@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
+import { FieldsSettings } from "./FieldsSettings";
 import { api, paths } from "../api";
 import { SEVERITIES } from "../labels";
 import { useCanEdit, useLoad, useStore } from "../store";
@@ -11,6 +12,7 @@ export function IntegrationsTab({ project }: { project: Project }) {
   if (!canEdit) return <div className="banner">Настройки интеграций доступны тестировщикам и администраторам проекта.</div>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <FieldsSettings pid={project.id} />
       <Webhooks pid={project.id} />
       <TrackerSection pid={project.id} />
       <CiJobs pid={project.id} />

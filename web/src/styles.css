@@ -301,3 +301,36 @@ ol.steps{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px}
 .search-hits li{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer}
 .search-hits li[aria-selected="true"]{background:var(--hover, rgba(0,0,0,.06))}
 .search-hits li .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* структурные шаги */
+.steps-editor{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.step-row{display:flex;gap:8px;align-items:flex-start;width:100%;padding:8px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+.step-n{font-family:var(--f-mono);font-size:12px;color:var(--muted);min-width:18px;padding-top:8px;text-align:right}
+.step-cells{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.step-cells input{grid-column:1 / -1}
+.step-cells textarea{resize:vertical;min-height:36px}
+.step-acts{display:flex;flex-direction:column;gap:2px}
+.step-acts .btn{padding:0 6px;min-height:22px}
+ol.steps-view{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:8px}
+ol.steps-view li{padding-left:4px}
+ol.steps-view li > .step-main{display:flex;flex-direction:column;gap:2px}
+.step-mark{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+.step-mark .input{flex:1;min-width:180px}
+li.step-failed::marker{color:var(--crit);font-weight:700}
+li.step-passed::marker{color:var(--ok);font-weight:700}
+@media (max-width:640px){.step-cells{grid-template-columns:1fr}}
+
+/* теги */
+.tags{display:inline-flex;gap:4px;flex-wrap:wrap;vertical-align:middle}
+.tag{display:inline-flex;align-items:center;gap:2px;font-size:11px;line-height:16px;padding:1px 7px;border-radius:10px;background:var(--info-soft);color:var(--fg);border:0;white-space:nowrap}
+button.tag{cursor:pointer}
+.tag button{border:0;background:none;padding:0 0 0 2px;cursor:pointer;color:var(--muted);font-size:13px;line-height:1}
+.tag-input{display:flex;flex-wrap:wrap;gap:4px;align-items:center;border:1px solid var(--line);border-radius:var(--r);padding:4px 6px;background:var(--surface)}
+.tag-input .input{border:0;flex:1;min-width:120px;padding:4px;background:transparent;box-shadow:none}
+
+/* пользовательские поля */
+.fields-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px 14px}
+.fields-grid .field{margin:0}
+.label-like{font-size:13px;font-weight:600}
+.multi{display:flex;flex-wrap:wrap;gap:4px 12px}
+label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;font-size:14px}

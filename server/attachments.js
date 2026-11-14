@@ -51,8 +51,8 @@ async function save(req, res, owner) {
   const mime = (req.get("content-type") || "application/octet-stream").split(";")[0].trim().toLowerCase().slice(0, 100);
   try {
     await pool.query(
-      "INSERT INTO attachments(id, bug_id, run_result_id, auto_result_id, filename, mime, size, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-      [id, owner.bugId || null, owner.resultId || null, owner.autoResultId || null, cleanName(req.get("x-filename")), mime, bytes, req.user.id]
+      "INSERT INTO attachments(id, bug_id, run_result_id, auto_result_id, filename, mime, size, uploaded_by, step_index) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+      [id, owner.bugId || null, owner.resultId || null, owner.autoResultId || null, cleanName(req.get("x-filename")), mime, bytes, req.user.id, owner.step ?? null]
     );
   } catch (e) {
     await storage.remove(id);
@@ -77,7 +77,10 @@ projectRouter.post("/runs/:num/results/:case/attachments", wrap(async (req, res)
     [req.params.key, num(req.params.num), num(req.params.case)]
   );
   if (!rows[0]) return res.status(404).json({ error: "Кейс не входит в этот прогон" });
-  await save(req, res, { resultId: rows[0].id });
+  // ?step=2 — вложение к шагу (скриншот упавшего шага)
+  const step = req.query.step === undefined ? null : Number(req.query.step);
+  if (step !== null && (!Number.isInteger(step) || step < 0 || step > 1000)) return res.status(400).json({ error: "step — номер шага с 0" });
+  await save(req, res, { resultId: rows[0].id, step });
 }));
 
 // Скриншот упавшего автотеста: :rid — id результата из ответа POST /autoruns/:num/results

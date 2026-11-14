@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { TagInput, useProjectTags } from "../casekit";
 import { api, paths } from "../api";
 import { CASE_STATUSES, DIST_STRATEGIES, PRIORITIES, RESULTS } from "../labels";
 import { go, href } from "../router";
@@ -59,6 +60,7 @@ function toggleIn<T>(list: T[], v: T): T[] {
 
 // Фильтр динамического плана с живым подсчётом подходящих кейсов
 function FilterEditor({ pid, filter, onChange }: { pid: string; filter: PlanFilter; onChange: (f: PlanFilter) => void }) {
+  const projectTags = useProjectTags("cases");
   const data = useData();
   const [count, setCount] = useState<number | null>(null);
   const tree = folderTree(data, pid);
@@ -93,6 +95,8 @@ function FilterEditor({ pid, filter, onChange }: { pid: string; filter: PlanFilt
       <div className="field"><label>Приоритет</label>{chips(PRIORITIES, filter.priorities, (v) => onChange({ ...filter, priorities: v as Priority[] }))}</div>
       <div className="field"><label>Статус кейса</label>{chips(CASE_STATUSES, filter.statuses, (v) => onChange({ ...filter, statuses: v as CaseStatus[] }))}</div>
       <div className="field"><label>Вид</label>{chips([{ key: "case", label: "Тест-кейсы" }, { key: "checklist", label: "Чек-листы" }], filter.kinds, (v) => onChange({ ...filter, kinds: v as CaseKind[] }))}</div>
+      <div className="field"><label htmlFor="pf-tags">Теги (любой из)</label>
+        <TagInput id="pf-tags" value={filter.tags || []} onChange={(tags) => onChange({ ...filter, tags })} suggestions={projectTags} /></div>
       <div className="field"><label>Последний результат</label>{chips(RESULTS, filter.lastResults, (v) => onChange({ ...filter, lastResults: v as ResultValue[] }))}
         <span className="muted" style={{ fontSize: 12 }}>Например, «Упал» + «Заблокирован» — повторная проверка проблемных кейсов</span></div>
       <div className="row2">

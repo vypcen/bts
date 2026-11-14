@@ -33,6 +33,8 @@ function readFilter(f = {}) {
     text: str(f.text, 200),
     automated: ["yes", "no"].includes(f.automated) ? f.automated : "any",
     lastResults: pick(f.lastResults, RESULTS),
+    // теги: кейс с любым из них
+    tags: Array.isArray(f.tags) ? f.tags.map((t) => str(t, 50)).filter(Boolean).slice(0, 20) : [],
   };
 }
 
@@ -52,8 +54,9 @@ async function byFilter(db, key, f) {
        AND ($7 = '' OR c.title ILIKE '%' || $7 || '%')
        AND ($8 = 'any' OR ($8 = 'yes') = EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id))
        AND (cardinality($9::text[]) = 0 OR c.last_result = ANY($9::text[]))
+       AND (cardinality($10::text[]) = 0 OR c.tags && $10::text[])
      ORDER BY c.num`,
-    [key, f.folders, f.root, f.priorities, f.statuses, f.kinds, f.text.replace(/[%_\\]/g, "\\$&"), f.automated, f.lastResults]
+    [key, f.folders, f.root, f.priorities, f.statuses, f.kinds, f.text.replace(/[%_\\]/g, "\\$&"), f.automated, f.lastResults, f.tags || []]
   );
   return rows;
 }
@@ -232,7 +235,7 @@ router.get("/plans/:num/export", wrap(async (req, res) => {
   const key = plan.project_key;
   const list = await planCases(pool, plan);
   const { rows } = await pool.query(
-    `SELECT c.num, c.folder_id, v.version, v.kind, v.title, v.priority, v.status, v.preconditions, v.steps, v.expected
+    `SELECT c.num, c.folder_id, v.version, v.kind, v.title, v.priority, v.status, v.preconditions, v.steps, v.expected, v.step_list, v.tags
      FROM unnest($1::int[], $2::int[]) AS x(id, ver) JOIN test_cases c ON c.id=x.id
      JOIN test_case_versions v ON v.case_id=x.id AND v.version=x.ver ORDER BY c.num`,
     [list.map((c) => c.id), list.map((c) => c.version)]
@@ -246,7 +249,7 @@ router.get("/plans/:num/export", wrap(async (req, res) => {
       plan: { id: base, title: plan.title, description: plan.description, mode: plan.mode, filter: plan.filter, locked: plan.locked, exported: new Date().toISOString() },
       cases: rows.map((c) => ({
         id: `${key}-${c.num}`, version: c.version, folder: c.folder_id ? pathOf(c.folder_id) : "", kind: c.kind, title: c.title,
-        priority: c.priority, status: c.status, preconditions: c.preconditions, steps: c.steps, expected: c.expected,
+        priority: c.priority, status: c.status, preconditions: c.preconditions, steps: c.steps, expected: c.expected, stepList: c.step_list, tags: c.tags,
       })),
     });
   }
@@ -257,6 +260,9 @@ router.get("/plans/:num/export", wrap(async (req, res) => {
 router.post("/plans/:num/runs", wrap(async (req, res) => {
   const title = str(req.body.title, 300);
   if (!title) return res.status(400).json({ error: "Укажите название прогона" });
+  const cf = await require("./casemodel").readFields(pool, req.params.key, "run", req.body.fields, {});
+  if (cf.error) return res.status(400).json({ error: cf.error });
+  const fields = cf.fields;
   const out = await tx(async (db) => {
     const plan = await mustPlan(db, req);
     const key = plan.project_key;
@@ -265,8 +271,8 @@ router.post("/plans/:num/runs", wrap(async (req, res) => {
     const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [key]);
     const n = seq.rows[0].run_seq;
     const run = await db.query(
-      "INSERT INTO test_runs(project_key, num, title, build, environment, plan_id, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-      [key, n, title, str(req.body.build, 200), str(req.body.env, 500), plan.id, req.user.id]
+      "INSERT INTO test_runs(project_key, num, title, build, environment, plan_id, created_by, fields) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+      [key, n, title, str(req.body.build, 200), str(req.body.env, 500), plan.id, req.user.id, fields]
     );
     // у заблокированного плана в прогон идут зафиксированные версии, иначе триггер возьмёт текущие
     await db.query(

@@ -1,5 +1,6 @@
 // Баг-репорты. Монтируется на /api/projects/:key
 const express = require("express");
+const casemodel = require("./casemodel");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const events = require("./events");
@@ -50,6 +51,9 @@ router.post("/bugs", wrap(async (req, res) => {
   const { b, error } = readBug(req.body);
   if (error) return res.status(400).json({ error });
   const key = req.params.key;
+  const tags = casemodel.normalizeTags(req.body.tags) || [];
+  const cf = await casemodel.readFields(pool, key, "bug", req.body.fields, {});
+  if (cf.error) return res.status(400).json({ error: cf.error });
   const out = await tx(async (db) => {
     const assignee = await userId(db, key, b.assignee);
     if (assignee === undefined) return { status: 400, error: "Исполнитель не найден среди участников проекта" };
@@ -73,9 +77,9 @@ router.post("/bugs", wrap(async (req, res) => {
     const n = seq.rows[0].bug_seq;
     await db.query(
       `INSERT INTO bugs(project_key, num, title, severity, assignee_id, environment, steps, actual, expected,
-         case_id, run_result_id, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
-      [key, n, b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, caseId, resultId, req.user.id]
+         case_id, run_result_id, created_by, updated_by, tags, fields)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13,$14)`,
+      [key, n, b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, caseId, resultId, req.user.id, tags, cf.fields]
     );
     await db.query(
       "INSERT INTO bug_status_log(bug_id, from_status, to_status, changed_by) SELECT id, NULL, 'new', $3 FROM bugs WHERE project_key=$1 AND num=$2",
@@ -93,7 +97,7 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
   const key = req.params.key, n = num(req.params.num);
   const { rows } = await pool.query(
     `SELECT b.id, b.title, b.severity, u.login AS assignee, b.assignee_id, b.environment AS env, b.steps, b.actual, b.expected,
-       b.status, b.duplicate_of
+       b.status, b.duplicate_of, b.tags, b.fields
      FROM bugs b LEFT JOIN users u ON u.id=b.assignee_id WHERE b.project_key=$1 AND b.num=$2`,
     [key, n]
   );
@@ -105,6 +109,9 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
   // прежнего исполнителя, которого с тех пор убрали из проекта, можно оставить
   const assignee = b.assignee === cur.assignee ? cur.assignee_id : await userId(pool, key, b.assignee);
   if (assignee === undefined) return res.status(400).json({ error: "Исполнитель не найден среди участников проекта" });
+  const tags = req.body.tags === undefined ? cur.tags : casemodel.normalizeTags(req.body.tags);
+  const cf = await casemodel.readFields(pool, key, "bug", req.body.fields, cur.fields);
+  if (cf.error) return res.status(400).json({ error: cf.error });
 
   const status = req.body.status === undefined ? cur.status : str(req.body.status, 20);
   if (status !== cur.status && !(FLOW[cur.status] || []).includes(status)) {
@@ -123,8 +130,8 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
   await tx(async (db) => {
     await db.query(
       `UPDATE bugs SET title=$1, severity=$2, assignee_id=$3, environment=$4, steps=$5, actual=$6, expected=$7,
-         status=$8, duplicate_of=$9, updated_by=$10, updated_at=now() WHERE id=$11`,
-      [b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, status, dup, req.user.id, cur.id]
+         status=$8, duplicate_of=$9, updated_by=$10, updated_at=now(), tags=$12, fields=$13 WHERE id=$11`,
+      [b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, status, dup, req.user.id, cur.id, tags, cf.fields]
     );
     if (status !== cur.status) {
       await db.query("INSERT INTO bug_status_log(bug_id, from_status, to_status, changed_by) VALUES ($1,$2,$3,$4)", [cur.id, cur.status, status, req.user.id]);

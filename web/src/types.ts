@@ -71,8 +71,11 @@ export interface TestCase {
   priority: Priority;
   status: CaseStatus;
   pre: string;
-  steps: string;
+  steps: string; // действия шагов по строкам (у чек-листа — пункты)
   expected: string;
+  stepList: Step[]; // структурные шаги тест-кейса; у чек-листа пусто
+  tags: string[];
+  fields: FieldValues; // пользовательские поля: {id поля: значение}
   createdBy: string | null;
   updatedBy: string | null;
   created: number;
@@ -98,6 +101,31 @@ export interface Run {
   planNum: number | null; // прогон создан из тест-плана
   planLocked: boolean; // план заблокирован: состав зафиксирован, удалить прогон нельзя
   counts: Record<ResultValue, number>; // сколько кейсов прогона в каждом результате
+  fields: FieldValues;
+}
+
+export interface Step {
+  action: string;
+  expected: string;
+  data: string; // тестовые данные шага
+}
+
+export interface StepResult {
+  result: ResultValue;
+  actual: string; // что произошло на самом деле
+}
+
+export type FieldValue = string | number | boolean | string[];
+export type FieldValues = Record<string, FieldValue>;
+export type FieldType = "text" | "textarea" | "number" | "date" | "select" | "multiselect" | "user" | "url" | "checkbox";
+export interface CustomField {
+  id: number;
+  entity: "case" | "bug" | "run";
+  name: string;
+  type: FieldType;
+  options: string[];
+  required: boolean;
+  position: number;
 }
 
 export interface Result {
@@ -112,6 +140,7 @@ export interface Result {
   executed: number | null;
   assignee: string | null; // кому назначен кейс в прогоне
   caseVersion: number | null; // какая версия кейса проверялась
+  steps: Record<string, StepResult>; // результаты шагов тест-кейса: {номер шага с 0: …}
 }
 
 export interface Bug {
@@ -135,6 +164,8 @@ export interface Bug {
   created: number;
   updated: number;
   external: { key: string; url: string; status: string } | null; // задача во внешнем трекере
+  tags: string[];
+  fields: FieldValues;
 }
 
 export interface Attachment {
@@ -143,6 +174,7 @@ export interface Attachment {
   bugNum: number | null;
   resultId: number | null;
   autoResultId?: number | null;
+  step?: number | null; // вложение к шагу результата
   name: string;
   mime: string;
   size: number;
@@ -239,6 +271,7 @@ export interface MetaState {
 // и результаты, на которые ссылаются баги; результаты прогона целиком — GET …/runs/:num/results
 export interface ProjectState {
   pid: string;
+  customFields: CustomField[];
   plans: PlanSummary[];
   cases: TestCase[];
   folders: CaseFolder[];
@@ -269,6 +302,7 @@ export interface State {
   autoruns: AutoRun[];
   comments: Comment[];
   users: Record<string, { name: string; role: Role }>;
+  customFields: CustomField[]; // пользовательские поля открытого проекта
 }
 
 // GET /api/llm/status: показывать ли в интерфейсе функции с языковой моделью
@@ -307,6 +341,7 @@ export interface PlanFilter {
   text: string;
   automated: "any" | "yes" | "no";
   lastResults: ResultValue[];
+  tags?: string[]; // кейсы с любым из тегов
 }
 
 export interface Plan {
@@ -346,6 +381,9 @@ export interface CaseVersion {
   pre: string;
   steps: string;
   expected: string;
+  stepList: Step[];
+  tags: string[];
+  fields: FieldValues;
   changedBy: string | null;
   changed: number;
 }

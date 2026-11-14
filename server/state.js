@@ -12,31 +12,33 @@ const access = require("./access");
 const { wrap, num, ms } = require("./util");
 
 const caseSql = `SELECT c.project_key, c.num, c.kind, c.checked, c.folder_id, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected, c.version,
+  c.step_list, c.tags, c.fields,
   EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id) AS automated,
   cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at
   FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by`;
 const toCase = (r) => ({
   id: `${r.project_key}-${r.num}`, pid: r.project_key, num: r.num, kind: r.kind, checked: r.checked, folder: r.folder_id, title: r.title, priority: r.priority, status: r.status,
-  pre: r.preconditions, steps: r.steps, expected: r.expected, createdBy: r.created_by, updatedBy: r.updated_by, version: r.version, automated: r.automated,
+  pre: r.preconditions, steps: r.steps, expected: r.expected, stepList: r.step_list, tags: r.tags, fields: r.fields,
+  createdBy: r.created_by, updatedBy: r.updated_by, version: r.version, automated: r.automated,
   created: r.created_at.getTime(), updated: r.updated_at.getTime(),
 });
 
-const resultSql = `SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, rr.items, u.login AS executed_by, rr.executed_at,
+const resultSql = `SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, rr.items, rr.step_results, u.login AS executed_by, rr.executed_at,
     au.login AS assignee, rr.case_version
   FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
   LEFT JOIN users u ON u.id=rr.executed_by LEFT JOIN users au ON au.id=rr.assignee_id`;
 const toResult = (r) => ({
-  id: r.id, pid: r.project_key, runNum: r.run_num, caseNum: r.case_num, result: r.result, comment: r.comment, items: r.items,
+  id: r.id, pid: r.project_key, runNum: r.run_num, caseNum: r.case_num, result: r.result, comment: r.comment, items: r.items, steps: r.step_results,
   executedBy: r.executed_by, executed: ms(r.executed_at), assignee: r.assignee, caseVersion: r.case_version,
 });
 
-const attachmentSql = `SELECT a.id, COALESCE(b.project_key, t.project_key) AS project_key, b.num AS bug_num, a.run_result_id,
+const attachmentSql = `SELECT a.id, COALESCE(b.project_key, t.project_key) AS project_key, b.num AS bug_num, a.run_result_id, a.step_index,
     a.filename, a.mime, a.size, u.login AS uploaded_by, a.created_at
   FROM attachments a LEFT JOIN bugs b ON b.id=a.bug_id
   LEFT JOIN run_results rr ON rr.id=a.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
   LEFT JOIN users u ON u.id=a.uploaded_by`;
 const toAttachment = (a) => ({
-  id: a.id, pid: a.project_key, bugNum: a.bug_num, resultId: a.run_result_id, name: a.filename, mime: a.mime, size: a.size,
+  id: a.id, pid: a.project_key, bugNum: a.bug_num, resultId: a.run_result_id, step: a.step_index ?? null, name: a.filename, mime: a.mime, size: a.size,
   uploadedBy: a.uploaded_by, created: ms(a.created_at),
 });
 
@@ -95,9 +97,9 @@ async function meta(user) {
 // ---------- состояние проекта ----------
 async function project(key) {
   const k = [key];
-  const [cases, runs, last, bugs, files, autoruns, comments, caseFolders, testPlans] = await Promise.all([
+  const [cases, runs, last, bugs, files, autoruns, comments, caseFolders, testPlans, customFields] = await Promise.all([
     pool.query(`${caseSql} WHERE c.project_key=$1 ORDER BY c.num`, k),
-    pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at,
+    pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at, r.fields,
                   p.num AS plan_num, COALESCE(p.locked, false) AS plan_locked,
                   (SELECT json_object_agg(result, n) FROM (SELECT result, count(*)::int AS n FROM run_results WHERE run_id=r.id GROUP BY result) x) AS counts
                 FROM test_runs r LEFT JOIN users u ON u.id=r.created_by LEFT JOIN test_plans p ON p.id=r.plan_id
@@ -108,7 +110,7 @@ async function project(key) {
                                 UNION SELECT run_result_id FROM bugs WHERE project_key=$1 AND run_result_id IS NOT NULL)`, k),
     pool.query(`SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
                   c.num AS case_num, t.num AS run_num, b.run_result_id, d.num AS dup_num, b.external_key, b.external_url, b.external_status,
-                  cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at
+                  cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at, b.tags, b.fields
                 FROM bugs b LEFT JOIN users au ON au.id=b.assignee_id LEFT JOIN test_cases c ON c.id=b.case_id
                 LEFT JOIN run_results rr ON rr.id=b.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
                 LEFT JOIN bugs d ON d.id=b.duplicate_of
@@ -134,23 +136,25 @@ async function project(key) {
                 WHERE COALESCE(b.project_key, c.project_key)=$1 ORDER BY cm.created_at, cm.id`, k),
     pool.query(`SELECT id, project_key, parent_id, name FROM case_folders WHERE project_key=$1 ORDER BY name`, k),
     pool.query(`SELECT project_key, num, title, mode, locked FROM test_plans WHERE project_key=$1 ORDER BY num`, k),
+    pool.query(`SELECT id, entity, name, type, options, required, position FROM custom_fields WHERE project_key=$1 ORDER BY entity, position, id`, k),
   ]);
   const empty = { untested: 0, passed: 0, failed: 0, blocked: 0, skipped: 0 };
   return {
     pid: key,
+    customFields: customFields.rows,
     plans: testPlans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked })),
     // Тексты тест-кейсов (предусловия, шаги, ожидаемый результат) — бо́льшая часть объёма. В состоянии их нет,
     // карточка и редактор берут кейс целиком из GET /cases/:num. У чек-листа пункты нужны для счётчиков — остаются
     cases: cases.rows.map((r) => {
       const c = toCase(r);
       if (c.kind === "checklist") return c;
-      return { ...c, pre: undefined, steps: undefined, expected: undefined, stepCount: r.steps.split("\n").filter((x) => x.trim()).length, light: true };
+      return { ...c, pre: undefined, steps: undefined, expected: undefined, stepList: undefined, stepCount: r.step_list.length, light: true };
     }),
     folders: caseFolders.rows.map((f) => ({ id: f.id, pid: f.project_key, parent: f.parent_id, name: f.name })),
     runs: runs.rows.map((r) => ({
       id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
       state: r.state, createdBy: r.created_by, created: ms(r.created_at), closed: ms(r.closed_at), planNum: r.plan_num, planLocked: r.plan_locked,
-      counts: { ...empty, ...(r.counts || {}) },
+      counts: { ...empty, ...(r.counts || {}) }, fields: r.fields,
     })),
     results: last.rows.map(toResult),
     bugs: bugs.rows.map((b) => ({
@@ -159,6 +163,7 @@ async function project(key) {
       caseNum: b.case_num, runNum: b.run_num, resultId: b.run_result_id, duplicateOf: b.dup_num,
       createdBy: b.created_by, updatedBy: b.updated_by, created: ms(b.created_at), updated: ms(b.updated_at),
       external: b.external_key ? { key: b.external_key, url: b.external_url, status: b.external_status || "" } : null,
+      tags: b.tags, fields: b.fields,
     })),
     attachments: files.rows.map(toAttachment),
     autoruns: autoruns.rows.map((r) => ({
