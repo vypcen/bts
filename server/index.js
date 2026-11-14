@@ -27,6 +27,7 @@ const casemodel = require("./casemodel");
 const audit = require("./audit");
 const trash = require("./trash");
 const { wrap, str, num, HttpError } = require("./util");
+const { Limiter, MIN } = require("./limits");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
@@ -54,6 +55,12 @@ const { broadcast } = live;
 
 const app = express();
 app.disable("x-powered-by");
+// Версия API в пути: /api/v1/... — то же, что /api/... (текущая и единственная версия). Интеграциям лучше
+// использовать /api/v1: при несовместимых изменениях появится /api/v2, а v1 продолжит работать
+app.use((req, _res, next) => {
+  if (req.url.startsWith("/api/v1/") || req.url === "/api/v1") req.url = "/api" + req.url.slice(7);
+  next();
+});
 // Сжатие ответов: состояние большого проекта в JSON сжимается в 10–15 раз. Поток живых обновлений не сжимаем — он должен
 // приходить сразу, а не копиться в буфере
 app.use(compression({ filter: (req, res) => !req.path.startsWith("/api/events") && compression.filter(req, res) }));
@@ -99,9 +106,28 @@ app.use("/api", (req, res, next) => {
   }
   next();
 });
+// Токен (Authorization: Bearer) — со своими правами (scopes):
+//   results — только отправка результатов автотестов (TOKEN_ROUTES), read — любые GET, write — изменения в проектах.
+// Права владельца проверяются как обычно: write-токен наблюдателя ничего не изменит. Управление пользователями,
+// токенами и входом по токену недоступно никогда. Лимит — TOKEN_RATE_LIMIT запросов в минуту на токен
+const tokenLimit = new Limiter(Number(process.env.TOKEN_RATE_LIMIT || 600), MIN);
+const NEVER_BY_TOKEN = /^\/(admin|tokens|auth|events)(\/|$)/;
 app.use("/api", (req, res, next) => {
-  if (req.viaToken && !TOKEN_ROUTES.some(([method, re]) => method === req.method && re.test(req.path))) {
-    return res.status(403).json({ error: "Токен подходит только для отправки результатов автотестов" });
+  if (!req.viaToken) return next();
+  if (!tokenLimit.take(String(req.tokenId))) return res.status(429).json({ error: "Слишком много запросов с этим токеном. Подождите минуту" });
+  const scopes = req.tokenScopes || ["results"];
+  const isResults = TOKEN_ROUTES.some(([method, re]) => method === req.method && re.test(req.path));
+  const ok = !NEVER_BY_TOKEN.test(req.path) && (
+    (isResults && (scopes.includes("results") || scopes.includes("write")))
+    || (req.method === "GET" && scopes.includes("read"))
+    || (req.method !== "GET" && scopes.includes("write"))
+  );
+  if (!ok) {
+    return res.status(403).json({
+      error: scopes.length === 1 && scopes[0] === "results"
+        ? "Токен подходит только для отправки результатов автотестов"
+        : `У токена нет права на этот запрос (права токена: ${scopes.join(", ")})`,
+    });
   }
   next();
 });

@@ -333,11 +333,14 @@ const tokenRouter = express.Router();
 
 tokenRouter.get("/", wrap(async (req, res) => {
   const { rows } = await pool.query(
-    "SELECT id, name, project_key, created_at, last_used_at FROM api_tokens WHERE user_id=$1 ORDER BY created_at DESC",
+    "SELECT id, name, project_key, scopes, expires_at, created_at, last_used_at FROM api_tokens WHERE user_id=$1 ORDER BY created_at DESC",
     [req.user.id]
   );
   res.json({
-    tokens: rows.map((t) => ({ id: t.id, name: t.name, project: t.project_key, created: t.created_at.getTime(), used: t.last_used_at ? t.last_used_at.getTime() : null })),
+    tokens: rows.map((t) => ({
+      id: t.id, name: t.name, project: t.project_key, scopes: t.scopes, expires: t.expires_at ? t.expires_at.getTime() : null,
+      created: t.created_at.getTime(), used: t.last_used_at ? t.last_used_at.getTime() : null,
+    })),
   });
 }));
 
@@ -347,12 +350,23 @@ tokenRouter.post("/", wrap(async (req, res) => {
   const name = str(req.body.name, 100);
   if (!name) return res.status(400).json({ error: "Укажите название токена, например «Ноутбук» или «CI»" });
   const project = req.body.project ? str(req.body.project, 10).toUpperCase() : null;
+  // права: results (по умолчанию) — отправка результатов автотестов, read — чтение, write — изменения
+  const scopes = Array.isArray(req.body.scopes) && req.body.scopes.length ? [...new Set(req.body.scopes.map(String))] : ["results"];
+  if (scopes.some((x) => !["results", "read", "write"].includes(x))) return res.status(400).json({ error: "scopes: results, read, write" });
+  const writes = scopes.includes("results") || scopes.includes("write");
   if (project) {
-    if (!access.canWrite(await access.projectRole(req.user, project))) return res.status(403).json({ error: "В этом проекте у вас нет права отправлять результаты" });
-  } else if (!(await access.writesSomewhere(req.user))) return res.status(403).json({ error: access.READ_ONLY });
+    const role = await access.projectRole(req.user, project);
+    if (!role) return res.status(404).json({ error: "Проект не найден" });
+    if (writes && !access.canWrite(role)) return res.status(403).json({ error: "В этом проекте у вас нет права на запись — доступен только токен для чтения" });
+  } else if (writes && !(await access.writesSomewhere(req.user))) return res.status(403).json({ error: `${access.READ_ONLY}. Доступен только токен для чтения (scopes: ["read"])` });
+  // срок действия в днях (необязательно)
+  const days = num(req.body.expiresDays);
   const token = newApiToken();
-  await pool.query("INSERT INTO api_tokens(user_id, name, token_hash, project_key) VALUES ($1,$2,$3,$4)", [req.user.id, name, sha256(token), project]);
-  res.status(201).json({ token });
+  await pool.query(
+    "INSERT INTO api_tokens(user_id, name, token_hash, project_key, scopes, expires_at) VALUES ($1,$2,$3,$4,$5, CASE WHEN $6::int > 0 THEN now() + make_interval(days => $6::int) END)",
+    [req.user.id, name, sha256(token), project, scopes, days || 0]
+  );
+  res.status(201).json({ token, scopes });
 }));
 
 tokenRouter.delete("/:id", wrap(async (req, res) => {

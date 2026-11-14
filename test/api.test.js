@@ -139,6 +139,37 @@ test("токен: только отправка результатов авто�
   assert.equal((await u.dev.post("/api/tokens", { name: "dev" })).status, 403);
 });
 
+test("публичный API: права токена read/write, /api/v1, срок действия", async () => {
+  // наблюдателю доступен только токен на чтение
+  assert.equal((await u.viewer.post("/api/tokens", { name: "v", project: "LK" })).status, 403);
+  let r = await u.viewer.post("/api/tokens", { name: "v", project: "LK", scopes: ["read"] });
+  assert.equal(r.status, 201);
+  const ro = client(srv.base, { token: r.data.token });
+  assert.equal((await ro.get("/api/v1/projects/LK/state")).status, 200);
+  assert.equal((await ro.get("/api/v1/projects/LK/cases")).status, 200);
+  assert.equal((await ro.post("/api/v1/projects/LK/cases", { title: "x" })).status, 403);
+  assert.equal((await ro.get("/api/v1/tokens")).status, 403, "токенами токен не управляет");
+  assert.equal((await u.tester.post("/api/tokens", { name: "bad", scopes: ["root"] })).status, 400);
+  // write-токен тестировщика может создавать кейсы, но только в своём проекте
+  r = await u.tester.post("/api/tokens", { name: "sync", project: "LK", scopes: ["read", "write"] });
+  const rw = client(srv.base, { token: r.data.token });
+  r = await rw.post("/api/v1/projects/LK/cases", { title: "Создан по API", priority: "low", status: "draft" });
+  assert.equal(r.status, 201);
+  assert.equal((await rw.get("/api/v1/admin/users")).status, 403);
+  r = await u.tester.get("/api/tokens");
+  assert.deepEqual(r.data.tokens.find((t) => t.name === "sync").scopes, ["read", "write"]);
+  // истёкший токен не работает
+  r = await u.tester.post("/api/tokens", { name: "old", scopes: ["read"], expiresDays: 1 });
+  const old = client(srv.base, { token: r.data.token });
+  assert.equal((await old.get("/api/v1/state")).status, 200);
+  const { Client } = require("pg");
+  const pg = new Client({ connectionString: srv.dbUrl });
+  await pg.connect();
+  await pg.query("UPDATE api_tokens SET expires_at = now() - interval '1 minute' WHERE name='old'");
+  await pg.end();
+  assert.equal((await old.get("/api/v1/state")).status, 401);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);

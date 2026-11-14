@@ -134,14 +134,17 @@ async function loadUser(req, _res, next) {
     if (bearer) {
       const { rows } = await pool.query(
         `UPDATE api_tokens t SET last_used_at=now() FROM users u
-         WHERE t.token_hash=$1 AND u.id=t.user_id AND NOT u.blocked RETURNING u.id, u.login, u.name, u.role, t.project_key`,
+         WHERE t.token_hash=$1 AND u.id=t.user_id AND NOT u.blocked AND (t.expires_at IS NULL OR t.expires_at > now())
+         RETURNING u.id, u.login, u.name, u.role, t.project_key, t.scopes, t.id AS token_id`,
         [sha256(bearer[1])]
       );
       if (rows[0]) {
         // токен проекта открывает только этот проект (server/access.js)
-        const { project_key, ...user } = rows[0];
+        const { project_key, scopes, token_id, ...user } = rows[0];
         req.user = { ...user, tokenProject: project_key || null };
         req.viaToken = true;
+        req.tokenScopes = scopes;
+        req.tokenId = token_id;
       }
       return next();
     }

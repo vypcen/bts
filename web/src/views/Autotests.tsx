@@ -555,7 +555,13 @@ function TestsRegistry({ project }: { project: Project }) {
 }
 
 // ---------- подключение: токены и инструкция ----------
-interface Token { id: number; name: string; project: string | null; created: number; used: number | null }
+interface Token { id: number; name: string; project: string | null; scopes?: string[]; expires?: number | null; created: number; used: number | null }
+const SCOPE_SETS: Record<string, { scopes: string[]; label: string }> = {
+  results: { scopes: ["results"], label: "Результаты автотестов" },
+  read: { scopes: ["read"], label: "API: чтение" },
+  rw: { scopes: ["read", "write"], label: "API: чтение и запись" },
+};
+const scopeLabel = (s?: string[]) => (!s || (s.length === 1 && s[0] === "results") ? "автотесты" : s.includes("write") ? "API: запись" : "API: чтение");
 
 function ConnectModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   const { toast } = useStore();
@@ -563,6 +569,7 @@ function ConnectModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   const [name, setName] = useState("");
   // токен только для этого проекта — рекомендуется для CI
   const [scoped, setScoped] = useState(true);
+  const [kind, setKind] = useState("results");
   const [fresh, setFresh] = useState("");
   const [del, setDel] = useState<Token | null>(null);
   const load = () => api<{ tokens: Token[] }>("GET", paths.tokens).then((r) => setTokens(r.tokens), (e) => toast(e.message));
@@ -573,7 +580,7 @@ function ConnectModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   async function create(e: FormEvent) {
     e.preventDefault();
     try {
-      const r = await api<{ token: string }>("POST", paths.tokens, { name: name.trim() || "Мой компьютер", project: scoped ? pid : undefined });
+      const r = await api<{ token: string }>("POST", paths.tokens, { name: name.trim() || "Мой компьютер", project: scoped ? pid : undefined, scopes: SCOPE_SETS[kind].scopes });
       setFresh(r.token);
       setName("");
       load();
@@ -623,6 +630,9 @@ node report.js results/ -- pytest --junitxml=results/junit.xml   # запуст�
             <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", whiteSpace: "nowrap" }}>
               <input type="checkbox" checked={scoped} onChange={(e) => setScoped(e.target.checked)} /> только {pid}
             </label>
+            <select className="input" style={{ width: "auto" }} value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Права токена">
+              {Object.entries(SCOPE_SETS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
             <button className="btn primary" type="submit">Создать токен</button>
           </form>
         )}
@@ -630,14 +640,17 @@ node report.js results/ -- pytest --junitxml=results/junit.xml   # запуст�
           <div className="history">
             {tokens.map((t) => (
               <div key={t.id}>
-                <b style={{ flex: 1, minWidth: 120 }}>{t.name}{t.project && <span className="tag" style={{ marginLeft: 6 }}>{t.project}</span>}</b>
+                <b style={{ flex: 1, minWidth: 120 }}>{t.name}{t.project && <span className="tag" style={{ marginLeft: 6 }}>{t.project}</span>}<span className="tag" style={{ marginLeft: 6 }}>{scopeLabel(t.scopes)}</span></b>
                 <span className="muted">создан {fmt(t.created)} · {t.used ? `использован ${fmt(t.used)}` : "ещё не использовался"}</span>
                 <button className="btn ghost sm" onClick={() => setDel(t)} aria-label={`Отозвать ${t.name}`}>Отозвать</button>
               </div>
             ))}
           </div>
         )}
-        <span className="muted small">Токен годится только для отправки результатов автотестов: читать и менять баги и кейсы с ним нельзя.</span>
+        <span className="muted small">
+          Токен «Результаты автотестов» годится только для отправки результатов. Токены API работают с <span className="mono">/api/v1</span> (см. docs/API.md) и
+          не дают больше прав, чем у вас в проекте; пользователями и токенами через них управлять нельзя.
+        </span>
       </div>
       <div className="view-block">
         <span className="label">2. Playwright</span>
