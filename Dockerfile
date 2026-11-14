@@ -8,6 +8,12 @@ RUN npm run build
 
 # 2. Сервер
 FROM node:20-alpine
+# Сборка помечается коммитом и датой: видны в «Пользователи → О системе» и в логе запуска.
+#   docker build --build-arg BUILD_COMMIT=$(git rev-parse HEAD) --build-arg BUILD_DATE=$(date -u +%FT%TZ) -t …
+ARG BUILD_COMMIT=""
+ARG BUILD_DATE=""
+ENV BUILD_COMMIT=$BUILD_COMMIT BUILD_DATE=$BUILD_DATE
+LABEL org.opencontainers.image.title="TestBall QA" org.opencontainers.image.revision=$BUILD_COMMIT org.opencontainers.image.created=$BUILD_DATE
 
 WORKDIR /app
 ENV NODE_ENV=production

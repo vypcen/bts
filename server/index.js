@@ -28,6 +28,7 @@ const audit = require("./audit");
 const trash = require("./trash");
 const { wrap, str, num, HttpError } = require("./util");
 const { Limiter, MIN } = require("./limits");
+const version = require("./version");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
@@ -135,7 +136,7 @@ app.use("/api", (req, res, next) => {
 app.get("/api/events", auth.requireUser, live.events);
 
 // ---------- авторизация ----------
-const me = (u) => ({ login: u.login, name: u.name, role: u.role, provider: u.auth_provider || "local" });
+const me = (u) => ({ login: u.login, name: u.name, role: u.role, provider: u.auth_provider || "local", version: version.VERSION });
 const { limits, TOO_MANY } = auth;
 
 // Без входа — ещё и что показывать на странице входа: нужен ли код установки, открыта ли регистрация
@@ -488,6 +489,21 @@ app.use("/api/llm", auth.requireUser, llm.router);
 // подключения к языковым моделям (облачные сервисы и свои модели) — только администратор
 app.use("/api/admin/llm", auth.requireUser, access.requireAdmin, llm.adminRouter);
 
+// О системе (админ): версия, сборка, база, история обновлений
+app.get("/api/admin/system", auth.requireUser, access.requireAdmin, wrap(async (_req, res) => {
+  const [pg, mig, vers] = await Promise.all([
+    pool.query("SHOW server_version"),
+    pool.query("SELECT name, applied_at FROM schema_migrations ORDER BY name DESC"),
+    pool.query("SELECT version, first_started_at, last_started_at, commit FROM app_versions ORDER BY first_started_at DESC"),
+  ]);
+  res.json({
+    version: version.VERSION, commit: version.COMMIT, built: version.BUILT, node: process.version,
+    postgres: pg.rows[0].server_version,
+    migrations: { count: mig.rows.length, last: mig.rows[0]?.name || null, lastAt: mig.rows[0]?.applied_at.getTime() || null },
+    history: vers.rows.map((v) => ({ version: v.version, commit: v.commit, since: v.first_started_at.getTime(), last: v.last_started_at.getTime() })),
+  });
+}));
+
 // Проверки для Docker и Kubernetes. livez — процесс жив; readyz — готов принимать запросы (база, миграции, хранилище);
 // healthz — как раньше (база доступна), для docker-compose
 let ready = false;
@@ -544,7 +560,7 @@ app.use((err, _req, res, _next) => {
   trackers.startSync();
   const server = app.listen(PORT, "0.0.0.0", () => {
     ready = true;
-    console.log(`[server] TestBall QA запущен: http://localhost:${PORT}`);
+    console.log(`[server] TestBall QA ${version.VERSION}${version.COMMIT ? ` (${version.COMMIT.slice(0, 8)})` : ""} запущен: http://localhost:${PORT}`);
   });
   // Kubernetes присылает SIGTERM: сначала перестаём числиться готовыми, дожидаемся текущих запросов, закрываем соединения
   const shutdown = (signal) => {

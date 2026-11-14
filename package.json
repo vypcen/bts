@@ -1,6 +1,6 @@
 {
   "name": "testball-qa",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "TestBall QA — система управления тестированием: тест-кейсы, прогоны, баги",
   "main": "server/index.js",

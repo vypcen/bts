@@ -136,3 +136,51 @@ export function DeletedProjects() {
     </section>
   );
 }
+
+interface System {
+  version: string; commit: string | null; built: string | null; node: string; postgres: string;
+  migrations: { count: number; last: string | null; lastAt: number | null };
+  history: { version: string; commit: string | null; since: number; last: number }[];
+}
+
+// О системе: версия и сборка, база, история обновлений — пригодится в обращении в поддержку
+export function SystemInfo() {
+  const { value, error } = useLoad<System>("/api/admin/system");
+  if (error) return <div className="banner">{error}</div>;
+  if (!value) return <div className="skel">Загружаем…</div>;
+  const rows: [string, string][] = [
+    ["Версия TestBall", value.version],
+    ["Сборка", [value.commit?.slice(0, 12), value.built].filter(Boolean).join(" · ") || "—"],
+    ["PostgreSQL", value.postgres],
+    ["Node.js", value.node],
+    ["Схема базы", `${value.migrations.count} миграций, последняя ${value.migrations.last || "—"}${value.migrations.lastAt ? ` (${fmt(value.migrations.lastAt)})` : ""}`],
+  ];
+  const text = rows.map(([k, v]) => `${k}: ${v}`).join("\n");
+  return (
+    <section className="card">
+      <table className="tbl">
+        <tbody>{rows.map(([k, v]) => <tr key={k}><td className="muted small" style={{ width: 200 }}>{k}</td><td className="mono small">{v}</td></tr>)}</tbody>
+      </table>
+      <div className="acts" style={{ justifyContent: "flex-start" }}>
+        <button className="btn" onClick={() => navigator.clipboard?.writeText(text)}>Скопировать для поддержки</button>
+      </div>
+      <h3>История обновлений</h3>
+      <div className="tbl-wrap">
+        <table className="tbl">
+          <thead><tr><th>Версия</th><th>Впервые запущена</th><th>Последний запуск</th><th>Сборка</th></tr></thead>
+          <tbody>
+            {value.history.map((h) => (
+              <tr key={h.version}>
+                <td className="mono">{h.version}</td>
+                <td className="small muted">{fmt(h.since)}</td>
+                <td className="small muted">{fmt(h.last)}</td>
+                <td className="mono small muted">{h.commit?.slice(0, 12) || ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="muted small">Как обновляться и что делать при неудачном обновлении — в docs/UPGRADE.md. Список изменений — в CHANGELOG.md.</p>
+    </section>
+  );
+}

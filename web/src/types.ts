@@ -27,6 +27,7 @@ export interface User {
   name: string;
   role: Role;
   provider?: AuthProvider;
+  version?: string;
 }
 
 export interface Project {

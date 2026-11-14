@@ -207,7 +207,7 @@ docker compose cp backups\uploads-ГГГГ-ММ-ДД_ЧЧ-ММ\. app:/app/data/u
 | Посмотреть логи | `docker compose logs -f app` |
 | Остановить | `docker compose stop` |
 | Запустить снова | `docker compose start` |
-| Обновить после изменения кода | `git pull` и `docker compose up -d --build` |
+| Обновить до новой версии | резервная копия, `git pull`, `docker compose up -d --build` — подробно в [docs/UPGRADE.md](docs/UPGRADE.md) |
 | Зайти в базу через psql | `docker compose exec db psql -U testbed testbed` |
 | Удалить всё **вместе с данными и вложениями** | `docker compose down -v` (осторожно!) |
 
@@ -452,7 +452,7 @@ vllm serve Qwen/Qwen2.5-7B-Instruct --port 8000            # адрес: http://
 - **S3-совместимое хранилище** для вложений: MinIO, Ceph, Yandex Object Storage, AWS. Можно обойтись томом PVC, но тогда либо одна реплика, либо том ReadWriteMany.
 
 ```sh
-docker build -t registry.company.ru/qa/testball:1.0.0 . && docker push registry.company.ru/qa/testball:1.0.0
+docker build -t registry.company.ru/qa/testball:1.1.0 . && docker push registry.company.ru/qa/testball:1.1.0
 helm install testball deploy/helm/testball -n qa --create-namespace \
   --set database.url='postgres://testball:***@pg.db.svc:5432/testball' \
   --set secrets.appSecret="$(openssl rand -base64 48)" \
@@ -471,6 +471,8 @@ helm install testball deploy/helm/testball -n qa --create-namespace \
 - Проверки для Kubernetes: `GET /livez` (процесс жив) и `GET /readyz` (база и хранилище доступны, сервер не останавливается).
 - По `SIGTERM` сервер перестаёт принимать новые запросы, дожидается текущих и закрывает потоки обновлений; браузеры сами переподключаются к другой реплике.
 - Лимиты попыток входа считаются в каждой реплике отдельно, поэтому с N репликами фактический лимит в N раз выше.
+
+Обновление: `helm upgrade … --set image.tag=X.Y.Z`, порядок и откат — в [docs/UPGRADE.md](docs/UPGRADE.md), изменения версий — в [CHANGELOG.md](CHANGELOG.md).
 
 ### Единый вход: OpenID Connect, LDAP / AD, Kerberos
 

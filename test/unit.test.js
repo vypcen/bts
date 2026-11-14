@@ -93,3 +93,24 @@ test("XML: разбор и текст узлов", () => {
   assert.equal(bs.length, 2);
   assert.equal(xml.text(bs[0]), "т&т");
 });
+
+test("версии согласованы: package.json, web, Helm, CHANGELOG", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const root = path.join(__dirname, "..");
+  const v = require("../package.json").version;
+  assert.equal(require("../web/package.json").version, v, "web/package.json");
+  const chart = fs.readFileSync(path.join(root, "deploy/helm/testball/Chart.yaml"), "utf8");
+  assert.match(chart, new RegExp(`^appVersion: "${v.replace(/\./g, "\\.")}"$`, "m"), "Chart.yaml appVersion");
+  const values = fs.readFileSync(path.join(root, "deploy/helm/testball/values.yaml"), "utf8");
+  assert.match(values, new RegExp(`tag: "${v.replace(/\./g, "\\.")}"`), "values.yaml image.tag");
+  assert.ok(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8").includes(`## [${v}]`), "раздел в CHANGELOG.md");
+});
+
+test("сравнение версий", () => {
+  const { compare } = require("../server/version");
+  assert.equal(compare("1.10.0", "1.9.3"), 1);
+  assert.equal(compare("1.1.0", "1.1.0"), 0);
+  assert.equal(compare("1.1.0-rc.1", "1.1.0"), -1);
+  assert.equal(compare("2.0.0", "10.0.0"), -1);
+});

@@ -38,3 +38,32 @@ test("накат с нуля и повторный запуск на той же
   assert.ok(ok, "второй старт на той же базе");
   await srv.stop();
 });
+
+test("откат на старую версию: сервер не стартует на базе от более новой версии", async () => {
+  const srv = await startServer();
+  const c = new Client({ connectionString: srv.dbUrl });
+  await c.connect();
+  const { rows } = await c.query("SELECT version FROM app_versions");
+  assert.deepEqual(rows.map((r) => r.version), [require("../package.json").version]);
+  const { spawnSync } = require("node:child_process");
+  const run = (env = {}) =>
+    spawnSync(process.execPath, ["-e", "require('./server/migrate').migrate().then(()=>process.exit(0),(e)=>{console.error(e.message);process.exit(1)})"], {
+      cwd: path.join(__dirname, ".."),
+      env: { ...process.env, DATABASE_URL: srv.dbUrl, ...env },
+      encoding: "utf8",
+    });
+  // базу уже запускала версия 99.0.0
+  await c.query("INSERT INTO app_versions(version) VALUES ('99.0.0')");
+  let r = run();
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /более новой версией TestBall \(99\.0\.0\)/);
+  assert.equal(run({ ALLOW_DOWNGRADE: "1" }).status, 0);
+  // или в базе миграция, о которой этот код не знает
+  await c.query("DELETE FROM app_versions WHERE version='99.0.0'");
+  await c.query("INSERT INTO schema_migrations(name) VALUES ('999_future.sql')");
+  r = run();
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /999_future\.sql/);
+  await c.end();
+  await srv.stop();
+});

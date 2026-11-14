@@ -2,9 +2,9 @@
 
 image:
   # Образ собирается из Dockerfile репозитория и кладётся во внутренний реестр:
-  #   docker build -t registry.company.ru/qa/testball:1.0.0 . && docker push registry.company.ru/qa/testball:1.0.0
+  #   docker build -t registry.company.ru/qa/testball:1.1.0 . && docker push registry.company.ru/qa/testball:1.1.0
   repository: registry.company.ru/qa/testball
-  tag: "1.0.0"
+  tag: "1.1.0"
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

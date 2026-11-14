@@ -170,6 +170,16 @@ test("публичный API: права токена read/write, /api/v1, ср�
   assert.equal((await old.get("/api/v1/state")).status, 401);
 });
 
+test("версия: в /api/auth/me и сведения о системе для админа", async () => {
+  const v = require("../package.json").version;
+  assert.equal((await u.tester.get("/api/auth/me")).data.user.version, v);
+  assert.equal((await u.tester.get("/api/admin/system")).status, 403);
+  const r = await u.admin.get("/api/admin/system");
+  assert.equal(r.data.version, v);
+  assert.ok(r.data.migrations.count >= 18);
+  assert.equal(r.data.history[0].version, v);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);

@@ -94,7 +94,7 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
         {me?.role === "admin" && <a className="btn" href={href("users")} style={{ textDecoration: "none" }}>Пользователи</a>}
         {me?.role === "admin" && <a className="btn" href={href("settings")} style={{ textDecoration: "none" }} title="Подключение языковой модели">Настройки</a>}
         {me && (
-          <span className="user who" title={roleOf(me.role).hint}>
+          <span className="user who" title={`${roleOf(me.role).hint}${me.version ? `\nTestBall ${me.version}` : ""}`}>
             <Avatar login={me.login} />
             <span>{me.name}</span>
             <span className="mono" style={{ fontSize: 12 }}>@{me.login} · {roleOf(me.role).label}</span>
