@@ -540,6 +540,17 @@ curl -X POST "$URL/api/projects/LK/bugs/7/attachments" \
 
 Ответ: `{"ids": [812]}` — id результатов в том же порядке, в каком они пришли. По ним прикладываются файлы. Ошибка в одном элементе — `400` с номером элемента: `results[3]: нужны name и status (…)`, и тогда не сохраняется вся пачка. Нет запуска — `404`.
 
+### `POST /api/projects/:key/autoruns/:num/allure`
+
+Результаты в формате Allure 2: `{"results": [содержимое *-result.json, …]}`, до 1000 за запрос. Работает с токеном. Готовый клиент — `node report.js allure-results/`.
+
+- Набор — метки `parentSuite › suite › subSuite` (иначе `testClass`/`package`), шаги — вложенные `steps`, ошибка — `statusDetails.message` и `trace`. Статус `unknown` считается `broken`.
+- Повторы одного теста (один `historyId`) сводятся в один результат: итог — последняя попытка, `retries` — число повторов, «прошёл после падения» — нестабильный.
+- Параметризованные тесты различаются параметрами: «Логин [role=admin]».
+- Метка `testball=LK-12` (или `tms`, `case`) либо ссылка `type: tms` с именем `LK-12` связывает автотест с ручным кейсом, если связи ещё нет.
+
+Ответ: `{"ids": [...], "tests": 5, "attachments": [{"id": 812, "status": "failed", "source": "…-attachment.png", "name": "screen", "type": "image/png"}]}` — какие файлы из папки приложить к какому результату запросом [`POST …/results/:rid/attachments`](#вложения).
+
 ### `PATCH /api/projects/:key/autoruns/:num`
 
 Завершить запуск или поменять его параметры.

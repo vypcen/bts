@@ -370,6 +370,17 @@ def pytest_runtest_makereport(item, call):
             item.user_properties.append(("attachment", path))  # попадёт в отчёт как <property name="attachment">
 ```
 
+### Allure: allure-results
+
+Если тесты уже пишут результаты Allure (allure-pytest, allure-junit5, allure-testng, allure-js для Playwright/Jest/Cypress, allure-kotlin), достаточно отправить папку:
+
+```sh
+node report.js allure-results/                                     # готовые результаты
+node report.js allure-results/ -- pytest --alluredir=allure-results  # запустить и отправить
+```
+
+Переносятся шаги (с вложенными), ошибка и стектрейс, вложения (к упавшим тестам; `--attach-all` — ко всем), параметры, повторы (retries → пометка «нестабильный»). Связь с ручным кейсом — меткой `@allure.label("testball", "LK-12")` или ссылкой `@allure.testcase("LK-12")`.
+
 ### Что важно знать
 
 - Тест узнаётся по набору (`classname`) и названию. Переименованный тест заведётся как новый; старый можно удалить из реестра кнопкой ✕.

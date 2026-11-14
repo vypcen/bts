@@ -46,6 +46,7 @@ const CSP = [
 const TOKEN_ROUTES = [
   ["POST", /^\/projects\/[^/]+\/autoruns$/],
   ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/results$/],
+  ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/allure$/],
   ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/results\/\d+\/attachments$/],
   ["PATCH", /^\/projects\/[^/]+\/autoruns\/\d+$/],
 ];

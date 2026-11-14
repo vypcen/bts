@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Отправляет результаты автотестов в TestBall: каждый вызов — отдельный запуск («папка») во вкладке «Автотесты».
-// Читает отчёты JUnit XML (их умеют писать pytest, Playwright, Jest, Cypress, JUnit/TestNG, Go и другие),
+// Читает отчёты JUnit XML (их умеют писать pytest, Playwright, Jest, Cypress, JUnit/TestNG, Go и другие)
+// и папки allure-results (allure-pytest, allure-junit5, allure-testng, allure-js, allure-kotlin…),
 // к упавшим тестам прикладывает скриншоты и прочие файлы, указанные в отчёте.
 // Зависимостей нет, нужен Node.js 20+: файл можно скопировать в любой проект с тестами.
 //
@@ -9,6 +10,7 @@
 // Примеры:
 //   node report.js results/junit.xml
 //   node report.js --title "Смоук перед релизом" results/ -- npx playwright test
+//   node report.js allure-results/ -- pytest --alluredir=allure-results
 //
 // Подробности — в README, раздел «Автотесты».
 const fs = require("fs");
@@ -16,7 +18,11 @@ const os = require("os");
 const path = require("path");
 const { spawnSync, execSync } = require("child_process");
 
-const HELP = `Использование: node report.js [параметры] <отчёт.xml | папка>... [-- команда]
+const HELP = `Использование: node report.js [параметры] <отчёт.xml | папка | allure-results>... [-- команда]
+
+  Папка, в которой есть *-result.json, читается как allure-results: шаги, вложения, параметры,
+  повторы (retries) и метки. Связь с ручным кейсом: метка testball=LK-12 или ссылка type=tms с именем LK-12.
+
 
   --url URL         адрес TestBall (или TESTBALL_URL), например http://localhost:3000
   --token TOKEN     токен из вкладки «Автотесты» → «Подключить» (или TESTBALL_TOKEN)
@@ -173,8 +179,7 @@ function client(base, token, project) {
   };
 }
 
-async function send(opts, tests) {
-  const call = client(opts.url, opts.token, opts.project);
+async function startRun(opts, call) {
   const branch = opts.branch ?? git("rev-parse --abbrev-ref HEAD");
   const fields = {
     build: opts.build ?? git("rev-parse --short HEAD"),
@@ -189,6 +194,12 @@ async function send(opts, tests) {
   } else {
     run = await call("POST", "/autoruns", { title: opts.title || `Локальный запуск${branch ? ` ${branch}` : ""}`, ...fields });
   }
+  return run;
+}
+
+async function send(opts, tests) {
+  const call = client(opts.url, opts.token, opts.project);
+  const run = await startRun(opts, call);
   console.log(`[testball] запуск ${run.id}: результатов к отправке: ${tests.length}`);
 
   const ids = [];
@@ -225,6 +236,81 @@ async function send(opts, tests) {
   console.log(`[testball] ${opts.url.replace(/\/+$/, "")}/#/p/${encodeURIComponent(opts.project)}/auto/${run.num}`);
 }
 
+// ---------- allure-results ----------
+const isAllureDir = (p) => fs.existsSync(p) && fs.statSync(p).isDirectory() && fs.readdirSync(p).some((f) => f.endsWith("-result.json"));
+
+function allureResults(dirs, since = 0) {
+  const out = [];
+  for (const dir of dirs) {
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith("-result.json")) continue;
+      const file = path.join(dir, f);
+      if (since && fs.statSync(file).mtimeMs < since) continue;
+      try {
+        out.push({ dir, json: JSON.parse(fs.readFileSync(file, "utf8")) });
+      } catch {
+        console.warn(`[testball] пропущен повреждённый ${f}`);
+      }
+    }
+  }
+  return out;
+}
+
+async function sendAllure(opts, items) {
+  const call = client(opts.url, opts.token, opts.project);
+  const run = await startRun(opts, call);
+  console.log(`[testball] запуск ${run.id}: результатов Allure к отправке: ${items.length}`);
+  // повторы одного теста должны попасть в одну пачку: группируем по historyId
+  const groups = new Map();
+  for (const it of items) {
+    const k = it.json.historyId || it.json.uuid || Math.random();
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(it);
+  }
+  const batches = [[]];
+  for (const g of groups.values()) {
+    if (batches[batches.length - 1].length + g.length > 300) batches.push([]);
+    batches[batches.length - 1].push(...g);
+  }
+  const c = { passed: 0, failed: 0, broken: 0, skipped: 0 };
+  let sent = 0;
+  for (const batch of batches.filter((b) => b.length)) {
+    const dirOf = new Map(batch.flatMap((it) => collectSources(it.json).map((src) => [src, it.dir])));
+    const res = await call("POST", `/autoruns/${run.num}/allure`, { results: batch.map((it) => it.json) });
+    for (const a of res.attachments) {
+      if (a.status === "passed" && !opts.attachAll) continue;
+      const file = path.join(dirOf.get(a.source) || batch[0].dir, a.source);
+      if (!fs.existsSync(file)) continue;
+      try {
+        await call("POST", `/autoruns/${run.num}/results/${a.id}/attachments`, fs.readFileSync(file), {
+          "Content-Type": a.type || MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
+          "X-Filename": encodeURIComponent(a.name.includes(".") ? a.name : `${a.name}${path.extname(file)}`),
+          "X-Upload": "1",
+        });
+        sent++;
+      } catch (e) {
+        console.warn(`[testball] ${a.name}: ${e.message}`);
+      }
+    }
+    const statusOf = new Map();
+    for (const it of batch) statusOf.set(it.json.historyId || it.json.uuid, it.json.status);
+    for (const st of statusOf.values()) c[st === "unknown" ? "broken" : st] = (c[st === "unknown" ? "broken" : st] || 0) + 1;
+  }
+  await call("PATCH", `/autoruns/${run.num}`, { state: "finished" });
+  console.log(`[testball] готово: пройдено ${c.passed}, упало ${c.failed}, сломано ${c.broken}, пропущено ${c.skipped}, файлов ${sent}`);
+  console.log(`[testball] ${opts.url.replace(/\/+$/, "")}/#/p/${encodeURIComponent(opts.project)}/auto/${run.num}`);
+}
+
+function collectSources(r) {
+  const out = [];
+  const walk = (x) => {
+    for (const a of Array.isArray(x?.attachments) ? x.attachments : []) if (a?.source) out.push(a.source);
+    for (const s of Array.isArray(x?.steps) ? x.steps : []) walk(s);
+  };
+  walk(r);
+  return out;
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) return console.log(HELP), 0;
@@ -237,12 +323,29 @@ async function main() {
   if (!opts.files.length) throw new Error("Укажите файл JUnit XML или папку с отчётами. Справка: node report.js --help");
 
   let code = 0;
+  const allureDirs = opts.files.filter(isAllureDir);
+  const startedAt = Date.now();
   if (opts.command?.length) {
     // старые отчёты не должны попасть в новый запуск
     const started = Date.now();
     const r = spawnSync(opts.command[0], opts.command.slice(1), { stdio: "inherit", shell: process.platform === "win32" });
     if (r.error) throw new Error(`Не удалось выполнить ${opts.command[0]}: ${r.error.message}`);
     code = r.status ?? 1;
+    // allure-results: папки появляются только после запуска
+    if (opts.files.some(isAllureDir)) {
+      const items = allureResults(opts.files.filter(isAllureDir), startedAt - 1000);
+      if (!items.length) {
+        console.error("[testball] команда не записала новых результатов Allure — отправлять нечего");
+        return code || 1;
+      }
+      try {
+        await sendAllure(opts, items);
+      } catch (e) {
+        console.error(`[testball] не удалось отправить результаты: ${e.message}`);
+        return code || 1;
+      }
+      return code;
+    }
     const fresh = reportFiles(opts.files).filter((f) => fs.statSync(f).mtimeMs >= started - 1000);
     if (!fresh.length) {
       console.error("[testball] команда не записала новый отчёт JUnit — отправлять нечего. Проверьте путь к отчёту и настройки репортера");
@@ -251,6 +354,17 @@ async function main() {
     opts.files = fresh;
   }
 
+  if (allureDirs.length) {
+    const items = allureResults(allureDirs);
+    if (!items.length) throw new Error("В allure-results нет ни одного *-result.json");
+    try {
+      await sendAllure(opts, items);
+    } catch (e) {
+      console.error(`[testball] не удалось отправить результаты: ${e.message}`);
+      return 1;
+    }
+    return 0;
+  }
   const tests = reportFiles(opts.files).flatMap(collectTests);
   if (!tests.length) throw new Error("В отчётах нет ни одного <testcase>");
   try {

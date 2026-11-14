@@ -465,3 +465,49 @@ test("экспорт и импорт проекта переносят шаги,
   assert.ok(comp);
   assert.ok(st.cases.some((c) => c.fields[comp.id] === "Оплата"));
 });
+
+test("allure-results: шаги, повторы, параметры, вложения и связь с кейсом через report.js", async () => {
+  const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+  const { spawnSync } = require("node:child_process");
+  const kase = await u.tester.post("/api/projects/LK/cases", { title: "Вход для Allure", priority: "high", status: "ready" });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "allure-"));
+  const w = (name, obj) => fs.writeFileSync(path.join(dir, name), typeof obj === "string" ? obj : JSON.stringify(obj));
+  const base = { labels: [{ name: "suite", value: "auth" }, { name: "parentSuite", value: "web" }], start: 1000, stop: 1500 };
+  w("a1-result.json", { ...base, uuid: "a1", historyId: "h1", name: "Вход по паролю", status: "passed",
+    labels: [...base.labels, { name: "testball", value: `LK-${kase.data.num}` }, { name: "tag", value: "smoke" }],
+    steps: [{ name: "Открыть страницу", status: "passed", start: 1000, stop: 1100, steps: [] }] });
+  w("a2-result.json", { ...base, uuid: "a2", historyId: "h2", name: "Оплата", status: "failed",
+    statusDetails: { message: "expected 200 got 500", trace: "at pay.spec.ts:10" },
+    steps: [{ name: "Нажать оплатить", status: "failed", statusDetails: { message: "500" }, attachments: [{ name: "screen", source: "s1-attachment.png", type: "image/png" }] }] });
+  w("s1-attachment.png", "PNGDATA");
+  // повторы: сначала упал, потом прошёл
+  w("a3-result.json", { ...base, uuid: "a3", historyId: "h3", name: "Нестабильный", status: "failed", start: 1, stop: 2 });
+  w("a4-result.json", { ...base, uuid: "a4", historyId: "h3", name: "Нестабильный", status: "passed", start: 3, stop: 4 });
+  // параметризованный
+  w("a5-result.json", { ...base, uuid: "a5", historyId: "h5", name: "Логин", status: "passed", parameters: [{ name: "role", value: "admin" }] });
+  w("a6-result.json", { ...base, uuid: "a6", historyId: "h6", name: "Логин", status: "unknown", parameters: [{ name: "role", value: "guest" }] });
+  w("broken-result.json", "{не json");
+  w("c1-container.json", { uuid: "c1", children: ["a1"] });
+
+  const tok = (await u.tester.post("/api/tokens", { name: "allure", project: "LK" })).data.token;
+  const r = spawnSync(process.execPath, ["scripts/report.js", dir, "--title", "Allure CI", "--build", "b42"], {
+    cwd: path.join(__dirname, ".."), env: { ...process.env, TESTBALL_URL: srv.base, TESTBALL_TOKEN: tok, TESTBALL_PROJECT: "LK" }, encoding: "utf8",
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const st = (await u.tester.get("/api/projects/LK/state")).data;
+  const run = st.autoruns.find((a) => a.title === "Allure CI");
+  assert.deepEqual(run.counts, { passed: 3, failed: 1, broken: 1, skipped: 0 });
+  assert.equal(run.state, "finished");
+  const det = (await u.tester.get(`/api/projects/LK/autoruns/${run.num}`)).data;
+  const byName = (n) => det.results.find((x) => x.name === n);
+  assert.equal(byName("Оплата").message, "expected 200 got 500");
+  assert.equal(byName("Оплата").steps[0].status, "failed");
+  assert.equal(byName("Оплата").suite, "web › auth");
+  assert.ok(byName("Логин [role=admin]") && byName("Логин [role=guest]").status === "broken");
+  assert.ok(det.attachments.some((a) => a.autoResultId === byName("Оплата").id && a.name.startsWith("screen")));
+  const tests = (await u.tester.get("/api/projects/LK/autotests")).data.tests;
+  assert.equal(tests.find((t) => t.name === "Вход по паролю").caseNum, kase.data.num, "связь с кейсом по метке");
+  const flakyRes = (await u.tester.get(`/api/projects/LK/autoruns/${run.num}`)).data.results.find((x) => x.name === "Нестабильный");
+  assert.equal(flakyRes.status, "passed");
+  assert.ok(flakyRes.flaky || flakyRes.retries >= 1);
+});

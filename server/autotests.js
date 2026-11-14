@@ -7,6 +7,7 @@ const { sha256, newApiToken } = require("./auth");
 const access = require("./access");
 const events = require("./events");
 const flaky = require("./flaky");
+const allure = require("./allure");
 const { wrap, str, num } = require("./util");
 
 const STATUSES = ["passed", "failed", "broken", "skipped"];
@@ -94,28 +95,23 @@ router.post("/autoruns", wrap(async (req, res) => {
 
 // Результаты можно присылать частями по ходу запуска. Повторный результат того же теста в запуске
 // (например, после перезапуска упавшего) заменяет прежний. В ответе — id результатов в порядке присланных
-router.post("/autoruns/:num/results", wrap(async (req, res) => {
-  const list = Array.isArray(req.body.results) ? req.body.results : [];
-  if (!list.length) return res.status(400).json({ error: "Передайте непустой список results" });
-  if (list.length > MAX_BATCH) return res.status(413).json({ error: `Не больше ${MAX_BATCH} результатов за один запрос` });
-  const parsed = list.map(readResult);
-  const bad = parsed.findIndex((t) => !t);
-  if (bad >= 0) return res.status(400).json({ error: `results[${bad}]: нужны name и status (${STATUSES.join(", ")})` });
+// Сохранить пачку результатов в запуск: заводит тесты в реестре, обновляет шаги, пишет результаты.
+// Возвращает id результатов в порядке list или null, если запуска нет. Используется /results и /allure
+async function storeResults(key, runNum, parsed) {
   // в одном запросе тест может встретиться дважды — берём последний результат
   const byKey = new Map(parsed.map((t) => [t.key, t]));
   const uniq = [...byKey.values()];
-
-  const out = await tx(async (db) => {
-    const run = await findRun(db, req.params.key, num(req.params.num));
+  return tx(async (db) => {
+    const run = await findRun(db, key, runNum);
     if (!run) return null;
     await db.query(
       `INSERT INTO auto_tests(project_key, test_key, suite, name, file)
        SELECT $1::text, * FROM unnest($2::text[], $3::text[], $4::text[], $5::text[])
        ON CONFLICT (project_key, test_key) DO NOTHING`,
-      [req.params.key, uniq.map((t) => t.key), uniq.map((t) => t.suite), uniq.map((t) => t.name), uniq.map((t) => t.file)]
+      [key, uniq.map((t) => t.key), uniq.map((t) => t.suite), uniq.map((t) => t.name), uniq.map((t) => t.file)]
     );
     const tests = await db.query("SELECT id, test_key FROM auto_tests WHERE project_key=$1 AND test_key = ANY($2::text[])", [
-      req.params.key,
+      key,
       uniq.map((t) => t.key),
     ]);
     const testId = new Map(tests.rows.map((t) => [t.test_key, t.id]));
@@ -130,6 +126,15 @@ router.post("/autoruns/:num/results", wrap(async (req, res) => {
           withSteps.map((t) => testId.get(t.key)), withSteps.map((t) => JSON.stringify(stepTitles(t.steps))),
           withSteps.map((t) => t.status === "passed"),
         ]
+      );
+    }
+    // связь с ручным кейсом по ID из отчёта (метка или ссылка LK-12) — только если связи ещё нет
+    for (const t of uniq) {
+      const ref = (t.cases || []).find((c) => c.startsWith(`${key}-`));
+      if (!ref) continue;
+      await db.query(
+        `UPDATE auto_tests SET case_id=(SELECT id FROM test_cases WHERE project_key=$1 AND num=$2) WHERE id=$3 AND case_id IS NULL`,
+        [key, Number(ref.split("-")[1]), testId.get(t.key)]
       );
     }
     const rows = await db.query(
@@ -150,9 +155,39 @@ router.post("/autoruns/:num/results", wrap(async (req, res) => {
     const resultId = new Map(rows.rows.map((r) => [r.test_id, r.id]));
     return parsed.map((t) => resultId.get(testId.get(t.key)));
   });
+}
+
+router.post("/autoruns/:num/results", wrap(async (req, res) => {
+  const list = Array.isArray(req.body.results) ? req.body.results : [];
+  if (!list.length) return res.status(400).json({ error: "Передайте непустой список results" });
+  if (list.length > MAX_BATCH) return res.status(413).json({ error: `Не больше ${MAX_BATCH} результатов за один запрос` });
+  const parsed = list.map(readResult);
+  const bad = parsed.findIndex((t) => !t);
+  if (bad >= 0) return res.status(400).json({ error: `results[${bad}]: нужны name и status (${STATUSES.join(", ")})` });
+  const out = await storeResults(req.params.key, num(req.params.num), parsed);
   if (!out) return res.status(404).json({ error: "Запуск не найден" });
   broadcast("autoruns");
   res.json({ ids: out });
+}));
+
+// Результаты в формате Allure: {"results": [содержимое *-result.json, …]}. Повторы одного теста (retries) сводятся
+// в один результат. Ответ: {ids, attachments: [{id: результат, source, name, type}]} — какие файлы из allure-results
+// приложить запросом POST …/results/:rid/attachments
+router.post("/autoruns/:num/allure", wrap(async (req, res) => {
+  const list = Array.isArray(req.body.results) ? req.body.results : [];
+  if (!list.length) return res.status(400).json({ error: "Передайте непустой список results (содержимое *-result.json)" });
+  if (list.length > MAX_BATCH) return res.status(413).json({ error: `Не больше ${MAX_BATCH} результатов за один запрос` });
+  const converted = allure.convert(list);
+  if (!converted.length) return res.status(400).json({ error: "Ни одного результата Allure: нужны name и status" });
+  const parsed = converted.map((x) => ({ ...readResult(x), cases: x.cases }));
+  const ids = await storeResults(req.params.key, num(req.params.num), parsed);
+  if (!ids) return res.status(404).json({ error: "Запуск не найден" });
+  broadcast("autoruns");
+  res.json({
+    ids,
+    tests: converted.length,
+    attachments: converted.flatMap((x, i) => x.attachments.map((a) => ({ id: ids[i], status: x.status, ...a }))),
+  });
 }));
 
 router.patch("/autoruns/:num", wrap(async (req, res) => {
