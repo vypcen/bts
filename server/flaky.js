@@ -2,7 +2,8 @@
 // Смотрим последние FLAKY_WINDOW завершённых запусков каждого теста и ищем три признака:
 //  1. тест прошёл не с первой попытки (ретрай) — прямое доказательство нестабильности;
 //  2. на одной и той же сборке тест и проходил, и падал — код не менялся, а результат разный;
-//  3. частые смены результата «прошёл ↔ упал» (flip rate). Один переход (сломали → починили) — это регресс, а не flaky.
+//  3. частые смены результата «прошёл ↔ упал» (flip rate). Сломали → починили — это два перехода и регресс, а не flaky:
+//     по сменам результата тест нестабилен с трёх переходов.
 // Пропущенные тесты не учитываются. Результат пишется в auto_tests (flaky_score, flaky_since, flaky_reason);
 // о тесте, который только что стал нестабильным, уходит событие test.flaky.
 const { pool } = require("./db");
@@ -34,9 +35,9 @@ function score(history) {
   const reasons = [];
   if (retried) reasons.push(`прошёл с повторной попытки: ${retried} раз из ${h.length}`);
   if (mixedBuilds) reasons.push(`разный результат на одной сборке: ${mixedBuilds}`);
-  if (flips >= 2) reasons.push(`смен результата: ${flips} за ${h.length} запусков`);
+  if (flips >= 3) reasons.push(`смен результата: ${flips} за ${h.length} запусков`);
   // по флипам выносим вердикт, только когда истории достаточно; ретрай и одна сборка — достаточно и одного случая
-  const flaky = retried > 0 || mixedBuilds > 0 || (h.length >= MIN_RUNS && flips >= 2 && value >= THRESHOLD);
+  const flaky = retried > 0 || mixedBuilds > 0 || (h.length >= MIN_RUNS && flips >= 3 && value >= THRESHOLD);
   return { score: Math.round(value * 100) / 100, flaky, reason: flaky ? reasons.join("; ") : "" };
 }
 

@@ -1,6 +1,6 @@
 // Минимальный разбор XML для импорта из других TMS (TestRail, TestLink): элементы, атрибуты, текст, CDATA, сущности.
 // DTD и внешние сущности не обрабатываются вовсе — XXE невозможна. Пространства имён остаются частью имени.
-const ENT = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'" };
+const ENT = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'", nbsp: "\u00A0" };
 const decode = (s) =>
   s.replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) =>
     e[0] === "#" ? String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : ENT[e] ?? m
@@ -41,7 +41,7 @@ function htmlToText(s) {
       .replace(/<\s*li[^>]*>/gi, "• ")
       .replace(/<[^>]+>/g, "")
   )
-    .replace(/ /g, " ")
+    .replace(/\u00A0/g, " ")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

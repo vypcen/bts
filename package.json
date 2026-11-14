@@ -9,7 +9,13 @@
     "migrate": "node server/migrate.js",
     "import": "node scripts/import.js",
     "build:web": "npm --prefix web ci && npm --prefix web run build",
-    "dev:web": "npm --prefix web run dev"
+    "dev:web": "npm --prefix web run dev",
+    "test": "node --test --test-concurrency=2 test/*.test.js",
+    "test:unit": "node --test test/unit.test.js",
+    "lint": "eslint .",
+    "typecheck": "npm --prefix web run typecheck",
+    "check": "npm run lint && npm run typecheck && npm test",
+    "e2e": "npm run build:web && playwright test -c e2e/playwright.config.js"
   },
   "engines": {
     "node": ">=20"
@@ -20,5 +26,11 @@
     "express": "^4.21.2",
     "ldapts": "8.2.0",
     "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.49.1",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0"
   }
 }

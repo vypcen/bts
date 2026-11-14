@@ -8,3 +8,6 @@ data/
 # собранный интерфейс (npm run build:web)
 public/
 .DS_Store
+# результаты E2E
+test-results/
+playwright-report/

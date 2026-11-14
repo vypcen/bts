@@ -168,7 +168,7 @@ router.get("/cases/export", wrap(async (req, res) => {
 // Разбирает файл и сверяет с базой. Ничего не пишет: план, по которому потом работает apply()
 async function plan(db, key, text) {
   const errors = [];
-  const records = parseCsv(text.replace(/^﻿/, ""));
+  const records = parseCsv(text.replace(/^\uFEFF/, ""));
   if (!records.length) return { errors: [{ line: 1, error: "Файл пустой" }] };
   const head = records[0].cells.map((h) => h.trim().toLowerCase().replace(/\s*\*$/, ""));
   const col = {};

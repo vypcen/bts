@@ -1,0 +1,39 @@
+# То же для GitLab: линтер, типы, тесты на PostgreSQL, сборка и сканирование образа, публикация по тегу.
+stages: [check, image]
+
+variables:
+  POSTGRES_PASSWORD: postgres
+  TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres
+
+check:
+  stage: check
+  image: node:20
+  services: [postgres:16-alpine]
+  cache:
+    key: { files: [package-lock.json, web/package-lock.json] }
+    paths: [.npm/]
+  script:
+    - npm ci --cache .npm --prefer-offline
+    - npm --prefix web ci --cache .npm --prefer-offline
+    - npm run lint
+    - npm run typecheck
+    - npm test
+    - npx playwright install --with-deps chromium && npm run e2e
+  artifacts:
+    when: on_failure
+    paths: [test-results/]
+    - npm audit --omit=dev --audit-level=high
+
+image:
+  stage: image
+  image: docker:27
+  services: [docker:27-dind]
+  script:
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" .
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.57.0 image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+        docker tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" "$CI_REGISTRY_IMAGE:${CI_COMMIT_TAG#v}"
+        docker push "$CI_REGISTRY_IMAGE:${CI_COMMIT_TAG#v}"
+      fi
