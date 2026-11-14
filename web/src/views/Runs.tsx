@@ -5,6 +5,7 @@ import { countResults, folderTree, runResults, withSubfolders } from "../selecto
 import { useCanEdit, useData, useStore } from "../store";
 import type { Project, Run, TestCase } from "../types";
 import { Empty, fmt, Modal, Pill, Prio, ResultBar, Who } from "../ui";
+import { AssignPicker, type Assign } from "./Plans";
 
 export function RunsTab({ project }: { project: Project }) {
   const data = useData();
@@ -73,6 +74,7 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
   // по умолчанию — все кейсы, готовые к прогону
   const [picked, setPicked] = useState<Set<number>>(() => new Set(cases.filter((c) => c.status === "ready").map((c) => c.num)));
   const [err, setErr] = useState("");
+  const [assign, setAssign] = useState<Assign>({ users: [], strategy: "balanced" });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
 
   async function submit(e: FormEvent) {
@@ -84,7 +86,7 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
     }
     if (!picked.size) return setErr("Выберите хотя бы один тест-кейс");
     let num = 0;
-    if (await write(async () => { num = (await api<{ num: number }>("POST", paths.runs(pid), { ...f, caseNums: [...picked] })).num; })) {
+    if (await write(async () => { num = (await api<{ num: number }>("POST", paths.runs(pid), { ...f, caseNums: [...picked], assign })).num; })) {
       toast(`Создан ${pid}-R${num}`);
       onClose();
       go("p", pid, "runs", num);
@@ -102,6 +104,7 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
           <div className="field"><label htmlFor="r-env">Окружение</label><input className="input" id="r-env" value={f.env} onChange={set("env")} placeholder="staging, Chrome 130" /></div>
         </div>
         {!run && <CasePicker cases={cases} picked={picked} setPicked={setPicked} />}
+        {!run && <AssignPicker pid={pid} value={assign} onChange={setAssign} />}
         <div className="err">{err}</div>
         <div className="acts">
           <button type="button" className="btn" onClick={onClose}>Отмена</button>

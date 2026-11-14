@@ -15,13 +15,18 @@ export interface AutoStep {
   steps: AutoStep[];
 }
 
-// tester — работает с проектами, developer — смотрит и комментирует, admin — ещё и пользователи с доступами
-export type Role = "tester" | "developer" | "admin";
+// tester — работает с проектами, developer — смотрит и комментирует, viewer — только смотрит (просмотровая лицензия),
+// admin — ещё и пользователи с доступами
+export type Role = "tester" | "developer" | "viewer" | "admin";
+export type ProjectRole = "tester" | "developer" | "viewer";
+// Откуда учётная запись: локальная или из каталога / SSO
+export type AuthProvider = "local" | "ldap" | "oidc" | "kerberos";
 
 export interface User {
   login: string;
   name: string;
   role: Role;
+  provider?: AuthProvider;
 }
 
 export interface Project {
@@ -31,6 +36,8 @@ export interface Project {
   createdBy: string | null;
   created: number;
   members: string[]; // логины участников; админы видят проект и без этого
+  memberRoles: Record<string, ProjectRole>; // роли участников в этом проекте (если отличаются от глобальной)
+  myRole: Role; // действующая роль текущего пользователя в проекте
 }
 
 // Папка тест-кейсов; parent: null — в корне проекта
@@ -61,6 +68,8 @@ export interface TestCase {
   updatedBy: string | null;
   created: number;
   updated: number;
+  version: number; // номер текущей версии содержимого
+  automated: boolean; // есть связанный автотест
 }
 
 export interface Run {
@@ -74,6 +83,8 @@ export interface Run {
   createdBy: string | null;
   created: number;
   closed: number | null;
+  planNum: number | null; // прогон создан из тест-плана
+  planLocked: boolean; // план заблокирован: состав зафиксирован, удалить прогон нельзя
 }
 
 export interface Result {
@@ -86,6 +97,8 @@ export interface Result {
   items: Record<string, ResultValue>; // отметки пунктов чек-листа по их тексту; у тест-кейса пусто
   executedBy: string | null;
   executed: number | null;
+  assignee: string | null; // кому назначен кейс в прогоне
+  caseVersion: number | null; // какая версия кейса проверялась
 }
 
 export interface Bug {
@@ -108,6 +121,7 @@ export interface Bug {
   updatedBy: string | null;
   created: number;
   updated: number;
+  external: { key: string; url: string; status: string } | null; // задача во внешнем трекере
 }
 
 export interface Attachment {
@@ -146,12 +160,16 @@ export interface AutoRun {
   branch: string;
   scope: string; // какие проекты Playwright запускались
   url: string; // адрес тестируемого приложения
-  state: "running" | "finished";
+  // queued — запущен из TestBall в CI и ждёт начала; failed — CI не принял запуск
+  state: "queued" | "running" | "finished" | "failed";
   createdBy: string | null;
   created: number;
   finished: number | null;
   durationMs: number;
   counts: Record<AutoStatus, number>;
+  flaky: number; // сколько тестов прошли не с первой попытки
+  params: Record<string, string>; // параметры запуска из CI
+  ciUrl: string;
 }
 
 // Ответ GET /api/projects/:key/autoruns/:num
@@ -167,6 +185,10 @@ export interface AutoResult {
   details: string;
   steps: AutoStep[];
   prev: { status: AutoStatus; runNum: number } | null;
+  retries: number;
+  flaky: boolean; // прошёл не с первой попытки
+  quarantined: boolean;
+  unstable: boolean; // тест признан нестабильным
 }
 
 // Ответ GET /api/projects/:key/autotests
@@ -177,11 +199,25 @@ export interface AutoTest {
   file: string;
   steps: { title: string; steps: AutoTest["steps"] }[]; // из последнего прохождения без падения
   created: number;
-  history: { status: AutoStatus; runNum: number }[];
+  history: { status: AutoStatus; runNum: number; flaky: boolean }[];
+  flaky: { score: number; reason: string; since: number } | null; // определено сервером
+  flakyScore: number;
+  quarantined: boolean;
+  caseNum: number | null; // связанный ручной кейс
+}
+
+export interface PlanSummary {
+  id: string;
+  pid: string;
+  num: number;
+  title: string;
+  mode: "static" | "dynamic";
+  locked: boolean;
 }
 
 export interface State {
   projects: Project[];
+  plans: PlanSummary[];
   cases: TestCase[];
   folders: CaseFolder[];
   runs: Run[];
@@ -193,10 +229,156 @@ export interface State {
   users: Record<string, { name: string; role: Role }>;
 }
 
-// GET /api/llm/status: показывать ли в интерфейсе функции с локальной моделью
+// GET /api/llm/status: показывать ли в интерфейсе функции с языковой моделью
 export interface LlmStatus {
   enabled: boolean;
   model: string | null;
   ready: boolean;
+  provider?: string;
+  kind?: LlmKind;
+  external?: boolean; // тексты уходят во внешний сервис
   error?: string;
+}
+
+export type LlmKind = "openai" | "anthropic" | "yandexgpt" | "gigachat";
+// Подключение к модели (GET /api/admin/llm)
+export interface LlmProvider {
+  id: number;
+  name: string;
+  kind: LlmKind;
+  baseUrl: string;
+  model: string;
+  settings: { selfHosted?: boolean; concurrency?: number; timeoutMs?: number; jsonMode?: string; effort?: string; folderId?: string; authType?: string; scope?: string; authUrl?: string };
+  active: boolean;
+  hasKey: boolean;
+  selfHosted: boolean;
+  updated: number;
+}
+
+// ---------- тест-планы (GET /api/projects/:key/plans) ----------
+export interface PlanFilter {
+  folders: number[];
+  root: boolean;
+  priorities: Priority[];
+  statuses: CaseStatus[];
+  kinds: CaseKind[];
+  text: string;
+  automated: "any" | "yes" | "no";
+  lastResults: ResultValue[];
+}
+
+export interface Plan {
+  num: number;
+  id: string;
+  title: string;
+  description: string;
+  mode: "static" | "dynamic";
+  filter: PlanFilter;
+  locked: boolean;
+  lockedBy: string | null;
+  lockedAt: number | null;
+  createdBy: string | null;
+  created: number;
+  updated: number;
+  caseCount: number;
+  runs: number;
+}
+
+export interface PlanCase {
+  num: number;
+  version: number;
+  currentVersion: number;
+  kind: CaseKind;
+  title: string;
+  priority: Priority;
+  status: CaseStatus;
+}
+
+// Версия тест-кейса (GET /cases/:num/versions)
+export interface CaseVersion {
+  version: number;
+  kind: CaseKind;
+  title: string;
+  priority: Priority;
+  status: CaseStatus;
+  pre: string;
+  steps: string;
+  expected: string;
+  changedBy: string | null;
+  changed: number;
+}
+
+// ---------- интеграции ----------
+export interface Webhook {
+  id: number;
+  name: string;
+  url: string;
+  method: "POST" | "PUT" | "PATCH" | "GET";
+  events: string[];
+  headers: Record<string, string>;
+  body: string;
+  filter: Record<string, string[]>;
+  active: boolean;
+  hasSecret: boolean;
+  created: number;
+  last: { at: number; status: number | null; error: string } | null;
+}
+
+export interface WebhookDelivery {
+  id: number;
+  event: string;
+  attempt: number;
+  status: number | null;
+  error: string;
+  durationMs: number;
+  request: string;
+  response: string;
+  at: number;
+}
+
+export type TrackerKind = "jira" | "youtrack" | "gitlab" | "github" | "redmine";
+export interface Tracker {
+  kind: TrackerKind;
+  baseUrl: string;
+  projectRef: string;
+  login: string;
+  hasToken: boolean;
+  settings: { issueType?: string; labels: string[]; autoCreate: boolean; autoCreateSeverities: Severity[]; closeToFixed: boolean; trackerId?: string };
+}
+
+export interface CiParam {
+  name: string;
+  label: string;
+  default: string;
+  options: string[];
+  required: boolean;
+}
+export interface CiJob {
+  id: number;
+  name: string;
+  kind: "gitlab" | "github" | "jenkins" | "generic";
+  baseUrl: string;
+  target: string;
+  ref: string;
+  login: string;
+  params: CiParam[];
+  hasToken: boolean;
+  created: number;
+}
+
+// ---------- аналитика (GET /api/projects/:key/analytics) ----------
+export interface Analytics {
+  days: number;
+  cases: { total: number; ready: number; draft: number; deprecated: number; checklists: number; automated: number; changed: number };
+  coverage: { executed: number; executedPct: number | null; automatedPct: number | null };
+  execution: { day: string; result: ResultValue; n: number }[];
+  runs: { num: number; title: string; state: string; created: number; counts: Record<Exclude<ResultValue, never>, number>; total: number; passRate: number | null }[];
+  bugs: { open: { severity: Severity; status: BugStatus; n: number }[]; flow: { day: string; created: number; resolved: number }[] };
+  auto: {
+    runs: { num: number; title: string; branch: string; created: number; total: number; counts: Record<AutoStatus, number>; flaky: number; durationMs: number; passRate: number | null }[];
+    lastPassRate: number | null;
+    topFailing: { id: number; suite: string; name: string; fails: number; runs: number }[];
+    flaky: { id: number; suite: string; name: string; score: number; reason: string; quarantined: boolean; since: number }[];
+  };
+  workload: { login: string; todo: number; done: number }[];
 }

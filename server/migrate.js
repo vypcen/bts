@@ -5,20 +5,31 @@ const { pool, tx } = require("./db");
 
 const DIR = path.join(__dirname, "migrations");
 
+// Номер блокировки PostgreSQL: в Kubernetes несколько реплик стартуют одновременно,
+// миграции применяет та, что первой взяла блокировку, остальные ждут и видят их уже применёнными
+const LOCK_ID = 7_204_311;
+
 async function migrate() {
-  await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
-    name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
-  const { rows } = await pool.query("SELECT name FROM schema_migrations");
-  const done = new Set(rows.map((r) => r.name));
-  const files = fs.readdirSync(DIR).filter((f) => f.endsWith(".sql")).sort();
-  for (const f of files) {
-    if (done.has(f)) continue;
-    const sql = fs.readFileSync(path.join(DIR, f), "utf8");
-    await tx(async (c) => {
-      await c.query(sql);
-      await c.query("INSERT INTO schema_migrations(name) VALUES ($1)", [f]);
-    });
-    console.log(`[migrate] применена ${f}`);
+  const lock = await pool.connect();
+  try {
+    await lock.query("SELECT pg_advisory_lock($1)", [LOCK_ID]);
+    await lock.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+    const { rows } = await lock.query("SELECT name FROM schema_migrations");
+    const done = new Set(rows.map((r) => r.name));
+    const files = fs.readdirSync(DIR).filter((f) => f.endsWith(".sql")).sort();
+    for (const f of files) {
+      if (done.has(f)) continue;
+      const sql = fs.readFileSync(path.join(DIR, f), "utf8");
+      await tx(async (c) => {
+        await c.query(sql);
+        await c.query("INSERT INTO schema_migrations(name) VALUES ($1)", [f]);
+      });
+      console.log(`[migrate] применена ${f}`);
+    }
+  } finally {
+    await lock.query("SELECT pg_advisory_unlock($1)", [LOCK_ID]).catch(() => {});
+    lock.release();
   }
 }
 

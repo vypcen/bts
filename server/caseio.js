@@ -118,6 +118,22 @@ async function folderPaths(db, key) {
 const splitPath = (raw) => raw.split(/[/>]/).map((s) => s.trim()).filter(Boolean);
 
 // ---------- экспорт ----------
+// Строка файла из записи test_cases (или версии кейса: те же поля)
+const csvRow = (key, c, pathOf) => ({
+  id: `${key}-${c.num}`, folder: c.folder_id ? pathOf(c.folder_id) : "", title: c.title,
+  priority: LABEL.priority[c.priority], status: LABEL.status[c.status], pre: c.preconditions, steps: c.steps, expected: c.expected,
+  kind: LABEL.kind[c.kind],
+});
+
+function sendCsv(res, rows, name, asciiName) {
+  const lines = [COLUMNS.map((c) => c.header), ...rows.map((r) => COLUMNS.map((c) => r[c.key]))].map((cells) => cells.map(csvCell).join(";"));
+  res.set({
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+  });
+  // BOM — чтобы Excel понял, что файл в UTF-8, а не показал кириллицу «кракозябрами»
+  res.send("\ufeff" + lines.join("\r\n") + "\r\n");
+}
 // ?folder=all (по умолчанию) | none — без папки | <id> — папка с подпапками. ?template=1 — пустой шаблон с примером
 router.get("/cases/export", wrap(async (req, res) => {
   const key = req.params.key;
@@ -143,20 +159,9 @@ router.get("/cases/export", wrap(async (req, res) => {
     };
     rows = cases
       .filter((c) => sel === "all" || (sel === "none" ? c.folder_id === null : c.folder_id !== null && inside(c.folder_id)))
-      .map((c) => ({
-        id: `${key}-${c.num}`, folder: c.folder_id ? pathOf(c.folder_id) : "", title: c.title,
-        priority: LABEL.priority[c.priority], status: LABEL.status[c.status], pre: c.preconditions, steps: c.steps, expected: c.expected,
-        kind: LABEL.kind[c.kind],
-      }));
+      .map((c) => csvRow(key, c, pathOf));
   }
-  const lines = [COLUMNS.map((c) => c.header), ...rows.map((r) => COLUMNS.map((c) => r[c.key]))].map((cells) => cells.map(csvCell).join(";"));
-  const name = req.query.template ? `${key}-шаблон.csv` : `${key}-кейсы.csv`;
-  res.set({
-    "Content-Type": "text/csv; charset=utf-8",
-    "Content-Disposition": `attachment; filename="${key}-cases.csv"; filename*=UTF-8''${encodeURIComponent(name)}`,
-  });
-  // BOM — чтобы Excel понял, что файл в UTF-8, а не показал кириллицу «кракозябрами»
-  res.send("﻿" + lines.join("\r\n") + "\r\n");
+  sendCsv(res, rows, req.query.template ? `${key}-шаблон.csv` : `${key}-кейсы.csv`, `${key}-cases.csv`);
 }));
 
 // ---------- импорт ----------
@@ -322,4 +327,4 @@ router.post("/cases/import", wrap(async (req, res) => {
   res.json({ summary: out.summary });
 }));
 
-module.exports = { router, parseCsv, csvCell };
+module.exports = { router, parseCsv, csvCell, csvRow, sendCsv, folderPaths };

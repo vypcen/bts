@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Отправляет результаты автотестов в TestBol: каждый вызов — отдельный запуск («папка») во вкладке «Автотесты».
+// Отправляет результаты автотестов в TestBall: каждый вызов — отдельный запуск («папка») во вкладке «Автотесты».
 // Читает отчёты JUnit XML (их умеют писать pytest, Playwright, Jest, Cypress, JUnit/TestNG, Go и другие),
 // к упавшим тестам прикладывает скриншоты и прочие файлы, указанные в отчёте.
 // Зависимостей нет, нужен Node.js 20+: файл можно скопировать в любой проект с тестами.
@@ -18,13 +18,14 @@ const { spawnSync, execSync } = require("child_process");
 
 const HELP = `Использование: node report.js [параметры] <отчёт.xml | папка>... [-- команда]
 
-  --url URL         адрес TestBol (или TESTBOL_URL), например http://localhost:3000
-  --token TOKEN     токен из вкладки «Автотесты» → «Подключить» (или TESTBOL_TOKEN)
-  --project KEY     ключ проекта, например LK (или TESTBOL_PROJECT)
+  --url URL         адрес TestBall (или TESTBALL_URL), например http://localhost:3000
+  --token TOKEN     токен из вкладки «Автотесты» → «Подключить» (или TESTBALL_TOKEN)
+  --project KEY     ключ проекта, например LK (или TESTBALL_PROJECT)
   --title TEXT      название запуска (по умолчанию «Локальный запуск <ветка>»)
   --build TEXT      сборка / версия (по умолчанию короткий хэш коммита)
   --env TEXT        окружение (по умолчанию имя компьютера и ОС)
   --branch TEXT     ветка (по умолчанию текущая ветка git)
+  --run N           номер запуска, созданного в TestBall (или TESTBALL_RUN): так делает кнопка «Запустить в CI»
   --attach-all      прикладывать файлы и к прошедшим тестам, а не только к упавшим
   -- команда        сначала выполнить команду (запуск тестов), затем отправить отчёт.
                     Скрипт завершится с тем же кодом, что и команда.`;
@@ -38,7 +39,7 @@ const MIME = {
 
 function parseArgs(argv) {
   const opts = { files: [], command: null };
-  const flags = { "--url": "url", "--token": "token", "--project": "project", "--title": "title", "--build": "build", "--env": "env", "--branch": "branch" };
+  const flags = { "--url": "url", "--token": "token", "--project": "project", "--title": "title", "--build": "build", "--env": "env", "--branch": "branch", "--run": "run" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--") {
@@ -104,6 +105,9 @@ function toResult(tc, suite, dir) {
   const skipped = child(tc, "skipped");
   const problem = failure || error;
   const status = failure ? "failed" : error ? "broken" : skipped ? "skipped" : "passed";
+  // Maven Surefire/pytest-rerunfailures: <flakyFailure>/<flakyError> у прошедшего теста, <rerunFailure>/<rerunError> у упавшего —
+  // каждая такая запись — повторная попытка. Прошёл с повтора — нестабильный
+  const reruns = (tc.children || []).filter((c) => /^(flaky|rerun)(Failure|Error)$/.test(c.name)).length;
   const out = (child(tc, "system-out")?.text || "").trim();
   const err = (child(tc, "system-err")?.text || "").trim();
   const text = (problem?.text || "").trim();
@@ -122,6 +126,8 @@ function toResult(tc, suite, dir) {
     file: tc.attrs.file || "",
     status,
     durationMs: Math.round((Number(tc.attrs.time) || 0) * 1000),
+    retries: reruns,
+    flaky: status === "passed" && reruns > 0,
     message: message.slice(0, 5000),
     details: details.slice(0, 50000),
     attachments: [...files].map((f) => (path.isAbsolute(f) ? f : [path.resolve(dir, f), path.resolve(f)].find(fs.existsSync) || path.resolve(dir, f))),
@@ -170,13 +176,20 @@ function client(base, token, project) {
 async function send(opts, tests) {
   const call = client(opts.url, opts.token, opts.project);
   const branch = opts.branch ?? git("rev-parse --abbrev-ref HEAD");
-  const run = await call("POST", "/autoruns", {
-    title: opts.title || `Локальный запуск${branch ? ` ${branch}` : ""}`,
+  const fields = {
     build: opts.build ?? git("rev-parse --short HEAD"),
     env: opts.env ?? `${os.hostname()}, ${os.type()} ${os.release()}`,
     branch,
-  });
-  console.log(`[testbol] запуск ${run.id}: результатов к отправке: ${tests.length}`);
+  };
+  let run;
+  if (/^\d+$/.test(String(opts.run || ""))) {
+    // запуск уже создан в TestBall (задача CI запущена из интерфейса) — дописываем в него
+    await call("PATCH", `/autoruns/${opts.run}`, { ...fields, state: "running" });
+    run = { num: Number(opts.run), id: `${opts.project}-A${opts.run}` };
+  } else {
+    run = await call("POST", "/autoruns", { title: opts.title || `Локальный запуск${branch ? ` ${branch}` : ""}`, ...fields });
+  }
+  console.log(`[testball] запуск ${run.id}: результатов к отправке: ${tests.length}`);
 
   const ids = [];
   for (let i = 0; i < tests.length; i += 500) {
@@ -189,7 +202,7 @@ async function send(opts, tests) {
     if (t.status === "passed" && !opts.attachAll) continue;
     for (const f of t.attachments) {
       if (!fs.existsSync(f) || !fs.statSync(f).isFile()) {
-        console.warn(`[testbol] не найден файл ${f} (тест «${t.name}»)`);
+        console.warn(`[testball] не найден файл ${f} (тест «${t.name}»)`);
         continue;
       }
       try {
@@ -200,7 +213,7 @@ async function send(opts, tests) {
         });
         sent++;
       } catch (e) {
-        console.warn(`[testbol] ${path.basename(f)}: ${e.message}`);
+        console.warn(`[testball] ${path.basename(f)}: ${e.message}`);
       }
     }
   }
@@ -208,17 +221,18 @@ async function send(opts, tests) {
   await call("PATCH", `/autoruns/${run.num}`, { state: "finished" });
   const c = { passed: 0, failed: 0, broken: 0, skipped: 0 };
   for (const t of tests) c[t.status]++;
-  console.log(`[testbol] готово: пройдено ${c.passed}, упало ${c.failed}, сломано ${c.broken}, пропущено ${c.skipped}, файлов ${sent}`);
-  console.log(`[testbol] ${opts.url.replace(/\/+$/, "")}/#/p/${encodeURIComponent(opts.project)}/auto/${run.num}`);
+  console.log(`[testball] готово: пройдено ${c.passed}, упало ${c.failed}, сломано ${c.broken}, пропущено ${c.skipped}, файлов ${sent}`);
+  console.log(`[testball] ${opts.url.replace(/\/+$/, "")}/#/p/${encodeURIComponent(opts.project)}/auto/${run.num}`);
 }
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) return console.log(HELP), 0;
-  opts.url ??= process.env.TESTBOL_URL;
-  opts.token ??= process.env.TESTBOL_TOKEN;
-  opts.project ??= process.env.TESTBOL_PROJECT;
-  const missing = [["url", "--url / TESTBOL_URL"], ["token", "--token / TESTBOL_TOKEN"], ["project", "--project / TESTBOL_PROJECT"]].filter(([k]) => !opts[k]);
+  opts.url ??= process.env.TESTBALL_URL;
+  opts.token ??= process.env.TESTBALL_TOKEN;
+  opts.project ??= process.env.TESTBALL_PROJECT;
+  opts.run ??= process.env.TESTBALL_RUN;
+  const missing = [["url", "--url / TESTBALL_URL"], ["token", "--token / TESTBALL_TOKEN"], ["project", "--project / TESTBALL_PROJECT"]].filter(([k]) => !opts[k]);
   if (missing.length) throw new Error(`Не заданы: ${missing.map(([, l]) => l).join(", ")}. Справка: node report.js --help`);
   if (!opts.files.length) throw new Error("Укажите файл JUnit XML или папку с отчётами. Справка: node report.js --help");
 
@@ -231,7 +245,7 @@ async function main() {
     code = r.status ?? 1;
     const fresh = reportFiles(opts.files).filter((f) => fs.statSync(f).mtimeMs >= started - 1000);
     if (!fresh.length) {
-      console.error("[testbol] команда не записала новый отчёт JUnit — отправлять нечего. Проверьте путь к отчёту и настройки репортера");
+      console.error("[testball] команда не записала новый отчёт JUnit — отправлять нечего. Проверьте путь к отчёту и настройки репортера");
       return code || 1;
     }
     opts.files = fresh;
@@ -242,7 +256,7 @@ async function main() {
   try {
     await send(opts, tests);
   } catch (e) {
-    console.error(`[testbol] не удалось отправить результаты: ${e.message}`);
+    console.error(`[testball] не удалось отправить результаты: ${e.message}`);
     return code || 1;
   }
   return code;
@@ -251,7 +265,7 @@ async function main() {
 main().then(
   (code) => process.exit(code),
   (e) => {
-    console.error(`[testbol] ${e.message}`);
+    console.error(`[testball] ${e.message}`);
     process.exit(1);
   }
 );

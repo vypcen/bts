@@ -1,13 +1,15 @@
-// Репортер Playwright для TestBol: каждый запуск `npx playwright test` становится отдельной папкой во вкладке «Автотесты».
+// Репортер Playwright для TestBall: каждый запуск `npx playwright test` становится отдельной папкой во вкладке «Автотесты».
 // Результаты уходят по ходу запуска, к упавшим тестам прикладываются скриншоты, видео и трейс.
 // Зависимостей нет: положите файл рядом с playwright.config и подключите его:
 //
-//   reporter: [["list"], ["./testbol-reporter.js"]],
+//   reporter: [["list"], ["./testball-reporter.js"]],
 //   use: { screenshot: "only-on-failure", trace: "retain-on-failure" },
 //
-// Настройки — переменные окружения TESTBOL_URL, TESTBOL_TOKEN, TESTBOL_PROJECT (или опции репортера url, token, project).
-// Необязательные: TESTBOL_TITLE (по умолчанию «Локальный запуск <адрес сайта>»), TESTBOL_BUILD, TESTBOL_ENV, TESTBOL_BRANCH,
-// TESTBOL_APP_URL — адрес тестируемого приложения (или опция appUrl; по умолчанию baseURL из конфига).
+// Настройки — переменные окружения TESTBALL_URL, TESTBALL_TOKEN, TESTBALL_PROJECT (или опции репортера url, token, project).
+// Необязательные: TESTBALL_TITLE (по умолчанию «Локальный запуск <адрес сайта>»), TESTBALL_BUILD, TESTBALL_ENV, TESTBALL_BRANCH,
+// TESTBALL_APP_URL — адрес тестируемого приложения (или опция appUrl; по умолчанию baseURL из конфига).
+// TESTBALL_RUN — номер уже созданного запуска (его передаёт TestBall при запуске задачи CI из интерфейса):
+// результаты пишутся в этот запуск, а не в новый.
 // Шаги теста (test.step) уходят вместе с результатом: видно, какие шаги прошли и на каком тест упал.
 // Если настройки не заданы, репортер молча выключается и тесты работают как обычно.
 const fs = require("fs");
@@ -19,7 +21,7 @@ const clean = (s) => (s || "").replace(ANSI, "");
 const BATCH = 50;
 const FLUSH_MS = 2000;
 // Файлы крупнее не отправляем: сервер их всё равно не примет (MAX_UPLOAD_MB, по умолчанию 20 МБ)
-const MAX_FILE = Number(process.env.TESTBOL_MAX_FILE_MB || 20) * 1024 * 1024;
+const MAX_FILE = Number(process.env.TESTBALL_MAX_FILE_MB || 20) * 1024 * 1024;
 const MAX_STEPS = 300;
 
 // Из дерева шагов Playwright берём только test.step. Хуки (beforeEach), фикстуры, действия и expect
@@ -53,20 +55,21 @@ function git(cmd) {
   }
 }
 
-class TestbolReporter {
+class TestballReporter {
   constructor(options = {}) {
     const env = process.env;
-    this.url = (options.url || env.TESTBOL_URL || "").replace(/\/+$/, "");
-    this.token = options.token || env.TESTBOL_TOKEN || "";
-    this.project = options.project || env.TESTBOL_PROJECT || "";
+    this.url = (options.url || env.TESTBALL_URL || "").replace(/\/+$/, "");
+    this.token = options.token || env.TESTBALL_TOKEN || "";
+    this.project = options.project || env.TESTBALL_PROJECT || "";
     this.opts = {
-      title: options.title || env.TESTBOL_TITLE,
-      build: options.build ?? env.TESTBOL_BUILD,
-      env: options.env ?? env.TESTBOL_ENV,
-      branch: options.branch ?? env.TESTBOL_BRANCH,
-      appUrl: options.appUrl ?? env.TESTBOL_APP_URL,
+      title: options.title || env.TESTBALL_TITLE,
+      build: options.build ?? env.TESTBALL_BUILD,
+      env: options.env ?? env.TESTBALL_ENV,
+      branch: options.branch ?? env.TESTBALL_BRANCH,
+      appUrl: options.appUrl ?? env.TESTBALL_APP_URL,
+      runNum: /^\d+$/.test(String(options.run ?? env.TESTBALL_RUN ?? "")) ? Number(options.run ?? env.TESTBALL_RUN) : null,
     };
-    // `--list` только показывает тесты, не запуская их: такой «запуск» в TestBol не нужен
+    // `--list` только показывает тесты, не запуская их: такой «запуск» в TestBall не нужен
     this.enabled = Boolean(this.url && this.token && this.project) && !process.argv.includes("--list");
     this.queue = []; // результаты, ещё не отправленные на сервер
     this.reported = new Set(); // тесты с итоговым результатом
@@ -80,7 +83,7 @@ class TestbolReporter {
   }
 
   log(msg) {
-    console.log(`[testbol] ${msg}`);
+    console.log(`[testball] ${msg}`);
   }
 
   async call(method, url, body, headers) {
@@ -117,14 +120,23 @@ class TestbolReporter {
       host = new URL(appUrl.split(",")[0].trim()).host;
     } catch {}
     this.enqueue(async () => {
-      this.run = await this.call("POST", "/autoruns", {
-        title: this.opts.title || `Локальный запуск${host ? ` ${host}` : branch ? ` ${branch}` : ""}`,
+      const fields = {
         build: this.opts.build ?? git("rev-parse --short HEAD"),
         env: this.opts.env ?? "",
         branch,
         scope: running.map((p) => p?.name).filter(Boolean).join(", "),
         url: appUrl,
-      });
+      };
+      if (this.opts.runNum) {
+        // запуск создан в TestBall кнопкой «Запустить в CI»: переводим его в «Выполняется»
+        await this.call("PATCH", `/autoruns/${this.opts.runNum}`, { ...fields, state: "running" });
+        this.run = { num: this.opts.runNum, id: `${this.project}-A${this.opts.runNum}` };
+      } else {
+        this.run = await this.call("POST", "/autoruns", {
+          title: this.opts.title || `Локальный запуск${host ? ` ${host}` : branch ? ` ${branch}` : ""}`,
+          ...fields,
+        });
+      }
       this.log(`запуск ${this.run.id}: ${this.url}/#/p/${encodeURIComponent(this.project)}/auto/${this.run.num}`);
     });
   }
@@ -171,6 +183,9 @@ class TestbolReporter {
       message: message.slice(0, 5000),
       details: details.slice(0, 50000),
       steps: collectSteps(result.steps),
+      // номер попытки: прошёл со 2-й и далее — TestBall отметит тест как нестабильный
+      retries: result.retry,
+      flaky: outcome === "flaky",
       attachments: status === "failed" || status === "broken" ? result.attachments : [],
     };
   }
@@ -246,4 +261,4 @@ class TestbolReporter {
   }
 }
 
-module.exports = TestbolReporter;
+module.exports = TestballReporter;

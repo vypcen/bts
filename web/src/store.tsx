@@ -1,10 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, setUnauthorizedHandler } from "./api";
+import { useRoute } from "./router";
 import type { State, User } from "./types";
 
 interface Store {
   me: User | null | undefined; // undefined — ещё не знаем, вошёл ли пользователь
-  canEdit: boolean; // false у роли «Разработчик»: только просмотр и комментарии
+  // Может ли менять данные. Внутри проекта — по роли в этом проекте, вне проекта — по глобальной роли
+  canEdit: boolean;
+  canComment: boolean; // разработчик комментирует, наблюдатель — нет
   bootError: boolean;
   data: State | null;
   liveError: string;
@@ -19,12 +22,15 @@ const Ctx = createContext<Store>(null!);
 export const useStore = () => useContext(Ctx);
 export const useData = () => useContext(Ctx).data!;
 export const useCanEdit = () => useContext(Ctx).canEdit;
+export const useCanComment = () => useContext(Ctx).canComment;
 
 // Загружает данные, которых нет в общем состоянии, и перечитывает их при каждом обновлении состояния
-export function useLoad<T>(url: string) {
+// url null — ничего не загружать
+export function useLoad<T>(url: string | null) {
   const data = useData();
   const [s, setS] = useState<{ value?: T; error?: string }>({});
   useEffect(() => {
+    if (!url) return setS({});
     let alive = true;
     api<T>("GET", url).then(
       (value) => alive && setS({ value }),
@@ -121,9 +127,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // роль могут поменять, пока вкладка открыта: свежая приходит с каждым обновлением состояния
   const role = me && data?.users[me.login]?.role;
   const user = me && role && role !== me.role ? { ...me, role } : me;
+  // роль в открытом проекте (#/p/KEY/...) может отличаться от глобальной
+  const [section, key] = useRoute();
+  const projectRole = section === "p" ? data?.projects.find((p) => p.id === key)?.myRole : undefined;
+  const effective = projectRole || user?.role;
+  const canEdit = effective === "tester" || effective === "admin";
+  const canComment = canEdit || effective === "developer";
 
   return (
-    <Ctx.Provider value={{ me: user, canEdit: user?.role === "tester" || user?.role === "admin", bootError, data, liveError, setMe, reload, toast, write }}>
+    <Ctx.Provider value={{ me: user, canEdit, canComment, bootError, data, liveError, setMe, reload, toast, write }}>
       {children}
       <div className="toast" hidden={!toastMsg} role="status">
         {toastMsg}

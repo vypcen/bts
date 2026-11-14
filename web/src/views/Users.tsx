@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { api } from "../api";
-import { find, ROLES } from "../labels";
+import { find, PROJECT_ROLES, PROVIDERS, ROLES } from "../labels";
 import { href } from "../router";
 import { useData, useLoad, useStore } from "../store";
-import type { Role } from "../types";
+import type { ProjectRole, Role } from "../types";
 import { Avatar, Confirm, Empty, fmt, Modal, Pill } from "../ui";
 import { NewUserModal, PasswordModal } from "./Password";
 
@@ -15,6 +15,15 @@ interface AdminUser {
   blocked: boolean;
   created: number;
   projects: string[];
+  projectRoles: Record<string, ProjectRole>;
+  provider: string;
+  email: string;
+  lastLogin: number | null;
+}
+
+interface Seats {
+  full: { used: number; limit: number | null };
+  view: { used: number; limit: number | null };
 }
 
 const usersUrl = "/api/admin/users";
@@ -23,7 +32,7 @@ const userUrl = (login: string) => `${usersUrl}/${encodeURIComponent(login)}`;
 // Раздел администратора: роли, блокировка, удаление и доступ к проектам
 export function Users() {
   const { me, write, liveError } = useStore();
-  const { value, error } = useLoad<{ users: AdminUser[] }>(usersUrl);
+  const { value, error } = useLoad<{ users: AdminUser[]; seats: Seats }>(usersUrl);
   const [q, setQ] = useState("");
   const [access, setAccess] = useState<AdminUser | null>(null);
   const [del, setDel] = useState<AdminUser | null>(null);
@@ -61,6 +70,12 @@ export function Users() {
           </span>
         ))}
       </div>
+      {value?.seats && (
+        <div className="small muted" style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <span title="Тестировщики и администраторы">Полные лицензии: <b>{value.seats.full.used}</b>{value.seats.full.limit !== null ? ` из ${value.seats.full.limit}` : " (без ограничений)"}</span>
+          <span title="Разработчики и наблюдатели">Просмотровые лицензии: <b>{value.seats.view.used}</b>{value.seats.view.limit !== null ? ` из ${value.seats.view.limit}` : " (без ограничений)"}</span>
+        </div>
+      )}
       <div className="toolbar">
         <input className="input" type="search" placeholder="Поиск по имени или логину" value={q} onChange={(e) => setQ(e.target.value)} />
         <span className="muted small">{rows.length} из {users.length}</span>
@@ -86,7 +101,9 @@ export function Users() {
                   <tr key={u.login} style={u.blocked ? { opacity: 0.6 } : undefined}>
                     <td className="title">
                       <span className="who"><Avatar login={u.login} /><span>{u.name}</span></span>
-                      <div className="muted small mono" style={{ fontWeight: 400 }}>@{u.login}{self && " · это вы"} · с {fmt(u.created)}</div>
+                      <div className="muted small mono" style={{ fontWeight: 400 }}>
+                        @{u.login}{self && " · это вы"} · {PROVIDERS[u.provider] || u.provider} · {u.lastLogin ? `вход ${fmt(u.lastLogin)}` : `с ${fmt(u.created)}`}
+                      </div>
                     </td>
                     <td>
                       <select className="input" aria-label={`Роль ${u.name}`} value={u.role} disabled={self}
@@ -100,7 +117,11 @@ export function Users() {
                         <span className="muted small">Все проекты</span>
                       ) : (
                         <div className="chips" style={{ alignItems: "center" }}>
-                          {u.projects.map((k) => <a key={k} className="chip" href={href("p", k)}>{k}</a>)}
+                          {u.projects.map((k) => (
+                            <a key={k} className="chip" href={href("p", k)} title={u.projectRoles[k] ? `Роль в проекте: ${find(ROLES, u.projectRoles[k]).label}` : undefined}>
+                              {k}{u.projectRoles[k] && <span className="muted"> · {find(ROLES, u.projectRoles[k]).label.toLowerCase()}</span>}
+                            </a>
+                          ))}
                           {!u.projects.length && <span className="small" style={{ color: "var(--warn)" }}>Нет доступа ни к одному</span>}
                           <button className="btn ghost sm" onClick={() => setAccess(u)}>Изменить</button>
                         </div>
@@ -113,7 +134,7 @@ export function Users() {
                           <button className="btn sm" onClick={() => patch(u, { blocked: !u.blocked }, u.blocked ? `${u.name} разблокирован` : `${u.name} заблокирован`)}>
                             {u.blocked ? "Разблокировать" : "Заблокировать"}
                           </button>
-                          <button className="btn sm" onClick={() => setResetting(u)}>Сменить пароль</button>
+                          {u.provider === "local" && <button className="btn sm" onClick={() => setResetting(u)}>Сменить пароль</button>}
                           <button className="btn ghost sm" style={{ color: "var(--crit)" }} onClick={() => setDel(u)} aria-label={`Удалить ${u.name}`}>Удалить</button>
                         </>
                       )}
@@ -149,6 +170,8 @@ function AccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }
   const data = useData();
   const { write } = useStore();
   const [picked, setPicked] = useState(new Set(user.projects));
+  // роль в проекте; "" — как глобальная
+  const [roles, setRoles] = useState<Record<string, ProjectRole | "">>({ ...user.projectRoles });
   const projects = [...data.projects].sort((a, b) => a.id.localeCompare(b.id));
   const toggle = (k: string) => {
     const next = new Set(picked);
@@ -157,13 +180,15 @@ function AccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }
     setPicked(next);
   };
   async function save() {
-    if (await write(() => api("PUT", `${userUrl(user.login)}/projects`, { projects: [...picked] }), "Доступ сохранён")) onClose();
+    const projects = [...picked].map((key) => ({ key, role: roles[key] || null }));
+    if (await write(() => api("PUT", `${userUrl(user.login)}/projects`, { projects }), "Доступ сохранён")) onClose();
   }
   return (
     <Modal onClose={onClose}>
       <h2>Доступ к проектам: {user.name}</h2>
       <p className="muted small" style={{ margin: 0 }}>
-        Отмеченные проекты пользователь видит и, если он тестировщик, может менять. Остальные для него не существуют.
+        Отмеченные проекты пользователь видит, остальные для него не существуют. Роль можно задать отдельно для проекта —
+        иначе действует глобальная ({find(ROLES, user.role).label.toLowerCase()}).
       </p>
       {projects.length ? (
         <div className="history" style={{ maxHeight: 360, overflow: "auto" }}>
@@ -172,6 +197,13 @@ function AccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }
               <input type="checkbox" checked={picked.has(p.id)} onChange={() => toggle(p.id)} />
               <span className="mono small" style={{ width: 56 }}>{p.id}</span>
               <span style={{ flex: 1 }}>{p.name}</span>
+              {picked.has(p.id) && (
+                <select className="input" style={{ width: 170 }} aria-label={`Роль в ${p.id}`} value={roles[p.id] || ""}
+                  onChange={(e) => setRoles({ ...roles, [p.id]: e.target.value as ProjectRole | "" })}>
+                  <option value="">Как глобальная</option>
+                  {PROJECT_ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                </select>
+              )}
             </label>
           ))}
         </div>

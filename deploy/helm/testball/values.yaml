@@ -1,0 +1,95 @@
+# Настройки установки TestBall в Kubernetes. Подробности — README, часть 5.
+
+image:
+  # Образ собирается из Dockerfile репозитория и кладётся во внутренний реестр:
+  #   docker build -t registry.company.ru/qa/testball:1.0.0 . && docker push registry.company.ru/qa/testball:1.0.0
+  repository: registry.company.ru/qa/testball
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Несколько реплик возможны при STORAGE=s3 (или томе ReadWriteMany): живые обновления идут через PostgreSQL LISTEN/NOTIFY,
+# миграции применяет одна реплика под блокировкой.
+replicaCount: 2
+
+# PostgreSQL 14+ — внешний (кластер компании, оператор CloudNativePG / Zalando и т. п.).
+database:
+  # Строка подключения целиком; либо existingSecret с ключом DATABASE_URL
+  url: ""
+  existingSecret: ""
+  poolSize: 10
+
+# Секреты приложения. existingSecret — свой Secret с теми же ключами (APP_SECRET, SETUP_CODE, OIDC_CLIENT_SECRET,
+# LDAP_BIND_PASSWORD, KERBEROS_PROXY_SECRET, S3_ACCESS_KEY, S3_SECRET_KEY); иначе Secret создаётся из значений ниже.
+secrets:
+  existingSecret: ""
+  # длинная случайная строка: шифрует токены интеграций в базе. Одинаковая на всех репликах, менять нельзя
+  appSecret: ""
+  # код регистрации первого администратора: при нескольких репликах задайте явно
+  setupCode: ""
+  oidcClientSecret: ""
+  ldapBindPassword: ""
+  kerberosProxySecret: ""
+  s3AccessKey: ""
+  s3SecretKey: ""
+
+# Обычные переменные окружения приложения (см. .env.example): REGISTRATION, LOCAL_LOGIN, OIDC_*, LDAP_*, SSO_*,
+# LICENSE_*, FLAKY_*, WEBHOOK_* и т. д.
+env:
+  PUBLIC_URL: "https://testball.company.ru"
+  REGISTRATION: "closed"
+  TRUST_PROXY: "true"
+  MAX_UPLOAD_MB: "20"
+  # OIDC_ISSUER: "https://keycloak.company.ru/realms/main"
+  # OIDC_CLIENT_ID: "testball"
+  # OIDC_LABEL: "Войти через Keycloak"
+  # LDAP_URL: "ldaps://dc01.corp.local:636"
+  # LDAP_BASE_DN: "DC=corp,DC=local"
+  # LDAP_BIND_DN: "CN=svc-testball,OU=Service,DC=corp,DC=local"
+  # SSO_ADMIN_GROUPS: "TB-Admins"
+  # SSO_TESTER_GROUPS: "TB-Testers"
+  # SSO_DEFAULT_ROLE: "viewer"
+
+# Вложения: s3 — для нескольких реплик; local — том PVC (одна реплика или ReadWriteMany)
+storage:
+  type: s3
+  s3:
+    endpoint: "http://minio.minio.svc:9000"
+    bucket: "testball"
+    region: "us-east-1"
+    prefix: "attachments/"
+    forcePathStyle: true
+  local:
+    size: 20Gi
+    storageClassName: ""
+    accessModes: ["ReadWriteOnce"]
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  host: testball.company.ru
+  tls:
+    enabled: true
+    secretName: testball-tls
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "210m"
+    # живые обновления (SSE) — без буферизации и с долгими соединениями
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits: { memory: 1Gi }
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

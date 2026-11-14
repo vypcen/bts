@@ -5,6 +5,8 @@ const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const { sha256, newApiToken } = require("./auth");
 const access = require("./access");
+const events = require("./events");
+const flaky = require("./flaky");
 const { wrap, str, num } = require("./util");
 
 const STATUSES = ["passed", "failed", "broken", "skipped"];
@@ -60,6 +62,9 @@ function readResult(x) {
     message: str(x.message, 5000),
     details: str(x.details, 50000),
     steps: readSteps(x.steps),
+    // сколько повторных попыток понадобилось; прошёл не с первой — признак нестабильности
+    retries: Math.min(Math.max(Math.round(Number(x.retries) || 0), 0), 100),
+    flaky: x.flaky === true || (x.status === "passed" && Number(x.retries) > 0),
   };
   if (!t.name || !STATUSES.includes(t.status)) return null;
   // по этому ключу тест узнаётся в следующих запусках и не создаётся повторно
@@ -83,6 +88,7 @@ router.post("/autoruns", wrap(async (req, res) => {
   });
   if (n === null) return res.status(404).json({ error: "Проект не найден" });
   broadcast("autoruns");
+  events.emit(req.params.key, "autorun.created", { autorun: await events.snap.autorun(req.params.key, n) }, req.user);
   res.status(201).json({ num: n, id: `${req.params.key}-A${n}` });
 }));
 
@@ -127,14 +133,18 @@ router.post("/autoruns/:num/results", wrap(async (req, res) => {
       );
     }
     const rows = await db.query(
-      `INSERT INTO auto_results(run_id, test_id, status, duration_ms, message, details, steps)
-       SELECT $1::int, * FROM unnest($2::int[], $3::text[], $4::int[], $5::text[], $6::text[], $7::jsonb[])
+      `INSERT INTO auto_results(run_id, test_id, status, duration_ms, message, details, steps, retries, flaky)
+       SELECT $1::int, * FROM unnest($2::int[], $3::text[], $4::int[], $5::text[], $6::text[], $7::jsonb[], $8::int[], $9::bool[])
        ON CONFLICT (run_id, test_id) DO UPDATE SET status=EXCLUDED.status, duration_ms=EXCLUDED.duration_ms,
-         message=EXCLUDED.message, details=EXCLUDED.details, steps=EXCLUDED.steps, created_at=now()
+         message=EXCLUDED.message, details=EXCLUDED.details, steps=EXCLUDED.steps, created_at=now(),
+         -- повторная отправка того же теста (перезапуск упавшего) — тоже повторная попытка
+         retries=GREATEST(EXCLUDED.retries, auto_results.retries + 1),
+         flaky=EXCLUDED.flaky OR (EXCLUDED.status='passed' AND auto_results.status IN ('failed','broken'))
        RETURNING id, test_id`,
       [
         run.id, uniq.map((t) => testId.get(t.key)), uniq.map((t) => t.status), uniq.map((t) => t.duration),
         uniq.map((t) => t.message), uniq.map((t) => t.details), uniq.map((t) => JSON.stringify(t.steps)),
+        uniq.map((t) => t.retries), uniq.map((t) => t.flaky),
       ]
     );
     const resultId = new Map(rows.rows.map((r) => [r.test_id, r.id]));
@@ -155,14 +165,30 @@ router.patch("/autoruns/:num", wrap(async (req, res) => {
   const { r, error } = readRun({ ...rows[0], ...req.body });
   if (error) return res.status(400).json({ error });
   const state = req.body.state === undefined ? rows[0].state : req.body.state;
-  if (!["running", "finished"].includes(state)) return res.status(400).json({ error: "Неизвестное состояние запуска" });
+  if (!["queued", "running", "finished", "failed"].includes(state)) return res.status(400).json({ error: "Неизвестное состояние запуска" });
   await pool.query(
     `UPDATE auto_runs SET title=$1, build=$2, environment=$3, branch=$4, scope=$5, app_url=$6, state=$7,
-       finished_at = CASE WHEN $7='finished' THEN COALESCE(finished_at, now()) ELSE NULL END
+       finished_at = CASE WHEN $7 IN ('finished','failed') THEN COALESCE(finished_at, now()) ELSE NULL END
      WHERE project_key=$8 AND num=$9`,
     [r.title, r.build, r.env, r.branch, r.scope, r.url, state, req.params.key, n]
   );
   broadcast("autoruns");
+  if (state === "finished" && rows[0].state !== "finished") {
+    // нестабильность пересчитывается по завершённым запускам — для тестов этого запуска
+    const key = req.params.key;
+    setImmediate(async () => {
+      try {
+        const { rows: ids } = await pool.query(
+          "SELECT ar.test_id FROM auto_results ar JOIN auto_runs r ON r.id=ar.run_id WHERE r.project_key=$1 AND r.num=$2", [key, n]
+        );
+        await flaky.recompute(key, ids.map((x) => x.test_id));
+        broadcast("autoruns");
+      } catch (e) {
+        console.error("[flaky]", e.message);
+      }
+      events.emit(key, "autorun.finished", { autorun: await events.snap.autorun(key, n) }, req.user);
+    });
+  }
   res.json({ ok: true });
 }));
 
@@ -181,6 +207,7 @@ router.get("/autoruns/:num", wrap(async (req, res) => {
   const [results, files] = await Promise.all([
     pool.query(
       `SELECT ar.id, ar.test_id, t.suite, t.name, t.file, ar.status, ar.duration_ms, ar.message, ar.details, ar.steps,
+         ar.retries, ar.flaky, t.quarantined, t.flaky_since IS NOT NULL AS unstable,
          prev.status AS prev_status, prev.num AS prev_num
        FROM auto_results ar JOIN auto_tests t ON t.id=ar.test_id
        LEFT JOIN LATERAL (
@@ -201,6 +228,7 @@ router.get("/autoruns/:num", wrap(async (req, res) => {
     results: results.rows.map((r) => ({
       id: r.id, testId: r.test_id, suite: r.suite, name: r.name, file: r.file, status: r.status, durationMs: r.duration_ms,
       message: r.message, details: r.details, steps: r.steps, prev: r.prev_status ? { status: r.prev_status, runNum: r.prev_num } : null,
+      retries: r.retries, flaky: r.flaky, quarantined: r.quarantined, unstable: r.unstable,
     })),
     attachments: files.rows.map((a) => ({
       id: a.id, pid: req.params.key, bugNum: null, resultId: null, autoResultId: a.auto_result_id, name: a.filename, mime: a.mime,
@@ -212,21 +240,50 @@ router.get("/autoruns/:num", wrap(async (req, res) => {
 // Реестр автотестов проекта с историей последних 10 запусков (сначала самый свежий)
 router.get("/autotests", wrap(async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT t.id, t.suite, t.name, t.file, t.steps, t.created_at,
-       ARRAY(SELECT ar.status || ':' || r.num FROM auto_results ar JOIN auto_runs r ON r.id=ar.run_id
+    `SELECT t.id, t.suite, t.name, t.file, t.steps, t.created_at, t.flaky_score, t.flaky_since, t.flaky_reason, t.quarantined, c.num AS case_num,
+       ARRAY(SELECT ar.status || ':' || r.num || ':' || ar.flaky::int FROM auto_results ar JOIN auto_runs r ON r.id=ar.run_id
              WHERE ar.test_id=t.id ORDER BY r.num DESC LIMIT 10) AS history
-     FROM auto_tests t WHERE t.project_key=$1 ORDER BY t.suite, t.name`,
+     FROM auto_tests t LEFT JOIN test_cases c ON c.id=t.case_id WHERE t.project_key=$1 ORDER BY t.suite, t.name`,
     [req.params.key]
   );
   res.json({
     tests: rows.map((t) => ({
       id: t.id, suite: t.suite, name: t.name, file: t.file, steps: t.steps, created: t.created_at.getTime(),
+      flaky: t.flaky_since ? { score: t.flaky_score, reason: t.flaky_reason, since: t.flaky_since.getTime() } : null,
+      flakyScore: t.flaky_score, quarantined: t.quarantined, caseNum: t.case_num,
       history: t.history.map((h) => {
-        const [status, runNum] = h.split(":");
-        return { status, runNum: Number(runNum) };
+        const [status, runNum, retried] = h.split(":");
+        return { status, runNum: Number(runNum), flaky: retried === "1" };
       }),
     })),
   });
+}));
+
+// Карантин и связь с ручным кейсом: {"quarantined": true} / {"caseNum": 12 | null}
+router.patch("/autotests/:id", wrap(async (req, res) => {
+  const id = num(req.params.id);
+  const { rows } = await pool.query("SELECT id, quarantined, case_id FROM auto_tests WHERE project_key=$1 AND id=$2", [req.params.key, id]);
+  if (!rows[0]) return res.status(404).json({ error: "Автотест не найден" });
+  const q = req.body.quarantined === undefined ? rows[0].quarantined : req.body.quarantined === true;
+  let caseId = rows[0].case_id;
+  if (req.body.caseNum !== undefined) {
+    if (req.body.caseNum === null) caseId = null;
+    else {
+      const c = await pool.query("SELECT id FROM test_cases WHERE project_key=$1 AND num=$2", [req.params.key, num(req.body.caseNum)]);
+      if (!c.rows[0]) return res.status(400).json({ error: "Тест-кейс не найден" });
+      caseId = c.rows[0].id;
+    }
+  }
+  await pool.query("UPDATE auto_tests SET quarantined=$1, case_id=$2 WHERE id=$3", [q, caseId, id]);
+  broadcast("autoruns");
+  res.json({ ok: true });
+}));
+
+// Пересчитать нестабильность всех автотестов проекта (например, после смены порогов FLAKY_*)
+router.post("/autotests/flaky/recompute", wrap(async (req, res) => {
+  const fresh = await flaky.recompute(req.params.key);
+  broadcast("autoruns");
+  res.json({ newlyFlaky: fresh.length });
 }));
 
 router.delete("/autotests/:id", wrap(async (req, res) => {
@@ -241,18 +298,25 @@ const tokenRouter = express.Router();
 
 tokenRouter.get("/", wrap(async (req, res) => {
   const { rows } = await pool.query(
-    "SELECT id, name, created_at, last_used_at FROM api_tokens WHERE user_id=$1 ORDER BY created_at DESC",
+    "SELECT id, name, project_key, created_at, last_used_at FROM api_tokens WHERE user_id=$1 ORDER BY created_at DESC",
     [req.user.id]
   );
-  res.json({ tokens: rows.map((t) => ({ id: t.id, name: t.name, created: t.created_at.getTime(), used: t.last_used_at ? t.last_used_at.getTime() : null })) });
+  res.json({
+    tokens: rows.map((t) => ({ id: t.id, name: t.name, project: t.project_key, created: t.created_at.getTime(), used: t.last_used_at ? t.last_used_at.getTime() : null })),
+  });
 }));
 
-// токен нужен только чтобы отправлять результаты, а разработчику это недоступно
-tokenRouter.post("/", access.requireWriter, wrap(async (req, res) => {
+// токен нужен только чтобы отправлять результаты — для этого нужна роль с правом записи.
+// {"project": "LK"} — токен только для этого проекта (рекомендуется для CI: утёкший токен не откроет другие проекты)
+tokenRouter.post("/", wrap(async (req, res) => {
   const name = str(req.body.name, 100);
   if (!name) return res.status(400).json({ error: "Укажите название токена, например «Ноутбук» или «CI»" });
+  const project = req.body.project ? str(req.body.project, 10).toUpperCase() : null;
+  if (project) {
+    if (!access.canWrite(await access.projectRole(req.user, project))) return res.status(403).json({ error: "В этом проекте у вас нет права отправлять результаты" });
+  } else if (!(await access.writesSomewhere(req.user))) return res.status(403).json({ error: access.READ_ONLY });
   const token = newApiToken();
-  await pool.query("INSERT INTO api_tokens(user_id, name, token_hash) VALUES ($1,$2,$3)", [req.user.id, name, sha256(token)]);
+  await pool.query("INSERT INTO api_tokens(user_id, name, token_hash, project_key) VALUES ($1,$2,$3,$4)", [req.user.id, name, sha256(token), project]);
   res.status(201).json({ token });
 }));
 

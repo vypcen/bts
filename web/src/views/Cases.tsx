@@ -5,8 +5,8 @@ import { checklistItems, doneCount, itemsWord } from "../checklist";
 import { BUG_STATUSES, CASE_STATUSES, find, isOpenBug, PRIORITIES, RESULTS } from "../labels";
 import { go, href } from "../router";
 import { countBy, folderPath, lastResults } from "../selectors";
-import { useCanEdit, useData, useStore } from "../store";
-import type { CaseKind, Project, ResultValue, TestCase } from "../types";
+import { useCanEdit, useData, useLoad, useStore } from "../store";
+import type { CaseKind, CaseVersion, Project, ResultValue, TestCase } from "../types";
 import { CommentCount, Confirm, Drawer, Empty, fmt, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { ImportModal } from "./CaseImport";
@@ -385,6 +385,7 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
         <div className="view-block"><span className="label">Создал</span><Who login={c.createdBy} /><span className="muted">{fmt(c.created)}</span></div>
         <div className="view-block"><span className="label">Изменил</span><Who login={c.updatedBy} /><span className="muted">{fmt(c.updated)}</span></div>
       </div>
+      <Versions c={c} />
       <Comments list={comments} postUrl={`${paths.testCase(p, c.num)}/comments`} />
       {resetting && (
         <Confirm title="Снять все отметки?" text={`Все ${done} отмеченных пунктов станут невыполненными — у всех участников.`} action="Снять"
@@ -428,7 +429,8 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
     if (list && !f.steps.trim()) return setErr("Добавьте хотя бы один пункт");
     const body = { ...f, folder: f.folder ? Number(f.folder) : null };
     if (c) {
-      if (await write(() => api("PATCH", paths.testCase(pid, c.num), body), "Изменения сохранены")) {
+      // baseVersion: если кейс успели поменять, сервер не даст затереть чужую правку
+      if (await write(() => api("PATCH", paths.testCase(pid, c.num), { ...body, baseVersion: c.version }), "Изменения сохранены")) {
         onClose();
         go("p", pid, "cases", c.num);
       }
@@ -483,5 +485,55 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
         <div className="err">{err}</div>
       </form>
     </Drawer>
+  );
+}
+
+// История версий: что менялось и кем; любую прежнюю версию можно вернуть (создастся новая версия)
+const FIELDS: [keyof CaseVersion, string][] = [["title", "Название"], ["priority", "Приоритет"], ["status", "Статус"], ["pre", "Предусловия"], ["steps", "Шаги"], ["expected", "Ожидаемый результат"]];
+function Versions({ c }: { c: TestCase }) {
+  const canEdit = useCanEdit();
+  const { write } = useStore();
+  const [open, setOpen] = useState(false);
+  const [shown, setShown] = useState<number | null>(null);
+  const { value } = useLoad<{ versions: CaseVersion[] }>(open ? paths.versions(c.pid, c.num) : null);
+  const list = value?.versions || [];
+  const label = (k: keyof CaseVersion, v: string) =>
+    k === "priority" ? find(PRIORITIES, v as TestCase["priority"]).label : k === "status" ? find(CASE_STATUSES, v as TestCase["status"]).label : v;
+  return (
+    <div className="view-block">
+      <span className="label">Версии · текущая v{c.version}</span>
+      {!open ? (
+        <button className="btn sm" style={{ alignSelf: "flex-start" }} onClick={() => setOpen(true)} disabled={c.version < 2}>
+          {c.version < 2 ? "Кейс ещё не менялся" : "Показать историю изменений"}
+        </button>
+      ) : !value ? <span className="muted small">Загружаем…</span> : (
+        <div className="history">
+          {list.map((v, i) => {
+            const prev = list[i + 1];
+            const changed = prev ? FIELDS.filter(([k]) => v[k] !== prev[k]) : [];
+            return (
+              <div key={v.version} style={{ flexDirection: "column", alignItems: "stretch", gap: 4 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span className="chip">v{v.version}</span>
+                  <Who login={v.changedBy} /><span className="muted small">{fmt(v.changed)}</span>
+                  <span className="muted small" style={{ flex: 1 }}>{prev ? `изменено: ${changed.map(([, l]) => l.toLowerCase()).join(", ") || "—"}` : "создан"}</span>
+                  {prev && <button className="btn ghost sm" onClick={() => setShown(shown === v.version ? null : v.version)}>{shown === v.version ? "Скрыть" : "Что изменилось"}</button>}
+                  {canEdit && v.version !== c.version && (
+                    <button className="btn sm" onClick={() => write(() => api("POST", `${paths.versions(c.pid, c.num)}/${v.version}/restore`, {}), `Восстановлена v${v.version}`)}>Вернуть</button>
+                  )}
+                </div>
+                {shown === v.version && prev && changed.map(([k, l]) => (
+                  <div key={k} className="small" style={{ display: "grid", gap: 2 }}>
+                    <span className="label">{l}</span>
+                    <pre className="code diff-old">{label(k, String(prev[k])) || "—"}</pre>
+                    <pre className="code diff-new">{label(k, String(v[k])) || "—"}</pre>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

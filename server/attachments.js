@@ -1,5 +1,5 @@
-// Вложения к багам, к результатам в прогонах и к результатам автотестов. Файлы хранятся на диске (UPLOAD_DIR) под именем id,
-// метаданные — в таблице attachments.
+// Вложения к багам, к результатам в прогонах и к результатам автотестов. Файлы хранятся под именем id
+// на диске (UPLOAD_DIR) или в S3 (server/storage.js), метаданные — в таблице attachments.
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -9,15 +9,14 @@ const express = require("express");
 const { pool } = require("./db");
 const { broadcast } = require("./live");
 const access = require("./access");
+const storage = require("./storage");
 const { wrap, num } = require("./util");
 
-const DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "data", "uploads");
+const DIR = storage.DIR;
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_MB || 20) * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // Эти типы браузер может показать прямо на странице; всё остальное отдаётся только на скачивание
 const INLINE = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "text/plain"]);
-
-fs.mkdirSync(DIR, { recursive: true });
 
 function cleanName(raw) {
   let name = "";
@@ -31,7 +30,7 @@ async function save(req, res, owner) {
   if (!size) return res.status(400).json({ error: "Пустой файл" });
   if (size > MAX_BYTES) return res.status(413).json({ error: `Файл больше ${MAX_BYTES / 1024 / 1024} МБ` });
   const id = crypto.randomUUID();
-  const tmp = path.join(DIR, `${id}.part`);
+  const tmp = path.join(storage.tmpDir, `${id}.part`);
   let bytes = 0;
   const limit = new Transform({
     transform(chunk, _enc, cb) {
@@ -43,7 +42,7 @@ async function save(req, res, owner) {
     await pipeline(req, limit, fs.createWriteStream(tmp));
     // сначала файл занимает своё место, потом появляется запись: запись без файла невозможна,
     // а файл без записи уберёт sweep()
-    await fs.promises.rename(tmp, path.join(DIR, id));
+    await storage.put(id, tmp);
   } catch (e) {
     await fs.promises.unlink(tmp).catch(() => {});
     if (bytes > MAX_BYTES) return res.status(413).json({ error: `Файл больше ${MAX_BYTES / 1024 / 1024} МБ` });
@@ -56,7 +55,7 @@ async function save(req, res, owner) {
       [id, owner.bugId || null, owner.resultId || null, owner.autoResultId || null, cleanName(req.get("x-filename")), mime, bytes, req.user.id]
     );
   } catch (e) {
-    await fs.promises.unlink(path.join(DIR, id)).catch(() => {});
+    await storage.remove(id);
     throw e;
   }
   broadcast(owner.autoResultId ? "autoruns" : "attachments");
@@ -94,7 +93,7 @@ projectRouter.post("/autoruns/:num/results/:rid/attachments", wrap(async (req, r
 const fileRouter = express.Router();
 
 // Файл вместе с ключом проекта, которому он принадлежит. Файл из недоступного проекта — как несуществующий
-async function findFile(req) {
+async function findFile(req, write = false) {
   if (!UUID_RE.test(req.params.id)) return null;
   const { rows } = await pool.query(
     `SELECT a.filename, a.mime, a.size, COALESCE(b.project_key, t.project_key, r.project_key) AS project_key
@@ -106,7 +105,9 @@ async function findFile(req) {
     [req.params.id]
   );
   const a = rows[0];
-  return a && (await access.hasProject(req.user, a.project_key)) ? a : null;
+  if (!a) return null;
+  const role = await access.projectRole(req.user, a.project_key);
+  return role && (!write || access.canWrite(role)) ? a : null;
 }
 
 fileRouter.get("/:id", wrap(async (req, res) => {
@@ -122,7 +123,7 @@ fileRouter.get("/:id", wrap(async (req, res) => {
     "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
     "Cache-Control": "private, max-age=31536000, immutable",
   });
-  const stream = fs.createReadStream(path.join(DIR, req.params.id));
+  const stream = storage.get(req.params.id);
   stream.on("error", (e) => {
     console.error("[attachments] не удалось прочитать файл", req.params.id, e.message);
     if (!res.headersSent) res.status(404).json({ error: "Файл не найден на диске" });
@@ -131,11 +132,11 @@ fileRouter.get("/:id", wrap(async (req, res) => {
   stream.pipe(res);
 }));
 
-fileRouter.delete("/:id", access.requireWriter, wrap(async (req, res) => {
-  if (!(await findFile(req))) return res.status(404).json({ error: "Файл не найден" });
+fileRouter.delete("/:id", wrap(async (req, res) => {
+  if (!(await findFile(req, true))) return res.status(404).json({ error: "Файл не найден или нет прав на удаление" });
   const r = await pool.query("DELETE FROM attachments WHERE id=$1", [req.params.id]);
   if (!r.rowCount) return res.status(404).json({ error: "Файл не найден" });
-  await fs.promises.unlink(path.join(DIR, req.params.id)).catch(() => {});
+  await storage.remove(req.params.id);
   broadcast("attachments");
   res.json({ ok: true });
 }));
@@ -144,16 +145,16 @@ fileRouter.delete("/:id", access.requireWriter, wrap(async (req, res) => {
 // когда удаляют баг, прогон, кейс, запуск автотестов или проект. Свежие файлы не трогаем — их может дописывать save().
 async function sweep() {
   const cutoff = Date.now() - 60 * 60 * 1000;
-  const names = await fs.promises.readdir(DIR);
-  const ids = names.filter((n) => UUID_RE.test(n));
+  const files = await storage.list();
+  const ids = files.map((f) => f.name).filter((n) => UUID_RE.test(n));
   const { rows } = ids.length ? await pool.query("SELECT id::text FROM attachments WHERE id = ANY($1::uuid[])", [ids]) : { rows: [] };
   const known = new Set(rows.map((r) => r.id));
   let removed = 0;
-  for (const n of names) {
+  for (const { name: n, mtimeMs } of files) {
     if (known.has(n) || !(UUID_RE.test(n) || n.endsWith(".part"))) continue;
-    const st = await fs.promises.stat(path.join(DIR, n)).catch(() => null);
-    if (st && st.mtimeMs < cutoff) {
-      await fs.promises.unlink(path.join(DIR, n)).catch(() => {});
+    if (mtimeMs < cutoff) {
+      if (n.endsWith(".part")) await fs.promises.unlink(path.join(storage.tmpDir, n)).catch(() => {});
+      else await storage.remove(n);
       removed++;
     }
   }
@@ -165,4 +166,20 @@ function startSweeper() {
   setInterval(run, 30 * 60 * 1000).unref();
 }
 
-module.exports = { projectRouter, fileRouter, startSweeper, DIR };
+// Для экспорта проекта: содержимое файла целиком
+async function readFile(id) {
+  const chunks = [];
+  for await (const c of storage.get(id)) chunks.push(c);
+  return Buffer.concat(chunks);
+}
+
+// Для импорта проекта: сохранить файл из буфера и вернуть новый id
+async function writeFile(buf) {
+  const id = crypto.randomUUID();
+  const tmp = path.join(storage.tmpDir, `${id}.part`);
+  await fs.promises.writeFile(tmp, buf);
+  await storage.put(id, tmp);
+  return id;
+}
+
+module.exports = { projectRouter, fileRouter, startSweeper, readFile, writeFile, DIR };

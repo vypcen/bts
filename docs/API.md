@@ -1,4 +1,4 @@
-# TestBol QA — HTTP API
+# TestBall QA — HTTP API
 
 Всё, что умеет интерфейс, доступно и через API: интерфейс сам работает только через эти запросы. Для интеграций с автотестами обычно хватает раздела [«Автотесты»](#автотесты) и токена.
 
@@ -15,7 +15,7 @@
 - [Автотесты](#автотесты)
 - [Токены](#токены)
 - [Пользователи (админ)](#пользователи-админ)
-- [Локальная модель](#локальная-модель)
+- [Языковая модель](#языковая-модель)
 - [Служебное](#служебное)
 - [Справочник значений](#справочник-значений)
 
@@ -53,8 +53,8 @@
 | 415 | Нет `Content-Type: application/json` |
 | 429 | Слишком много попыток входа, регистраций, запросов к модели или открытых потоков событий |
 | 500 | Внутренняя ошибка, подробности в логах сервера |
-| 503 | Сервер перегружен проверкой паролей (повторите через минуту); локальная модель недоступна |
-| 502, 503, 504 | Только запросы к локальной модели: модель вернула ошибку или неверный формат (`502`), не подключена, не скачана или занята (`503`), не ответила вовремя (`504`) |
+| 503 | Сервер перегружен проверкой паролей (повторите через минуту); языковая модель недоступна |
+| 502, 503, 504 | Только запросы к языковой модели: сервис вернул ошибку, отклонил ключ или ответил в неверном формате (`502`), модель не подключена, нет связи или очередь занята (`503`), не ответила вовремя (`504`). `422` — модель отказалась обработать текст |
 
 **Частичное обновление.** `PATCH` кейса, прогона, бага и запуска автотестов меняет только присланные поля, остальные остаются прежними. Исключение — `PATCH` проекта, см. ниже.
 
@@ -583,7 +583,7 @@ curl -X POST "$URL/api/projects/LK/bugs/7/attachments" \
 
 ```sh
 URL=https://sports.fxtun.ru; KEY=LK
-H=(-H "Authorization: Bearer $TESTBOL_TOKEN" -H "Content-Type: application/json")
+H=(-H "Authorization: Bearer $TESTBALL_TOKEN" -H "Content-Type: application/json")
 
 NUM=$(curl -s "${H[@]}" -X POST "$URL/api/projects/$KEY/autoruns" \
   -d '{"title":"Смоук","scope":"supportcd","env":"RC"}' | node -p 'JSON.parse(require("fs").readFileSync(0)).num')
@@ -593,7 +593,7 @@ RID=$(curl -s "${H[@]}" -X POST "$URL/api/projects/$KEY/autoruns/$NUM/results" \
   | node -p 'JSON.parse(require("fs").readFileSync(0)).ids[0]')
 
 curl -s -X POST "$URL/api/projects/$KEY/autoruns/$NUM/results/$RID/attachments" \
-  -H "Authorization: Bearer $TESTBOL_TOKEN" -H "X-Upload: 1" -H "Content-Type: image/png" \
+  -H "Authorization: Bearer $TESTBALL_TOKEN" -H "X-Upload: 1" -H "Content-Type: image/png" \
   -H "X-Filename: screen.png" --data-binary @screen.png
 
 curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"finished"}'
@@ -663,19 +663,31 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 
 Удаляет пользователя, его сессии и токены. Созданные им кейсы, баги и прогоны остаются, в авторах у них будет пусто. Если нужно только закрыть доступ, лучше заблокировать. Ответ: `{"ok": true}`.
 
-## Локальная модель
+## Языковая модель
 
-Необязательная языковая модель для подсказок (настройка — в README, часть 4). Ответ модели ничего не меняет сам: его показывают пользователю, а сохраняет он сам обычными запросами.
+Необязательная языковая модель для подсказок (подключение — в README, часть 4). Ответ модели ничего не меняет сам: его показывают пользователю, а сохраняет он сам обычными запросами.
 
 ### `GET /api/llm/status`
 
-Подключена ли модель и готова ли она отвечать. Нужен вход в систему.
+Есть ли активное подключение к модели. Нужен вход в систему.
 
 ```json
-{"enabled": true, "model": "qwen2.5:3b", "ready": false, "error": "Модель qwen2.5:3b не скачана"}
+{"enabled": true, "ready": true, "model": "claude-opus-5-5", "provider": "Claude", "kind": "anthropic", "external": true}
 ```
 
-`enabled: false` — `LLM_URL` не задан, функции с моделью выключены. Поле `error` есть только при `ready: false`.
+`enabled: false` — подключения нет, функции с моделью выключены. `external` — тексты уходят во внешний сервис (не своя модель).
+
+### Подключения к модели (только администратор)
+
+| Запрос | Описание |
+|---|---|
+| `GET /api/admin/llm` | `{providers: [{id, name, kind, baseUrl, model, settings, active, hasKey, selfHosted}], env, allowCloud, defaults}`. Ключ не возвращается |
+| `POST /api/admin/llm` | `{name, kind: openai\|anthropic\|yandexgpt\|gigachat, baseUrl, model, apiKey, settings}` |
+| `PATCH` / `DELETE /api/admin/llm/:id` | Изменить (`apiKey` не прислан — прежний) / удалить |
+| `POST /api/admin/llm/:id/active` | `{"active": true}` — сделать активным (прежнее выключается), `false` — выключить |
+| `POST /api/admin/llm/:id/test` | Короткий запрос к модели: `{ok, answer, durationMs}` или ошибка с причиной |
+
+`settings`: `selfHosted` (своя модель, для `openai`), `concurrency`, `timeoutMs`, `jsonMode` (`schema`, `object`, `prompt` — для `openai`), `effort` (`low`…`high` — для `anthropic`), `folderId` и `authType` (`iam` — для `yandexgpt`), `scope` и `authUrl` (для `gigachat`). При `LLM_ALLOW_CLOUD=false` облачные подключения отклоняются (`400`/`409`).
 
 ### `POST /api/projects/:key/ai/bug-draft`
 
@@ -698,12 +710,129 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 
 Ко всем запросам раздела: у пользователя одновременно может идти один запрос к модели и не больше 20 за 10 минут (`LLM_USER_LIMIT`), сверх — `429`.
 
+## Единый вход (SSO)
+
+| Запрос | Описание |
+|---|---|
+| `GET /api/auth/providers` | Какие способы входа включены: `{"local": true, "ldap": false, "oidc": {"label": "…"} \| null, "kerberos": {...} \| null}`. То же приходит в `GET /api/auth/me` без входа (поле `providers`) |
+| `GET /api/auth/oidc/start?return=/#/p/LK` | Переход браузера к IdP (Authorization Code + PKCE) |
+| `GET /api/auth/oidc/callback` | Возврат от IdP. Ошибка — редирект на `/?sso_error=<текст>` |
+| `GET /api/auth/kerberos?return=…` | Вход по заголовку от прокси SPNEGO (`KERBEROS_USER_HEADER` + `X-Auth-Proxy-Secret`) |
+
+`POST /api/auth/login` при включённом LDAP проверяет и доменные учётные записи (`ivanov`, `CORP\ivanov`, `ivanov@corp.local`). В ответе `user.provider`: `local`, `ldap`, `oidc`, `kerberos`. Пароль пользователя из каталога через TestBall не меняется (`409`).
+
+## Роли в проекте и лицензии
+
+- Роли: `tester`, `developer`, `viewer` (только чтение, без комментариев), `admin`.
+- `PUT /api/admin/users/:login/projects` принимает и `["LK"]`, и `[{"key": "LK", "role": "viewer"}]`. `role: null` — действует глобальная роль.
+- В `GET /api/state` у проекта есть `myRole` (действующая роль текущего пользователя) и `memberRoles`.
+- `GET /api/admin/users` возвращает `seats: {full: {used, limit}, view: {used, limit}}` и у каждого пользователя `provider`, `email`, `lastLogin`, `projectRoles`.
+- Выдача роли сверх лимита `LICENSE_*_SEATS` — `409`.
+
+## Версии тест-кейсов
+
+У кейса в состоянии есть `version`. `PATCH /cases/:num` принимает необязательное поле `baseVersion`: если версия кейса другая, ответ `409` (кейс уже изменили). Ответ содержит новую `version`.
+
+| Запрос | Описание |
+|---|---|
+| `GET /api/projects/:key/cases/:num/versions` | Все версии, свежие первыми: `{versions: [{version, kind, title, priority, status, pre, steps, expected, changedBy, changed}]}` |
+| `GET /api/projects/:key/cases/:num/versions/:v` | Одна версия |
+| `POST /api/projects/:key/cases/:num/versions/:v/restore` | Вернуть содержимое версии `v` (создаётся новая версия) |
+
+У результата в прогоне есть `caseVersion` — какая версия проверялась.
+
+## Тест-планы
+
+| Запрос | Описание |
+|---|---|
+| `GET /api/projects/:key/plans` | Список: `num, id (LK-P1), title, description, mode (static\|dynamic), filter, locked, lockedBy, lockedAt, caseCount, runs` |
+| `POST /api/projects/:key/plans` | `{title, description?, mode, filter?, caseNums?}` |
+| `PATCH /api/projects/:key/plans/:num` | Те же поля. Заблокированный — `409` |
+| `DELETE /api/projects/:key/plans/:num` | Заблокированный — `409` |
+| `POST /api/projects/:key/plans/:num/cases` | Состав статического плана: `{add: [номера], remove: [номера]}` |
+| `POST /api/projects/:key/plans/preview` | `{filter}` → `{caseNums}` — какие кейсы подходят под фильтр сейчас |
+| `GET /api/projects/:key/plans/:num/cases` | Состав с версиями: `{cases: [{num, version, currentVersion, kind, title, priority, status}]}` |
+| `POST /api/projects/:key/plans/:num/lock` / `unlock` | Блокировка: снимок состава и версий. Разблокирует автор блокировки или админ |
+| `GET /api/projects/:key/plans/:num/export?format=csv\|json` | Набор кейсов плана (для заблокированного — зафиксированные версии) |
+| `POST /api/projects/:key/plans/:num/runs` | Прогон по плану: `{title, build?, env?, assign?: {users: [логины], strategy}}` |
+
+Фильтр динамического плана: `{folders: [id], root: bool, priorities: [...], statuses: [...] (по умолчанию ["ready"]), kinds: [...], text, automated: "any"|"yes"|"no", lastResults: [...]}`.
+
+## Распределение кейсов прогона
+
+- `POST /api/projects/:key/runs` принимает `assign: {users, strategy}`.
+- `POST /api/projects/:key/runs/:num/distribute`: `{users: ["anna"], strategy: "balanced"|"round_robin"|"by_folder", onlyUnassigned: true}` → `{assigned, load: {login: трудоёмкость}}`. Исполнители — участники с правом записи в проекте.
+- `PATCH /runs/:num/results/:case` принимает `{"assignee": "login" | null}`.
+
+Прогон из заблокированного плана (`planLocked` в состоянии) нельзя удалить или дополнить кейсами (`409`).
+
+## Вебхуки
+
+Только тестировщики и админы проекта.
+
+| Запрос | Описание |
+|---|---|
+| `GET /api/projects/:key/webhooks` | `{webhooks: [...], events: {"bug.created": "Баг создан", ...}}` |
+| `POST /api/projects/:key/webhooks` | `{name, url, method, events: [...], headers: {имя: шаблон}, body: шаблон, filter: {"bug.severity": ["critical"]}, secret, active}` |
+| `PATCH` / `DELETE /api/projects/:key/webhooks/:id` | Изменить / удалить. `secret` не прислан — прежний |
+| `GET /api/projects/:key/webhooks/:id/deliveries` | Последние 50 доставок с запросом и ответом |
+| `POST /api/projects/:key/webhooks/:id/test` | `{event?}` — отправить пример, ответ получателя сразу |
+
+События: `case.created`, `case.updated`, `case.deleted`, `run.created`, `run.closed`, `run.result`, `bug.created`, `bug.updated`, `bug.status`, `plan.locked`, `plan.unlocked`, `autorun.created`, `autorun.finished`, `test.flaky`.
+
+Тело события по умолчанию: `{event, title, at, project: {key, name}, actor: {login, name}, ...данные}`, где данные — `bug`, `run`, `case`, `autorun`, `test`, `from`/`to` (для `bug.status`). Заголовки запроса: `X-TestBall-Event`, `X-TestBall-Delivery`, `X-TestBall-Signature: sha256=<HMAC тела>`.
+
+## Трекер задач
+
+| Запрос | Описание |
+|---|---|
+| `GET / PUT / DELETE /api/projects/:key/tracker` | Настройка: `{kind: jira\|youtrack\|gitlab\|github\|redmine, baseUrl, projectRef, login?, token, settings: {issueType, labels, autoCreate, autoCreateSeverities, closeToFixed}}`. Токен в ответе не возвращается (`hasToken`) |
+| `POST /api/projects/:key/tracker/test` | Проверить доступ |
+| `POST /api/projects/:key/bugs/:num/external` | `{create: true}` — создать задачу; `{key: "PROJ-12"}` — привязать |
+| `POST /api/projects/:key/bugs/:num/external/sync` | Обновить статус задачи |
+| `DELETE /api/projects/:key/bugs/:num/external` | Отвязать |
+
+У бага в состоянии есть `external: {key, url, status} | null`.
+
+## Запуск автотестов в CI
+
+| Запрос | Описание |
+|---|---|
+| `GET / POST /api/projects/:key/ci-jobs` | `{name, kind: gitlab\|github\|jenkins\|generic, baseUrl, target, ref, login?, token, params: [{name, label, default, options: [...], required}]}` |
+| `PATCH / DELETE /api/projects/:key/ci-jobs/:id` | Изменить / удалить |
+| `POST /api/projects/:key/ci-jobs/:id/trigger` | `{params: {NAME: значение}, ref?, title?}` → `{num, id}`. Создаёт запуск `queued`; в CI уходят параметры и `TESTBALL_RUN`, `TESTBALL_PROJECT`, `TESTBALL_URL`. Если CI отказал — запуск `failed`, ответ `502` |
+
+Состояния запуска автотестов: `queued`, `running`, `finished`, `failed`. Репортер с `TESTBALL_RUN` делает `PATCH /autoruns/:num {"state": "running", ...}` вместо создания запуска.
+
+## Нестабильные автотесты
+
+- У результата в `POST /autoruns/:num/results` есть необязательные поля `retries` (число повторных попыток) и `flaky` (прошёл не с первой).
+- После `PATCH /autoruns/:num {"state": "finished"}` нестабильность тестов запуска пересчитывается.
+- `GET /autotests` возвращает `flaky: {score, reason, since} | null`, `quarantined`, `caseNum`.
+- `PATCH /api/projects/:key/autotests/:id` — `{quarantined: bool, caseNum: число | null}`.
+- `POST /api/projects/:key/autotests/flaky/recompute` — пересчитать весь проект.
+
+## Аналитика
+
+`GET /api/projects/:key/analytics?days=30` возвращает `cases`, `coverage`, `execution` (по дням), `runs`, `bugs.open`, `bugs.flow`, `auto.runs`, `auto.topFailing`, `auto.flaky`, `workload`.
+
+## Экспорт и импорт проекта
+
+| Запрос | Описание |
+|---|---|
+| `GET /api/projects/:key/export?files=1` | Весь проект одним JSON (`format: "testball-project"`, `version: 1`); `files=1` — с вложениями в base64 |
+| `POST /api/projects-import` | Новый проект: `{source: "testball", data: {...}, key, name?}` или `{source: "testrail"\|"testlink"\|"qase", text: "содержимое файла", key}`. `dryRun: true` — только сводка. Ключ занят — `409` |
+
+Токены: `POST /api/tokens {"name": "CI", "project": "LK"}` — токен только для проекта LK. Остальные проекты для него не существуют.
+
 ## Служебное
 
 | Запрос | Описание |
 |---|---|
 | `GET /healthz` | Проверка, что сервер работает и видит базу. Ответ `{"ok": true}`. Без авторизации |
-| `GET /testbol-reporter.js` | Скачать репортер Playwright. Без авторизации |
+| `GET /livez` | Процесс жив (liveness для Kubernetes) |
+| `GET /readyz` | Готов принимать запросы: запущен, база доступна, не останавливается (readiness). Иначе `503` |
+| `GET /testball-reporter.js` | Скачать репортер Playwright. Без авторизации |
 | `GET /report.js` | Скачать скрипт отправки отчётов JUnit XML. Без авторизации |
 
 ## Справочник значений
@@ -718,5 +847,7 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 | Статус бага | `new` Новый, `in_progress` В работе, `fixed` Исправлен, `verified` Проверен, `closed` Закрыт, `rejected` Отклонён, `duplicate` Дубликат |
 | Статус автотеста | `passed` Пройден, `failed` Упал, `broken` Сломан, `skipped` Пропущен |
 | Статус шага | `passed`, `failed`, `skipped` |
-| Состояние запуска автотестов | `running` Идёт, `finished` Завершён |
-| Роль пользователя | `tester` Тестировщик, `developer` Разработчик, `admin` Администратор |
+| Состояние запуска автотестов | `queued` В очереди CI, `running` Идёт, `finished` Завершён, `failed` CI не принял |
+| Роль пользователя | `tester` Тестировщик, `developer` Разработчик, `viewer` Наблюдатель, `admin` Администратор |
+| Режим тест-плана | `static`, `dynamic` |
+| Стратегия распределения | `balanced`, `round_robin`, `by_folder` |

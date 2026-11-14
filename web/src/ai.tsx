@@ -1,4 +1,4 @@
-// Подсказки локальной модели. Кнопки видны, только если модель подключена и скачана (GET /api/llm/status)
+// Подсказки языковой модели. Кнопки видны, только если администратор подключил модель (GET /api/llm/status)
 import { useEffect, useState, type ReactNode } from "react";
 import { api, paths } from "./api";
 import { useStore } from "./store";
@@ -14,7 +14,7 @@ export function useAiReady() {
     let alive = true;
     cached ??= api<LlmStatus>("GET", paths.llmStatus).catch(() => OFF);
     cached.then((s) => {
-      if (!s.ready) cached = null; // модель могла докачаться — при следующем открытии формы спросим снова
+      if (!s.ready) cached = null; // модель могут подключить — при следующем открытии формы спросим снова
       if (alive) setReady(s.ready);
     });
     return () => {
@@ -55,7 +55,7 @@ export function AiBar(props: { busy: boolean; onRun: () => void; label: string; 
   return (
     <div className="ai-bar">
       <AiButton busy={props.busy} onClick={props.onRun}>{props.label}</AiButton>
-      <span className="muted small">{props.busy ? "Без видеокарты ответ может идти до минуты" : props.hint}</span>
+      <span className="muted small">{props.busy ? "Ответ модели может идти до минуты" : props.hint}</span>
       {props.onUndo && !props.busy && <button type="button" className="link small" onClick={props.onUndo}>Вернуть как было</button>}
     </div>
   );

@@ -7,6 +7,7 @@ import { Login } from "./views/Login";
 import { PasswordModal } from "./views/Password";
 import { ProjectPage } from "./views/ProjectPage";
 import { Projects } from "./views/Projects";
+import { Settings } from "./views/Settings";
 import { Users } from "./views/Users";
 import { roleOf } from "./labels";
 
@@ -18,9 +19,9 @@ export function App() {
     return (
       <div className="wrap login">
         <div className="login-card">
-          <span className="brand"><span className="mark">TB</span>TestBol</span>
+          <span className="brand"><span className="mark">TB</span>TestBall</span>
           <h1 style={{ fontSize: 22 }}>Сервер недоступен</h1>
-          <p className="muted" style={{ margin: 0 }}>Не удалось связаться с сервером TestBol. Проверьте, что он запущен, и обновите страницу.</p>
+          <p className="muted" style={{ margin: 0 }}>Не удалось связаться с сервером TestBall. Проверьте, что он запущен, и обновите страницу.</p>
         </div>
       </div>
     );
@@ -32,11 +33,13 @@ export function App() {
   const project = section === "p" && data ? data.projects.find((p) => p.id === key) : undefined;
   return (
     <>
-      <Topbar projectName={project?.name} projectKey={project?.id} users={section === "users"} />
+      <Topbar projectName={project?.name} projectKey={project?.id} users={section === "users"} settings={section === "settings"} />
       {!data ? (
         <main className="wrap"><div className="skel">Загружаем данные…</div></main>
       ) : section === "users" ? (
         <Users />
+      ) : section === "settings" ? (
+        <Settings />
       ) : section === "p" && project ? (
         <ProjectPage project={project} tab={tab || "cases"} id={id} />
       ) : (
@@ -46,7 +49,7 @@ export function App() {
   );
 }
 
-function Topbar({ projectName, projectKey, users }: { projectName?: string; projectKey?: string; users?: boolean }) {
+function Topbar({ projectName, projectKey, users, settings }: { projectName?: string; projectKey?: string; users?: boolean; settings?: boolean }) {
   const { me, liveError, setMe, toast } = useStore();
   const [password, setPassword] = useState(false);
   const logout = () => {
@@ -58,7 +61,7 @@ function Topbar({ projectName, projectKey, users }: { projectName?: string; proj
   return (
     <div className="topbar">
       <div className="wrap">
-        <a className="brand" href={href()} style={{ color: "inherit", textDecoration: "none" }}><span className="mark">TB</span>TestBol</a>
+        <a className="brand" href={href()} style={{ color: "inherit", textDecoration: "none" }}><span className="mark">TB</span>TestBall</a>
         <div className="crumbs">
           <span>/</span>
           {projectName ? (
@@ -67,11 +70,11 @@ function Topbar({ projectName, projectKey, users }: { projectName?: string; proj
               <span>/</span>
               <a href={href("p", projectKey!)} style={{ color: "inherit", textDecoration: "none", minWidth: 0 }}><b>{projectName}</b></a>
             </>
-          ) : users ? (
+          ) : users || settings ? (
             <>
               <a className="btn ghost" href={href()} style={{ padding: "4px 6px", color: "inherit", textDecoration: "none" }}>Проекты</a>
               <span>/</span>
-              <b>Пользователи</b>
+              <b>{users ? "Пользователи" : "Языковая модель"}</b>
             </>
           ) : (
             <b>Проекты</b>
@@ -83,6 +86,7 @@ function Topbar({ projectName, projectKey, users }: { projectName?: string; proj
           {liveError ? "Нет связи" : "Онлайн"}
         </span>
         {me?.role === "admin" && <a className="btn" href={href("users")} style={{ textDecoration: "none" }}>Пользователи</a>}
+        {me?.role === "admin" && <a className="btn" href={href("settings")} style={{ textDecoration: "none" }} title="Подключение языковой модели">Настройки</a>}
         {me && (
           <span className="user who" title={roleOf(me.role).hint}>
             <Avatar login={me.login} />
@@ -90,7 +94,8 @@ function Topbar({ projectName, projectKey, users }: { projectName?: string; proj
             <span className="mono" style={{ fontSize: 12 }}>@{me.login} · {roleOf(me.role).label}</span>
           </span>
         )}
-        {me && <button className="btn ghost" onClick={() => setPassword(true)}>Пароль</button>}
+        {/* пароль доменной / SSO-учётной записи меняется в каталоге, а не здесь */}
+        {me && (!me.provider || me.provider === "local") && <button className="btn ghost" onClick={() => setPassword(true)}>Пароль</button>}
         <button className="btn" onClick={logout}>Выйти</button>
       </div>
       {password && <PasswordModal onClose={() => setPassword(false)} />}

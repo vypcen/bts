@@ -1,12 +1,13 @@
 import { useState, type KeyboardEvent } from "react";
 import { api, paths } from "../api";
-import { useStore } from "../store";
+import { useCanComment, useStore } from "../store";
 import type { Comment } from "../types";
 import { Avatar, Confirm, fmt, useNames } from "../ui";
 
 // Обсуждение бага или тест-кейса. Писать может любой участник проекта, менять — автор, удалять — автор или админ
 export function Comments({ list, postUrl }: { list: Comment[]; postUrl: string }) {
   const { me, write } = useStore();
+  const canComment = useCanComment();
   const [text, setText] = useState("");
   const [del, setDel] = useState<Comment | null>(null);
   const pid = list[0]?.pid;
@@ -26,8 +27,10 @@ export function Comments({ list, postUrl }: { list: Comment[]; postUrl: string }
           ))}
         </div>
       )}
-      <textarea className="input" rows={2} placeholder="Написать комментарий… (Ctrl+Enter — отправить)" value={text}
-        onChange={(e) => setText(e.target.value)} onKeyDown={(e) => submitOnCtrlEnter(e, send)} aria-label="Новый комментарий" />
+      {/* наблюдатель (просмотровая лицензия) только читает обсуждение */}
+      {canComment && <textarea className="input" rows={2} placeholder="Написать комментарий… (Ctrl+Enter — отправить)" value={text}
+        onChange={(e) => setText(e.target.value)} onKeyDown={(e) => submitOnCtrlEnter(e, send)} aria-label="Новый комментарий" />}
+      {!canComment && !list.length && <span className="muted small">Комментариев нет</span>}
       {text.trim() && (
         <div className="flow">
           <button className="btn primary sm" onClick={send}>Отправить</button>

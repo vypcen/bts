@@ -1,10 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { AiBar, useAi, useAiReady } from "../ai";
 import { api, paths } from "../api";
-import { AUTO_STATUSES, find } from "../labels";
+import { AUTO_RUN_STATES, AUTO_STATUSES, find } from "../labels";
 import { go, href } from "../router";
 import { useCanEdit, useData, useLoad, useStore } from "../store";
-import type { Attachment, AutoResult, AutoRun, AutoStatus, AutoStep, AutoTest, Project } from "../types";
+import type { Attachment, AutoResult, AutoRun, AutoStatus, AutoStep, AutoTest, CiJob, Project } from "../types";
 import { Confirm, Drawer, Empty, fmt, Modal, Pill, ResultBar } from "../ui";
 import { Attachments } from "./Attachments";
 import { BugEditor, type BugDraft } from "./Bugs";
@@ -59,6 +59,8 @@ function RunMeta({ r }: { r: AutoRun }) {
     r.env && <span key="e">Окружение: {r.env}</span>,
     r.branch && <span key="b">Ветка: <span className="mono">{r.branch}</span></span>,
     r.url && <span key="u" className="mono" style={{ overflowWrap: "anywhere" }}>{r.url}</span>,
+    Object.keys(r.params || {}).length > 0 && <span key="p" className="mono">{Object.entries(r.params).map(([k, v]) => `${k}=${v}`).join(" ")}</span>,
+    r.ciUrl && <a key="c" href={r.ciUrl} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()}>CI ↗</a>,
   ].filter(Boolean);
   return <>{parts.map((x, i) => <span key={i}>{i > 0 && " · "}{x}</span>)}</>;
 }
@@ -72,7 +74,9 @@ export function AutotestsTab({ project, view }: { project: Project; view: "runs"
   const canEdit = useCanEdit();
   const p = project.id;
   const [connect, setConnect] = useState(false);
+  const [launch, setLaunch] = useState(false);
   const runs = data.autoruns.filter((r) => r.pid === p).sort((a, b) => b.num - a.num);
+  const jobs = useLoad<{ jobs: CiJob[] }>(canEdit ? paths.ciJobs(p) : null);
 
   return (
     <>
@@ -82,7 +86,8 @@ export function AutotestsTab({ project, view }: { project: Project; view: "runs"
           <button role="tab" aria-selected={view === "tests"} onClick={() => go("p", p, "auto", "tests")}>Все автотесты</button>
         </div>
         <div className="spacer" />
-        {canEdit && <button className="btn primary" onClick={() => setConnect(true)}>Подключить автотесты</button>}
+        {canEdit && (jobs.value?.jobs.length || 0) > 0 && <button className="btn primary" onClick={() => setLaunch(true)}>Запустить в CI</button>}
+        {canEdit && <button className={`btn${jobs.value?.jobs.length ? "" : " primary"}`} onClick={() => setConnect(true)}>Подключить автотесты</button>}
       </div>
       {view === "tests" ? (
         <TestsRegistry project={project} />
@@ -107,7 +112,54 @@ export function AutotestsTab({ project, view }: { project: Project; view: "runs"
         </div>
       )}
       {connect && <ConnectModal pid={p} onClose={() => setConnect(false)} />}
+      {launch && jobs.value && <LaunchModal pid={p} jobs={jobs.value.jobs} onClose={() => setLaunch(false)} />}
     </>
+  );
+}
+
+// Запуск задачи CI с параметрами: создаёт запуск «В очереди», CI пишет в него результаты
+function LaunchModal({ pid, jobs, onClose }: { pid: string; jobs: CiJob[]; onClose: () => void }) {
+  const { write, toast } = useStore();
+  const [jobId, setJobId] = useState(jobs[0].id);
+  const job = jobs.find((j) => j.id === jobId)!;
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [ref, setRef] = useState("");
+  const val = (name: string, d: string) => values[name] ?? d;
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    const params = Object.fromEntries(job.params.map((p) => [p.name, val(p.name, p.default)]));
+    let num = 0;
+    if (await write(async () => { num = (await api<{ num: number }>("POST", `${paths.ciJob(pid, job.id)}/trigger`, { params, ref: ref || undefined })).num; })) {
+      toast(`Запуск ${pid}-A${num} отправлен в CI`);
+      onClose();
+      go("p", pid, "auto", num);
+    }
+  }
+  return (
+    <Modal onClose={onClose}>
+      <form onSubmit={submit} style={{ display: "contents" }}>
+        <h2>Запустить автотесты в CI</h2>
+        <div className="field"><label htmlFor="l-job">Задача</label>
+          <select id="l-job" className="input" value={jobId} onChange={(e) => { setJobId(Number(e.target.value)); setValues({}); }}>
+            {jobs.map((j) => <option key={j.id} value={j.id}>{j.name}</option>)}
+          </select></div>
+        <div className="field"><label htmlFor="l-ref">Ветка / ref</label><input id="l-ref" className="input mono" value={ref} placeholder={job.ref} onChange={(e) => setRef(e.target.value)} /></div>
+        {job.params.map((p) => (
+          <div className="field" key={p.name}>
+            <label htmlFor={`lp-${p.name}`}>{p.label}{p.required && " *"} <span className="muted mono small">{p.name}</span></label>
+            {p.options.length ? (
+              <select id={`lp-${p.name}`} className="input" value={val(p.name, p.default)} onChange={(e) => setValues({ ...values, [p.name]: e.target.value })}>
+                {!p.required && <option value="">—</option>}
+                {p.options.map((o) => <option key={o}>{o}</option>)}
+              </select>
+            ) : (
+              <input id={`lp-${p.name}`} className="input mono" value={val(p.name, p.default)} onChange={(e) => setValues({ ...values, [p.name]: e.target.value })} />
+            )}
+          </div>
+        ))}
+        <div className="acts"><button type="button" className="btn" onClick={onClose}>Отмена</button><button className="btn primary" type="submit">Запустить</button></div>
+      </form>
+    </Modal>
   );
 }
 
@@ -126,10 +178,11 @@ function RunRow({ r }: { r: AutoRun }) {
         <div className="muted small mono" style={{ marginTop: 4 }}>
           {c.passed}/{total(c)}
           {bad ? <span style={{ color: "var(--crit)" }}> · упало {bad}</span> : null}
-          {r.state === "running" && <span style={{ color: "var(--info)" }}> · идёт…</span>}
+          {r.state !== "finished" && <span style={{ color: r.state === "failed" ? "var(--crit)" : "var(--info)" }}> · {AUTO_RUN_STATES[r.state].label.toLowerCase()}</span>}
+          {r.flaky > 0 && <span style={{ color: "var(--warn)" }}> · с повтора {r.flaky}</span>}
         </div>
       </td>
-      <td className="mono small">{r.state === "running" ? "—" : fmtDuration(r.durationMs)}</td>
+      <td className="mono small">{r.state !== "finished" ? "—" : fmtDuration(r.durationMs)}</td>
       <td className="small">{fmt(r.created)}</td>
     </tr>
   );
@@ -196,7 +249,7 @@ export function AutoRunPage({ project, num }: { project: Project; num: number })
         </div>
         <div className="spacer" />
         <div className="acts">
-          {run.state === "running" ? <Pill tone="info" label="Идёт" /> : bad ? <Pill tone="crit" label={`Упало ${bad}`} /> : <Pill tone="ok" label="Всё прошло" />}
+          {run.state !== "finished" ? <Pill tone={AUTO_RUN_STATES[run.state].tone} label={AUTO_RUN_STATES[run.state].label} /> : bad ? <Pill tone="crit" label={`Упало ${bad}`} /> : <Pill tone="ok" label="Всё прошло" />}
           {canEdit && <button className="btn" onClick={() => setModal("edit")}>Параметры</button>}
           {canEdit && <button className="btn danger" onClick={() => setModal("delete")} aria-label="Удалить запуск">✕</button>}
         </div>
@@ -405,7 +458,11 @@ function TestsRegistry({ project }: { project: Project }) {
   const [onlyFlaky, setOnlyFlaky] = useState(false);
   const [del, setDel] = useState<AutoTest | null>(null);
   const tests = value?.tests || [];
-  const flaky = (t: AutoTest) => t.history.some((h) => h.status === "passed") && t.history.some((h) => isProblem(h.status));
+  // нестабильность определяет сервер по истории запусков (server/flaky.js)
+  const flaky = (t: AutoTest) => Boolean(t.flaky);
+  const data = useData();
+  const cases = data.cases.filter((c) => c.pid === p).sort((a, b) => a.num - b.num);
+  const patch = (t: AutoTest, body: object, msg: string) => write(() => api("PATCH", paths.autotest(p, t.id), body), msg);
   const needle = q.trim().toLowerCase();
   const rows = tests.filter((t) => (!onlyFlaky || flaky(t)) && (!needle || t.name.toLowerCase().includes(needle) || t.suite.toLowerCase().includes(needle)));
 
@@ -435,7 +492,27 @@ function TestsRegistry({ project }: { project: Project }) {
                   <td className="title">
                     {t.name}
                     {t.suite && <div className="muted small mono" style={{ fontWeight: 400, overflowWrap: "anywhere" }}>{t.suite}</div>}
-                    {flaky(t) && <div className="small" style={{ color: "var(--warn)", fontWeight: 600 }}>Нестабильный</div>}
+                    <div className="chips" style={{ marginTop: 4, alignItems: "center" }}>
+                      {t.flaky && <span className="tag warn" title={t.flaky.reason}>Нестабильный · {Math.round(t.flaky.score * 100)}%</span>}
+                      {t.quarantined && <span className="tag" title="Падения теста не считаются проблемой">Карантин</span>}
+                      {t.caseNum && <a className="chip" href={href("p", p, "cases", t.caseNum)} title="Связанный ручной кейс">{p}-{t.caseNum}</a>}
+                    </div>
+                    {t.flaky && <div className="muted small" style={{ fontWeight: 400 }}>{t.flaky.reason}</div>}
+                    {canEdit && (
+                      <details style={{ fontWeight: 400, marginTop: 4 }}>
+                        <summary className="small muted" style={{ cursor: "pointer" }}>Настроить</summary>
+                        <div className="flow" style={{ marginTop: 6, alignItems: "center" }}>
+                          <button className="btn sm" onClick={() => patch(t, { quarantined: !t.quarantined }, t.quarantined ? "Тест вернулся из карантина" : "Тест в карантине")}>
+                            {t.quarantined ? "Вернуть из карантина" : "В карантин"}
+                          </button>
+                          <select className="input" style={{ width: 240 }} aria-label="Связанный кейс" value={t.caseNum ?? ""}
+                            onChange={(e) => patch(t, { caseNum: e.target.value ? Number(e.target.value) : null }, e.target.value ? "Автотест связан с кейсом" : "Связь снята")}>
+                            <option value="">Не связан с ручным кейсом</option>
+                            {cases.map((c) => <option key={c.num} value={c.num}>{c.id} {c.title.slice(0, 60)}</option>)}
+                          </select>
+                        </div>
+                      </details>
+                    )}
                     {t.steps.length > 0 && (
                       <details style={{ fontWeight: 400, marginTop: 4 }}>
                         <summary className="small muted" style={{ cursor: "pointer" }}>Шаги ({t.steps.length})</summary>
@@ -447,8 +524,8 @@ function TestsRegistry({ project }: { project: Project }) {
                   <td>
                     <div style={{ display: "flex", gap: 3 }}>
                       {[...t.history].reverse().map((h) => (
-                        <a key={h.runNum} href={href("p", p, "auto", h.runNum)} title={`${p}-A${h.runNum}: ${find(AUTO_STATUSES, h.status).label}`}
-                          className={`t-${find(AUTO_STATUSES, h.status).tone}`} style={{ width: 12, height: 18, borderRadius: 3, display: "inline-block", background: "currentColor" }} />
+                        <a key={h.runNum} href={href("p", p, "auto", h.runNum)} title={`${p}-A${h.runNum}: ${find(AUTO_STATUSES, h.status).label}${h.flaky ? " (с повторной попытки)" : ""}`}
+                          className={`t-${h.flaky ? "warn" : find(AUTO_STATUSES, h.status).tone}`} style={{ width: 12, height: 18, borderRadius: 3, display: "inline-block", background: "currentColor" }} />
                       ))}
                     </div>
                   </td>
@@ -478,12 +555,14 @@ function TestsRegistry({ project }: { project: Project }) {
 }
 
 // ---------- подключение: токены и инструкция ----------
-interface Token { id: number; name: string; created: number; used: number | null }
+interface Token { id: number; name: string; project: string | null; created: number; used: number | null }
 
 function ConnectModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   const { toast } = useStore();
   const [tokens, setTokens] = useState<Token[] | null>(null);
   const [name, setName] = useState("");
+  // токен только для этого проекта — рекомендуется для CI
+  const [scoped, setScoped] = useState(true);
   const [fresh, setFresh] = useState("");
   const [del, setDel] = useState<Token | null>(null);
   const load = () => api<{ tokens: Token[] }>("GET", paths.tokens).then((r) => setTokens(r.tokens), (e) => toast(e.message));
@@ -494,7 +573,7 @@ function ConnectModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   async function create(e: FormEvent) {
     e.preventDefault();
     try {
-      const r = await api<{ token: string }>("POST", paths.tokens, { name: name.trim() || "Мой компьютер" });
+      const r = await api<{ token: string }>("POST", paths.tokens, { name: name.trim() || "Мой компьютер", project: scoped ? pid : undefined });
       setFresh(r.token);
       setName("");
       load();
@@ -504,16 +583,16 @@ function ConnectModal({ pid, onClose }: { pid: string; onClose: () => void }) {
   }
 
   const origin = window.location.origin;
-  const vars = `export TESTBOL_URL=${origin}
-export TESTBOL_TOKEN=${fresh || "<токен>"}
-export TESTBOL_PROJECT=${pid}`;
+  const vars = `export TESTBALL_URL=${origin}
+export TESTBALL_TOKEN=${fresh || "<токен>"}
+export TESTBALL_PROJECT=${pid}`;
   const playwright = `# в папке с playwright.config
-curl -O ${origin}/testbol-reporter.js
+curl -O ${origin}/testball-reporter.js
 
 ${vars}
 
 npx playwright test`;
-  const config = `reporter: [["list"], ["./testbol-reporter.js"]],
+  const config = `reporter: [["list"], ["./testball-reporter.js"]],
 use: { screenshot: "only-on-failure", trace: "retain-on-failure" },`;
   const junit = `curl -O ${origin}/report.js
 ${vars}
@@ -541,6 +620,9 @@ node report.js results/ -- pytest --junitxml=results/junit.xml   # запуст�
         ) : (
           <form onSubmit={create} style={{ display: "flex", gap: 8 }}>
             <input className="input" placeholder="Где будет работать: «Ноутбук», «CI»" value={name} onChange={(e) => setName(e.target.value)} />
+            <label className="small" style={{ display: "flex", gap: 6, alignItems: "center", whiteSpace: "nowrap" }}>
+              <input type="checkbox" checked={scoped} onChange={(e) => setScoped(e.target.checked)} /> только {pid}
+            </label>
             <button className="btn primary" type="submit">Создать токен</button>
           </form>
         )}
@@ -548,7 +630,7 @@ node report.js results/ -- pytest --junitxml=results/junit.xml   # запуст�
           <div className="history">
             {tokens.map((t) => (
               <div key={t.id}>
-                <b style={{ flex: 1, minWidth: 120 }}>{t.name}</b>
+                <b style={{ flex: 1, minWidth: 120 }}>{t.name}{t.project && <span className="tag" style={{ marginLeft: 6 }}>{t.project}</span>}</b>
                 <span className="muted">создан {fmt(t.created)} · {t.used ? `использован ${fmt(t.used)}` : "ещё не использовался"}</span>
                 <button className="btn ghost sm" onClick={() => setDel(t)} aria-label={`Отозвать ${t.name}`}>Отозвать</button>
               </div>
@@ -563,7 +645,7 @@ node report.js results/ -- pytest --junitxml=results/junit.xml   # запуст�
         <span className="muted small">В <span className="mono">playwright.config</span> добавьте репортер (остальные настройки не трогайте):</span>
         {pre(config)}
         <span className="muted small">
-          Без переменных TESTBOL_* репортер молча выключается, так что конфиг можно закоммитить: у коллег без токена тесты работают как обычно.
+          Без переменных TESTBALL_* репортер молча выключается, так что конфиг можно закоммитить: у коллег без токена тесты работают как обычно.
           В Windows PowerShell вместо <span className="mono">export X=…</span> пишите <span className="mono">$env:X="…"</span>.
         </span>
       </div>

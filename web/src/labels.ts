@@ -1,4 +1,4 @@
-import type { AutoStatus, BugStatus, CaseStatus, Priority, ResultValue, Role, Severity } from "./types";
+import type { AutoStatus, BugStatus, CaseStatus, Priority, ProjectRole, ResultValue, Role, Severity } from "./types";
 
 export type Tone = "neutral" | "info" | "ok" | "crit" | "warn" | "accent";
 type Def<K extends string> = { key: K; label: string; tone: Tone }[];
@@ -78,6 +78,25 @@ export function find<K extends string>(list: Def<K>, key: K) {
 export const ROLES: (Def<Role>[number] & { hint: string })[] = [
   { key: "tester", label: "Тестировщик", tone: "info", hint: "Создаёт, меняет и удаляет всё в своих проектах" },
   { key: "developer", label: "Разработчик", tone: "neutral", hint: "Просмотр своих проектов и комментарии" },
+  { key: "viewer", label: "Наблюдатель", tone: "neutral", hint: "Просмотровая лицензия: только чтение" },
   { key: "admin", label: "Администратор", tone: "accent", hint: "Все проекты, пользователи, роли и доступы" },
 ];
 export const roleOf = (r: Role) => ROLES.find((x) => x.key === r) || ROLES[1];
+export const PROJECT_ROLES = ROLES.filter((r) => r.key !== "admin") as (typeof ROLES[number] & { key: ProjectRole })[];
+// Полная лицензия — у тех, кто меняет данные; просмотровая — у остальных
+export const isFullSeat = (r: Role) => r === "tester" || r === "admin";
+
+export const PROVIDERS: Record<string, string> = { local: "Пароль", ldap: "LDAP / AD", oidc: "SSO (OIDC)", kerberos: "Kerberos" };
+
+export const AUTO_RUN_STATES: Record<string, { label: string; tone: Tone }> = {
+  queued: { label: "В очереди CI", tone: "neutral" },
+  running: { label: "Идёт", tone: "info" },
+  finished: { label: "Завершён", tone: "ok" },
+  failed: { label: "CI не принял", tone: "crit" },
+};
+
+export const DIST_STRATEGIES = [
+  { key: "balanced", label: "По трудоёмкости", hint: "Сначала самые длинные кейсы, каждый — тому, у кого сейчас меньше работы" },
+  { key: "round_robin", label: "По очереди", hint: "Кейсы по номерам раздаются исполнителям по кругу" },
+  { key: "by_folder", label: "По папкам", hint: "Папка целиком одному исполнителю, папки — по нагрузке" },
+] as const;

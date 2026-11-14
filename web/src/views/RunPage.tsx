@@ -4,9 +4,10 @@ import { checkedCount, checklistItems, itemMark } from "../checklist";
 import { BUG_STATUSES, find, RESULTS } from "../labels";
 import { go, href } from "../router";
 import { countResults, previousResults, runResults } from "../selectors";
-import { useCanEdit, useData, useStore } from "../store";
-import type { Project, Result, ResultValue, Run, TestCase } from "../types";
-import { Confirm, Drawer, fmt, Modal, Pill, Prio, ResultBar, ResultPill, TextBlock, Who } from "../ui";
+import { useCanEdit, useData, useLoad, useStore } from "../store";
+import type { CaseVersion, Project, Result, ResultValue, Run, TestCase } from "../types";
+import { Confirm, Drawer, fmt, Modal, Pill, Prio, ResultBar, ResultPill, TextBlock, useNames, Who } from "../ui";
+import { AssignPicker, executorsOf, type Assign } from "./Plans";
 import { Attachments } from "./Attachments";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { CasePicker, RunModal } from "./Runs";
@@ -15,14 +16,17 @@ const MARKS: ResultValue[] = ["passed", "failed", "blocked", "skipped"];
 
 export function RunPage({ project, num }: { project: Project; num: number }) {
   const data = useData();
-  const { write, liveError } = useStore();
+  const { write, liveError, me } = useStore();
   const canEdit = useCanEdit();
   const p = project.id;
   const run = data.runs.find((r) => r.pid === p && r.num === num);
   const [filter, setFilter] = useState<"all" | ResultValue>("all");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
-  const [modal, setModal] = useState<"edit" | "add" | "delete" | null>(null);
+  const [modal, setModal] = useState<"edit" | "add" | "delete" | "distribute" | null>(null);
+  // "" — все, "me" — мои, "none" — без исполнителя, иначе логин
+  const [who, setWho] = useState("");
+  const nameOf = useNames();
   const [bugDraft, setBugDraft] = useState<BugDraft | null>(null);
 
   if (!run) {
@@ -43,6 +47,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const needle = q.trim().toLowerCase();
   const rows = results
     .filter((r) => filter === "all" || r.result === filter)
+    .filter((r) => !who || (who === "me" ? r.assignee === me?.login : who === "none" ? !r.assignee : r.assignee === who))
     .map((r) => ({ r, c: caseOf(r) }))
     .filter(({ c }) => c && (!needle || c.title.toLowerCase().includes(needle) || c.id.toLowerCase().includes(needle)))
     .sort((a, b) => a.c.num - b.c.num);
@@ -78,11 +83,12 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
           {canEdit && (
             <>
               <button className="btn" onClick={() => setModal("edit")}>Параметры</button>
-              {open && <button className="btn" onClick={() => setModal("add")}>Добавить кейсы</button>}
+              {open && !run.planLocked && <button className="btn" onClick={() => setModal("add")}>Добавить кейсы</button>}
+              {open && <button className="btn" onClick={() => setModal("distribute")}>Распределить</button>}
               <button className={`btn${open ? " primary" : ""}`} onClick={() => write(() => api("PATCH", paths.run(p, num), { state: open ? "closed" : "open" }), open ? "Прогон закрыт" : "Прогон снова открыт")}>
                 {open ? "Закрыть прогон" : "Открыть снова"}
               </button>
-              <button className="btn danger" onClick={() => setModal("delete")} aria-label="Удалить прогон">✕</button>
+              {!run.planLocked && <button className="btn danger" onClick={() => setModal("delete")} aria-label="Удалить прогон">✕</button>}
             </>
           )}
         </div>
@@ -91,6 +97,12 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
         <ResultBar counts={counts} />
         <span className="muted small">Проверено {done} из {results.length}{results.length ? ` (${Math.round((done / results.length) * 100)}%)` : ""}</span>
       </div>
+      {run.planNum && (
+        <span className="small muted">
+          По тест-плану <a href={href("p", p, "plans", run.planNum)}>{p}-P{run.planNum}</a>
+          {run.planLocked && " — план заблокирован: состав прогона и версии кейсов зафиксированы"}
+        </span>
+      )}
       {!open && <div className="banner">Прогон закрыт: результаты зафиксированы.{canEdit && " Чтобы что-то поменять, откройте его снова."}</div>}
       <div className="stats">
         {chip("all", "Все", results.length)}
@@ -98,12 +110,21 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
       </div>
       <div className="toolbar">
         <input className="input" type="search" placeholder="Поиск по названию или ID кейса" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="input" aria-label="Исполнитель" value={who} onChange={(e) => setWho(e.target.value)}>
+          <option value="">Все исполнители</option>
+          <option value="me">Мои кейсы ({results.filter((r) => r.assignee === me?.login).length})</option>
+          <option value="none">Без исполнителя ({results.filter((r) => !r.assignee).length})</option>
+          {[...new Set(results.map((r) => r.assignee).filter(Boolean) as string[])].filter((u) => u !== me?.login).map((u) => (
+            <option key={u} value={u}>{nameOf(u)} ({results.filter((r) => r.assignee === u).length})</option>
+          ))}
+        </select>
       </div>
       <div className="tbl-wrap">
         <table>
           <thead>
             <tr>
               <th style={{ width: 80 }}>Кейс</th><th>Название</th><th style={{ width: 120 }}>Приоритет</th><th style={{ width: 250 }}>Результат</th>
+              <th style={{ width: 140 }}>Исполнитель</th>
               <th style={{ width: 120 }} title="Результат в предыдущем прогоне, где проверялся этот кейс">Ранее</th><th style={{ width: 120 }}>Баги</th>
             </tr>
           </thead>
@@ -125,6 +146,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
                       </button>
                     ) : editable ? <ResultButtons value={r.result} onPick={(v) => mark(r, v)} /> : <ResultPill r={r.result} />}
                   </td>
+                  <td className="small"><Who login={r.assignee} /></td>
                   <td className="nowrap">
                     {pr ? <span title={`${p}-R${pr.runNum}`}><ResultPill r={pr.result} sm /> <span className="muted small mono">R{pr.runNum}</span></span> : <span className="muted small">—</span>}
                     {regress && <div className="small" style={{ color: "var(--crit)", fontWeight: 600 }}>Регресс</div>}
@@ -140,7 +162,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
                 </tr>
               );
             })}
-            {!rows.length && <tr><td colSpan={6} className="nores">Ничего не найдено.</td></tr>}
+            {!rows.length && <tr><td colSpan={7} className="nores">Ничего не найдено.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -164,6 +186,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
       ) : null}
       {modal === "edit" && <RunModal pid={p} run={run} onClose={() => setModal(null)} />}
       {modal === "add" && <AddCasesModal run={run} onClose={() => setModal(null)} />}
+      {modal === "distribute" && <DistributeModal run={run} onClose={() => setModal(null)} />}
       {modal === "delete" && (
         <Confirm
           title={`Удалить прогон ${run.id}?`}
@@ -219,6 +242,12 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   const items = checklistItems(c);
   const pickItem = (item: string, v: ResultValue) =>
     write(() => api("PATCH", paths.result(p, run.num, c.num), { item, result: itemMark(r, item) === v ? "untested" : v }));
+  const nameOf = useNames();
+  // кейс изменили после того, как его добавили в прогон или проверили: показываем текст проверяемой версии
+  const outdated = r.caseVersion !== null && r.caseVersion !== c.version;
+  const ver = useLoad<CaseVersion>(outdated ? `${paths.versions(p, c.num)}/${r.caseVersion}` : null);
+  const shown = outdated && ver.value ? { ...c, pre: ver.value.pre, steps: ver.value.steps, expected: ver.value.expected, kind: ver.value.kind } : c;
+  const people = executorsOf(data, p);
 
   return (
     <Drawer
@@ -247,7 +276,22 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
         {r.executed && <span className="muted small">Отметил <Who login={r.executedBy} /> · {fmt(r.executed)}</span>}
         {prev && <span className="muted small">В прошлый раз ({p}-R{prev.runNum}): <ResultPill r={prev.result} sm /></span>}
       </div>
-      {c.kind === "checklist" ? (
+      <div className="view-block">
+        <span className="label">Исполнитель</span>
+        {open ? (
+          <select className="input" value={r.assignee || ""} onChange={(e) => write(() => api("PATCH", paths.result(p, run.num, c.num), { assignee: e.target.value || null }), e.target.value ? `Назначен: ${nameOf(e.target.value)}` : "Исполнитель снят")}>
+            <option value="">Не назначен</option>
+            {[...new Set([...people, ...(r.assignee ? [r.assignee] : [])])].map((u) => <option key={u} value={u}>{nameOf(u)}</option>)}
+          </select>
+        ) : <Who login={r.assignee} />}
+      </div>
+      {outdated && (
+        <div className="banner small">
+          Кейс изменён после {r.result === "untested" ? "добавления в прогон" : "проверки"}: ниже версия v{r.caseVersion}, текущая — v{c.version}.
+          {run.planLocked && " Прогон по заблокированному плану проверяет зафиксированную версию."}
+        </div>
+      )}
+      {shown.kind === "checklist" ? (
         <div className="view-block">
           <span className="label">Пункты</span>
           <ol className="items-list">
@@ -272,9 +316,9 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
         </div>
       ) : (
         <>
-          <TextBlock label="Предусловия" text={c.pre} empty="Не указаны" />
-          <TextBlock label="Шаги" text={c.steps} empty="Не указаны" steps />
-          <TextBlock label="Ожидаемый результат" text={c.expected} empty="Не указан" />
+          <TextBlock label="Предусловия" text={shown.pre} empty="Не указаны" />
+          <TextBlock label="Шаги" text={shown.steps} empty="Не указаны" steps />
+          <TextBlock label="Ожидаемый результат" text={shown.expected} empty="Не указан" />
         </>
       )}
       <div className="field">
@@ -320,6 +364,33 @@ function AddCasesModal({ run, onClose }: { run: Run; onClose: () => void }) {
           onClick={async () => { if (await write(() => api("POST", `${paths.run(run.pid, run.num)}/cases`, { caseNums: [...picked] }), `Добавлено кейсов: ${picked.size}`)) onClose(); }}>
           Добавить ({picked.size})
         </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DistributeModal({ run, onClose }: { run: Run; onClose: () => void }) {
+  const { write, toast } = useStore();
+  const [assign, setAssign] = useState<Assign>({ users: [], strategy: "balanced" });
+  const [onlyUnassigned, setOnlyUnassigned] = useState(true);
+  async function go() {
+    let out: { assigned: number } = { assigned: 0 };
+    if (await write(async () => { out = await api("POST", paths.distribute(run.pid, run.num), { ...assign, onlyUnassigned }); })) {
+      toast(`Распределено кейсов: ${out.assigned}`);
+      onClose();
+    }
+  }
+  return (
+    <Modal onClose={onClose}>
+      <h2>Распределить {run.id}</h2>
+      <p className="muted small" style={{ margin: 0 }}>Распределяются непроверенные кейсы. Уже назначенная работа учитывается в нагрузке.</p>
+      <AssignPicker pid={run.pid} value={assign} onChange={setAssign} />
+      <label style={{ display: "flex", gap: 8 }}>
+        <input type="checkbox" checked={!onlyUnassigned} onChange={(e) => setOnlyUnassigned(!e.target.checked)} /> Перераспределить и уже назначенные непроверенные кейсы
+      </label>
+      <div className="acts">
+        <button className="btn" onClick={onClose}>Отмена</button>
+        <button className="btn primary" disabled={!assign.users.length} onClick={go}>Распределить</button>
       </div>
     </Modal>
   );

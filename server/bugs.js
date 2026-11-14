@@ -2,6 +2,7 @@
 const express = require("express");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
+const events = require("./events");
 const { wrap, str, num } = require("./util");
 
 const SEVERITIES = ["blocker", "critical", "major", "minor"];
@@ -76,10 +77,15 @@ router.post("/bugs", wrap(async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`,
       [key, n, b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, caseId, resultId, req.user.id]
     );
+    await db.query(
+      "INSERT INTO bug_status_log(bug_id, from_status, to_status, changed_by) SELECT id, NULL, 'new', $3 FROM bugs WHERE project_key=$1 AND num=$2",
+      [key, n, req.user.id]
+    );
     return { n };
   });
   if (out.error) return res.status(out.status).json({ error: out.error });
   broadcast("bugs");
+  events.emit(key, "bug.created", { bug: await events.snap.bug(key, out.n) }, req.user);
   res.status(201).json({ num: out.n });
 }));
 
@@ -114,12 +120,20 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
       dup = d.rows[0].id;
     }
   }
-  await pool.query(
-    `UPDATE bugs SET title=$1, severity=$2, assignee_id=$3, environment=$4, steps=$5, actual=$6, expected=$7,
-       status=$8, duplicate_of=$9, updated_by=$10, updated_at=now() WHERE id=$11`,
-    [b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, status, dup, req.user.id, cur.id]
-  );
+  await tx(async (db) => {
+    await db.query(
+      `UPDATE bugs SET title=$1, severity=$2, assignee_id=$3, environment=$4, steps=$5, actual=$6, expected=$7,
+         status=$8, duplicate_of=$9, updated_by=$10, updated_at=now() WHERE id=$11`,
+      [b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, status, dup, req.user.id, cur.id]
+    );
+    if (status !== cur.status) {
+      await db.query("INSERT INTO bug_status_log(bug_id, from_status, to_status, changed_by) VALUES ($1,$2,$3,$4)", [cur.id, cur.status, status, req.user.id]);
+    }
+  });
   broadcast("bugs");
+  const bug = await events.snap.bug(key, n);
+  if (status !== cur.status) events.emit(key, "bug.status", { bug, from: cur.status, to: status }, req.user);
+  else events.emit(key, "bug.updated", { bug }, req.user);
   res.json({ ok: true });
 }));
 

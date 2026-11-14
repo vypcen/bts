@@ -63,6 +63,8 @@ const hashPassword = (pass) => run("hash", pass, BCRYPT_ROUNDS);
 // Поддерживает bcrypt и формат, перенесённый из прошлой версии:
 // "pbkdf2$<iterations>$<salt base64>$<hash base64>". Возвращает {ok, legacy}.
 async function verifyPassword(pass, stored) {
+  // у пользователя из LDAP/SSO локального пароля нет
+  if (!stored) return { ok: false, legacy: false };
   if (stored.startsWith("pbkdf2$")) {
     const [, iter, salt, hash] = stored.split("$");
     const n = Number(iter);
@@ -132,11 +134,13 @@ async function loadUser(req, _res, next) {
     if (bearer) {
       const { rows } = await pool.query(
         `UPDATE api_tokens t SET last_used_at=now() FROM users u
-         WHERE t.token_hash=$1 AND u.id=t.user_id AND NOT u.blocked RETURNING u.id, u.login, u.name, u.role`,
+         WHERE t.token_hash=$1 AND u.id=t.user_id AND NOT u.blocked RETURNING u.id, u.login, u.name, u.role, t.project_key`,
         [sha256(bearer[1])]
       );
       if (rows[0]) {
-        req.user = rows[0];
+        // токен проекта открывает только этот проект (server/access.js)
+        const { project_key, ...user } = rows[0];
+        req.user = { ...user, tokenProject: project_key || null };
         req.viaToken = true;
       }
       return next();

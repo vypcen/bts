@@ -1,0 +1,6 @@
+apiVersion: v2
+name: testball
+description: TestBall QA — система управления тестированием в инфраструктуре заказчика
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

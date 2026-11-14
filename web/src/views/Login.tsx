@@ -3,6 +3,13 @@ import { api } from "../api";
 import { useStore } from "../store";
 import type { User } from "../types";
 
+interface Providers {
+  local: boolean;
+  ldap: boolean;
+  oidc: { label: string } | null;
+  kerberos: { label: string } | null;
+}
+
 export function Login() {
   const { setMe, toast } = useStore();
   const [tab, setTab] = useState<"login" | "register">("login");
@@ -10,13 +17,25 @@ export function Login() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   // setup — пользователей ещё нет: регистрируется первый администратор с кодом из логов сервера
-  const [mode, setMode] = useState<{ setup: boolean; registration: "open" | "closed" }>({ setup: false, registration: "open" });
+  const [mode, setMode] = useState<{ setup: boolean; registration: "open" | "closed"; providers: Providers }>({
+    setup: false, registration: "open", providers: { local: true, ldap: false, oidc: null, kerberos: null },
+  });
   useEffect(() => {
-    api<{ setup?: boolean; registration?: "open" | "closed" }>("GET", "/api/auth/me").then((r) => {
-      setMode({ setup: !!r.setup, registration: r.registration || "open" });
+    api<{ setup?: boolean; registration?: "open" | "closed"; providers?: Providers }>("GET", "/api/auth/me").then((r) => {
+      setMode({ setup: !!r.setup, registration: r.registration || "open", providers: r.providers || { local: true, ldap: false, oidc: null, kerberos: null } });
       if (r.setup) setTab("register");
     }, () => {});
+    // ошибка входа через SSO/Kerberos приходит в адресе после возврата от IdP
+    const ssoError = new URLSearchParams(window.location.search).get("sso_error");
+    if (ssoError) {
+      setErr(ssoError);
+      window.history.replaceState(null, "", window.location.pathname + window.location.hash);
+    }
   }, []);
+  const pv = mode.providers;
+  // форма логина и пароля нужна для локальных учётных записей и для LDAP/AD
+  const passwordForm = pv.local || pv.ldap || mode.setup;
+  const returnTo = encodeURIComponent("/" + window.location.hash);
   const canRegister = mode.setup || mode.registration === "open";
   const reg = tab === "register" && canRegister;
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
@@ -24,8 +43,10 @@ export function Login() {
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
+    // в каталоге логин бывает в виде DOMAIN\user или user@domain — его проверяет сервер
     const login = f.login.trim().toLowerCase();
-    if (!/^[a-z0-9._-]{3,32}$/.test(login)) return setErr("Логин: 3–32 символа, латинские буквы, цифры, точка, дефис или подчёркивание");
+    if (reg && !/^[a-z0-9._-]{3,32}$/.test(login)) return setErr("Логин: 3–32 символа, латинские буквы, цифры, точка, дефис или подчёркивание");
+    if (!login) return setErr("Введите логин");
     if (!f.pass) return setErr("Введите пароль");
     if (reg) {
       if (!f.name.trim()) return setErr("Укажите имя");
@@ -55,7 +76,7 @@ export function Login() {
   return (
     <div className="wrap login">
       <form className="login-card" onSubmit={submit} noValidate>
-        <span className="brand"><span className="mark">TB</span>TestBol</span>
+        <span className="brand"><span className="mark">TB</span>TestBall</span>
         <div>
           <h1 style={{ fontSize: 22 }}>{mode.setup ? "Первый администратор" : reg ? "Создать аккаунт" : "Вход в систему"}</h1>
           <p className="muted" style={{ margin: "4px 0 0" }}>
@@ -64,6 +85,15 @@ export function Login() {
               : "Тест-кейсы, прогоны и баги для вашей команды"}
           </p>
         </div>
+        {!mode.setup && (pv.oidc || pv.kerberos) && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {pv.oidc && <a className="btn primary" href={`/api/auth/oidc/start?return=${returnTo}`} style={{ justifyContent: "center", padding: 10, textDecoration: "none" }}>{pv.oidc.label}</a>}
+            {pv.kerberos && <a className="btn" href={`/api/auth/kerberos?return=${returnTo}`} style={{ justifyContent: "center", padding: 10, textDecoration: "none" }}>{pv.kerberos.label}</a>}
+            {passwordForm && <span className="muted small" style={{ textAlign: "center" }}>или по логину и паролю</span>}
+          </div>
+        )}
+        {!passwordForm && <div className="err" role="alert">{err}</div>}
+        {passwordForm && <>
         {!mode.setup && canRegister && (
           <div className="tabs" role="tablist">
             <button type="button" role="tab" aria-selected={!reg} onClick={() => switchTab("login")}>Вход</button>
@@ -104,7 +134,9 @@ export function Login() {
         <button className="btn primary" type="submit" disabled={busy} style={{ justifyContent: "center", padding: 10 }}>
           {busy ? "Проверяем…" : reg ? "Зарегистрироваться" : "Войти"}
         </button>
-        {!canRegister && <p className="muted small" style={{ margin: 0, textAlign: "center" }}>Нет учётной записи? Её создаёт администратор.</p>}
+        </>}
+        {pv.ldap && !reg && <p className="muted small" style={{ margin: 0, textAlign: "center" }}>Можно войти доменной учётной записью: логин и пароль Windows.</p>}
+        {passwordForm && !canRegister && !pv.ldap && <p className="muted small" style={{ margin: 0, textAlign: "center" }}>Нет учётной записи? Её создаёт администратор.</p>}
       </form>
     </div>
   );

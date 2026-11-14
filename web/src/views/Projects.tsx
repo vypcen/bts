@@ -13,6 +13,7 @@ export function Projects({ missing }: { missing?: string }) {
   const canEdit = useCanEdit();
   const nameOf = useNames();
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const list = [...data.projects].sort((a, b) => b.created - a.created);
 
   const card = (p: Project) => {
@@ -47,6 +48,7 @@ export function Projects({ missing }: { missing?: string }) {
           <p className="muted">Проекты, к которым у вас есть доступ</p>
         </div>
         <div className="spacer" />
+        {canEdit && <button className="btn" onClick={() => setImporting(true)}>Импорт</button>}
         {canEdit && <button className="btn primary" onClick={() => setCreating(true)}>+ Новый проект</button>}
       </div>
       {list.length ? (
@@ -58,6 +60,7 @@ export function Projects({ missing }: { missing?: string }) {
         </Empty>
       )}
       {creating && <ProjectModal onClose={() => setCreating(false)} />}
+      {importing && <ImportProjectModal onClose={() => setImporting(false)} />}
     </main>
   );
 }
@@ -135,6 +138,111 @@ export function ProjectModal({ project, onClose }: { project?: Project; onClose:
           {canDelete && <button type="button" className="btn danger" style={{ marginRight: "auto" }} onClick={() => setConfirmDel(true)}>Удалить проект</button>}
           <button type="button" className="btn" onClick={onClose}>Отмена</button>
           <button className="btn primary" type="submit">{project ? "Сохранить" : "Создать"}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+const SOURCES = [
+  { key: "testball", label: "TestBall (экспорт проекта)", accept: ".json", hint: "Файл *.testball.json из «Интеграции → Экспорт проекта» другой установки" },
+  { key: "testrail", label: "TestRail (XML)", accept: ".xml", hint: "Test Cases → Export → XML. Разделы станут папками, отдельные шаги — шагами и ожидаемыми результатами" },
+  { key: "testlink", label: "TestLink (XML)", accept: ".xml", hint: "Экспорт тестового набора в XML. Наборы станут папками" },
+  { key: "qase", label: "Qase (JSON)", accept: ".json", hint: "Project → Export → JSON. Сьюты станут папками" },
+] as const;
+
+type ImportSummary = Record<string, number>;
+
+// Новый проект из файла: перенос между установками TestBall или миграция из другой TMS. Для CSV — импорт во вкладке кейсов
+function ImportProjectModal({ onClose }: { onClose: () => void }) {
+  const { toast, reload } = useStore();
+  const [source, setSource] = useState<(typeof SOURCES)[number]["key"]>("testball");
+  const [text, setText] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [key, setKey] = useState("");
+  const [name, setName] = useState("");
+  const [preview, setPreview] = useState<ImportSummary | null>(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const def = SOURCES.find((x) => x.key === source)!;
+
+  const body = (dryRun: boolean) => {
+    if (source === "testball") {
+      let data: unknown;
+      try { data = JSON.parse(text); } catch { throw new Error("Файл не является JSON"); }
+      return { source, data, key: key.trim().toUpperCase(), name: name.trim(), dryRun };
+    }
+    return { source, text, key: key.trim().toUpperCase(), name: name.trim(), dryRun };
+  };
+
+  async function pick(file: File) {
+    setErr("");
+    setPreview(null);
+    setFileName(file.name);
+    const t = await file.text();
+    setText(t);
+    try {
+      setBusy(true);
+      const r = await api<{ summary: ImportSummary; project: { key: string; name: string } }>("POST", paths.projectImport, (() => {
+        const b = source === "testball" ? { source, data: JSON.parse(t), dryRun: true } : { source, text: t, dryRun: true };
+        return b;
+      })());
+      setPreview(r.summary);
+      if (!key) setKey(r.project.key);
+      if (!name) setName(r.project.name);
+    } catch (x: any) {
+      setErr(x.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    const k = key.trim().toUpperCase();
+    if (!/^[A-Z]{2,6}$/.test(k)) return setErr("Ключ нового проекта: от 2 до 6 латинских букв");
+    if (!text) return setErr("Выберите файл");
+    setBusy(true);
+    try {
+      await api("POST", paths.projectImport, body(false));
+    } catch (x: any) {
+      setBusy(false);
+      return setErr(x.message);
+    }
+    toast(`Проект ${k} создан из файла`);
+    await reload();
+    onClose();
+    go("p", k);
+  }
+
+  const LABELS: Record<string, string> = { folders: "папок", cases: "кейсов", plans: "планов", runs: "прогонов", bugs: "багов", comments: "комментариев", autotests: "автотестов", autoruns: "запусков автотестов", files: "файлов" };
+  return (
+    <Modal onClose={onClose}>
+      <form onSubmit={submit} noValidate style={{ display: "contents" }}>
+        <h2>Импорт проекта</h2>
+        <div className="field"><label htmlFor="ip-src">Откуда</label>
+          <select id="ip-src" className="input" value={source} onChange={(e) => { setSource(e.target.value as typeof source); setText(""); setFileName(""); setPreview(null); }}>
+            {SOURCES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+          </select>
+          <span className="muted" style={{ fontSize: 12 }}>{def.hint}</span></div>
+        <div className="field"><label htmlFor="ip-file">Файл</label>
+          <input id="ip-file" type="file" accept={def.accept} onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])} />
+          {fileName && <span className="muted small">{fileName}</span>}</div>
+        {preview && (
+          <div className="linkbox small">
+            В файле: {Object.entries(preview).filter(([k, v]) => v && LABELS[k]).map(([k, v]) => `${v} ${LABELS[k]}`).join(", ") || "ничего"}
+          </div>
+        )}
+        <div className="row2">
+          <div className="field"><label htmlFor="ip-key">Ключ нового проекта *</label>
+            <input id="ip-key" className="input mono" maxLength={6} value={key} onChange={(e) => setKey(e.target.value)} placeholder="NEW" /></div>
+          <div className="field"><label htmlFor="ip-name">Название</label>
+            <input id="ip-name" className="input" value={name} onChange={(e) => setName(e.target.value)} /></div>
+        </div>
+        <div className="err">{err}</div>
+        <div className="acts">
+          <button type="button" className="btn" onClick={onClose}>Отмена</button>
+          <button className="btn primary" type="submit" disabled={busy || !text}>{busy ? "Подождите…" : "Создать проект"}</button>
         </div>
       </form>
     </Modal>

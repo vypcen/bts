@@ -4,7 +4,7 @@ import { api, paths } from "../api";
 import { BUG_FLOW, BUG_STATUSES, find, isOpenBug, SEVERITIES, transitionLabel } from "../labels";
 import { go, href } from "../router";
 import { assigneesOf, countBy } from "../selectors";
-import { useCanEdit, useData, useStore } from "../store";
+import { useCanEdit, useData, useLoad, useStore } from "../store";
 import type { Bug, BugStatus, Project, Result, Run, Severity, TestCase } from "../types";
 import { CommentCount, Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who } from "../ui";
 import { Attachments } from "./Attachments";
@@ -206,6 +206,7 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
           </select>
         </div>
       </div>
+      <ExternalIssue bug={bug} />
       <TextBlock label="Окружение / версия" text={bug.env} />
       <TextBlock label="Шаги воспроизведения" text={bug.steps} empty="Не указаны" steps />
       <div className="row2">
@@ -334,5 +335,36 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
         <div className="err">{err}</div>
       </form>
     </Drawer>
+  );
+}
+
+// Задача во внешнем трекере (Jira, YouTrack, GitLab, GitHub, Redmine)
+function ExternalIssue({ bug }: { bug: Bug }) {
+  const canEdit = useCanEdit();
+  const { write } = useStore();
+  const [key, setKey] = useState("");
+  const tracker = useLoad<{ tracker: { kind: string } | null }>(canEdit ? paths.tracker(bug.pid) : null);
+  const url = paths.bugExternal(bug.pid, bug.num);
+  const ext = bug.external;
+  if (!ext && (!canEdit || !tracker.value?.tracker)) return null;
+  return (
+    <div className="view-block">
+      <span className="label">Задача в трекере</span>
+      {ext ? (
+        <div className="flow" style={{ alignItems: "center" }}>
+          <a className="chip" href={ext.url} target="_blank" rel="noreferrer noopener">{ext.key} ↗</a>
+          {ext.status && <span className="tag">{ext.status}</span>}
+          {canEdit && <button className="btn sm" onClick={() => write(() => api("POST", `${url}/sync`, {}), "Статус задачи обновлён")}>Обновить статус</button>}
+          {canEdit && <button className="btn ghost sm" onClick={() => write(() => api("DELETE", url, {}), "Связь с задачей снята")}>Отвязать</button>}
+        </div>
+      ) : (
+        <div className="flow" style={{ alignItems: "center" }}>
+          <button className="btn sm primary" onClick={() => write(() => api("POST", url, { create: true }), "Задача создана в трекере")}>Создать задачу</button>
+          <span className="muted small">или</span>
+          <input className="input mono" style={{ width: 140 }} placeholder="PROJ-12 / #34" value={key} onChange={(e) => setKey(e.target.value)} aria-label="Ключ задачи" />
+          <button className="btn sm" disabled={!key.trim()} onClick={async () => { if (await write(() => api("POST", url, { key: key.trim() }), "Задача привязана")) setKey(""); }}>Привязать</button>
+        </div>
+      )}
+    </div>
   );
 }
