@@ -62,21 +62,15 @@ async function meta(user) {
       [keys, user.id]
     ),
     pool.query(`SELECT project_key, num, title, mode, locked FROM test_plans WHERE ${mine("project_key")} ORDER BY project_key, num`, [keys]),
-    // Сводка для карточек проектов: считается в базе, а не перебором всех кейсов в браузере
+    // Сводка для карточек проектов: считается в базе по последнему результату, который хранится в кейсе
     pool.query(
-      `WITH last AS (
-         SELECT DISTINCT ON (rr.case_id) rr.case_id, rr.result
-         FROM run_results rr JOIN test_runs t ON t.id=rr.run_id
-         WHERE ${mine("t.project_key")} AND rr.result <> 'untested' AND rr.executed_at IS NOT NULL
-         ORDER BY rr.case_id, rr.executed_at DESC
-       )
-       SELECT p.key,
+      `SELECT p.key,
          (SELECT count(*) FROM test_cases c WHERE c.project_key=p.key)::int AS cases,
          (SELECT count(*) FROM test_runs r WHERE r.project_key=p.key)::int AS runs,
          (SELECT count(*) FROM bugs b WHERE b.project_key=p.key)::int AS bugs,
          (SELECT count(*) FROM bugs b WHERE b.project_key=p.key AND b.status IN ('new','in_progress','fixed','verified'))::int AS open_bugs,
-         (SELECT json_object_agg(res, n) FROM (
-            SELECT COALESCE(l.result, 'untested') AS res, count(*)::int AS n FROM test_cases c LEFT JOIN last l ON l.case_id=c.id
+         (SELECT json_object_agg(last_result, n) FROM (
+            SELECT last_result, count(*)::int AS n FROM test_cases c
             WHERE c.project_key=p.key AND c.status <> 'deprecated' GROUP BY 1) x) AS last
        FROM projects p WHERE ${mine("p.key")}`,
       [keys]
@@ -108,13 +102,10 @@ async function project(key) {
                   (SELECT json_object_agg(result, n) FROM (SELECT result, count(*)::int AS n FROM run_results WHERE run_id=r.id GROUP BY result) x) AS counts
                 FROM test_runs r LEFT JOIN users u ON u.id=r.created_by LEFT JOIN test_plans p ON p.id=r.plan_id
                 WHERE r.project_key=$1 ORDER BY r.num`, k),
-    // последний выполненный результат каждого кейса и результаты, на которые ссылаются баги
-    pool.query(`SELECT * FROM (SELECT DISTINCT ON (case_num) * FROM (${resultSql}
-                    WHERE t.project_key=$1 AND rr.result <> 'untested' AND rr.executed_at IS NOT NULL) l
-                  ORDER BY case_num, executed_at DESC) a
-                UNION
-                SELECT * FROM (${resultSql}
-                  WHERE rr.id IN (SELECT run_result_id FROM bugs WHERE project_key=$1 AND run_result_id IS NOT NULL)) b`, k),
+    // последний выполненный результат каждого кейса (хранится в кейсе) и результаты, на которые ссылаются баги
+    pool.query(`${resultSql}
+                WHERE rr.id IN (SELECT last_result_id FROM test_cases WHERE project_key=$1 AND last_result_id IS NOT NULL
+                                UNION SELECT run_result_id FROM bugs WHERE project_key=$1 AND run_result_id IS NOT NULL)`, k),
     pool.query(`SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
                   c.num AS case_num, t.num AS run_num, b.run_result_id, d.num AS dup_num, b.external_key, b.external_url, b.external_status,
                   cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at
@@ -148,7 +139,13 @@ async function project(key) {
   return {
     pid: key,
     plans: testPlans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked })),
-    cases: cases.rows.map(toCase),
+    // Тексты тест-кейсов (предусловия, шаги, ожидаемый результат) — бо́льшая часть объёма. В состоянии их нет,
+    // карточка и редактор берут кейс целиком из GET /cases/:num. У чек-листа пункты нужны для счётчиков — остаются
+    cases: cases.rows.map((r) => {
+      const c = toCase(r);
+      if (c.kind === "checklist") return c;
+      return { ...c, pre: undefined, steps: undefined, expected: undefined, stepCount: r.steps.split("\n").filter((x) => x.trim()).length, light: true };
+    }),
     folders: caseFolders.rows.map((f) => ({ id: f.id, pid: f.project_key, parent: f.parent_id, name: f.name })),
     runs: runs.rows.map((r) => ({
       id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
@@ -183,6 +180,13 @@ router.get("/state", wrap(async (req, res) => {
   res.json(await project(req.params.key));
 }));
 
+// Кейс целиком (с шагами): для карточки, редактора и бага из кейса
+router.get("/cases/:num(\\d+)", wrap(async (req, res) => {
+  const { rows } = await pool.query(`${caseSql} WHERE c.project_key=$1 AND c.num=$2`, [req.params.key, num(req.params.num)]);
+  if (!rows[0]) return res.status(404).json({ error: "Тест-кейс не найден" });
+  res.json(toCase(rows[0]));
+}));
+
 // Результаты прогона, «что было в прошлый раз» по каждому его кейсу и вложения результатов
 router.get("/runs/:num/results", wrap(async (req, res) => {
   const n = num(req.params.num);
@@ -190,12 +194,15 @@ router.get("/runs/:num/results", wrap(async (req, res) => {
   if (!run[0]) return res.status(404).json({ error: "Прогон не найден" });
   const [results, previous, files] = await Promise.all([
     pool.query(`${resultSql} WHERE rr.run_id=$1 ORDER BY c.num`, [run[0].id]),
+    // для каждого кейса прогона — его результат в ближайшем более раннем прогоне (индекс по case_id)
     pool.query(
-      `SELECT DISTINCT ON (case_num) * FROM (${resultSql}
-         WHERE t.project_key=$1 AND t.num < $2 AND rr.result <> 'untested'
-           AND rr.case_id IN (SELECT case_id FROM run_results WHERE run_id=$3)) x
-       ORDER BY case_num, run_num DESC`,
-      [req.params.key, n, run[0].id]
+      `${resultSql}
+       WHERE rr.id IN (SELECT p.id FROM run_results cur CROSS JOIN LATERAL (
+           SELECT rr2.id FROM run_results rr2 JOIN test_runs t2 ON t2.id=rr2.run_id
+           WHERE rr2.case_id=cur.case_id AND t2.num < $2 AND rr2.result <> 'untested'
+           ORDER BY t2.num DESC LIMIT 1) p
+         WHERE cur.run_id=$1)`,
+      [run[0].id, n]
     ),
     pool.query(`${attachmentSql} WHERE a.run_result_id IN (SELECT id FROM run_results WHERE run_id=$1) ORDER BY a.created_at`, [run[0].id]),
   ]);

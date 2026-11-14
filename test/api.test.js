@@ -231,3 +231,32 @@ test("живые события: несут проект и не приходя�
   assert.ok(got.some((e) => e.type === "cases" && e.pid === "LK"));
   assert.ok(!got.some((e) => e.pid === "XX"), "о чужом проекте сигналов нет");
 });
+
+test("списки: постраничная выдача, фильтры, поиск с морфологией и по ID", async () => {
+  for (let i = 1; i <= 7; i++) await u.tester.post("/api/projects/LK/cases", { title: `Оплата картой ${i}`, priority: i % 2 ? "high" : "low", status: "ready", steps: "Ввести номер карты" });
+  await u.tester.post("/api/projects/LK/cases", { title: "Восстановление пароля", priority: "low", status: "draft" });
+  let r = await u.tester.get("/api/projects/LK/cases?q=" + encodeURIComponent("оплаты") + "&limit=3&count=1");
+  assert.equal(r.data.items.length, 3);
+  assert.equal(r.data.total, 7, "«оплаты» находит «Оплата» — русская морфология");
+  const second = await u.tester.get(`/api/projects/LK/cases?q=${encodeURIComponent("оплаты")}&limit=3&after=${r.data.next}`);
+  assert.equal(second.data.items.length, 3);
+  assert.ok(second.data.items[0].num > r.data.items[2].num);
+  r = await u.tester.get("/api/projects/LK/cases?q=" + encodeURIComponent("карты") + "&priority=high&count=1");
+  assert.equal(r.data.total, 4, "поиск по шагам и фильтр по приоритету");
+  const one = r.data.items[0];
+  r = await u.tester.get(`/api/projects/LK/cases?q=LK-${one.num}`);
+  assert.equal(r.data.items[0].num, one.num);
+
+  await u.tester.post("/api/projects/LK/bugs", { title: "Ошибка при оплате картой", severity: "major" });
+  r = await u.tester.get("/api/projects/LK/bugs?q=" + encodeURIComponent("оплата") + "&status=new");
+  assert.ok(r.data.items.some((b) => /оплате/.test(b.title)));
+  r = await u.tester.get("/api/projects/LK/runs?state=closed");
+  assert.ok(r.data.items.every((x) => x.state === "closed"));
+
+  r = await u.tester.get("/api/search?q=" + encodeURIComponent("оплата"));
+  assert.ok(r.data.cases.length >= 1 && r.data.bugs.length >= 1);
+  r = await u.outsider.get("/api/search?q=" + encodeURIComponent("оплата"));
+  assert.equal(r.data.cases.length, 0, "чужие проекты в поиске не видны");
+  r = await u.tester.get(`/api/search?q=LK-${one.num}`);
+  assert.equal(r.data.cases[0].num, one.num);
+});

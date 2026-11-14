@@ -6,7 +6,7 @@ import { go, href } from "../router";
 import { countResults } from "../selectors";
 import { useCanEdit, useData, useLoad, useStore } from "../store";
 import type { Attachment, CaseVersion, Project, Result, ResultValue, Run, RunResults, TestCase } from "../types";
-import { Confirm, Drawer, fmt, Modal, Pill, Prio, ResultBar, ResultPill, TextBlock, useNames, Who } from "../ui";
+import { Confirm, Drawer, fmt, FullCase, fullCase, Modal, PagedRows, Pill, Prio, ResultBar, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { AssignPicker, executorsOf, type Assign } from "./Plans";
 import { Attachments } from "./Attachments";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
@@ -49,7 +49,8 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const counts = countResults(results);
   const prev = new Map(loaded.value.previous.map((r) => [r.caseNum, r]));
   const runFiles = loaded.value.attachments;
-  const caseOf = (r: Result) => data.cases.find((c) => c.pid === p && c.num === r.caseNum)!;
+  const caseByNum = new Map(data.cases.map((c) => [c.num, c]));
+  const caseOf = (r: Result) => caseByNum.get(r.caseNum)!;
   const needle = q.trim().toLowerCase();
   const rows = results
     .filter((r) => filter === "all" || r.result === filter)
@@ -135,7 +136,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ r, c }) => {
+            <PagedRows items={rows} reset={`${filter}|${who}|${needle}`}>{({ r, c }) => {
               const pr = prev.get(r.caseNum);
               const bugs = bugsOf(r);
               const regress = pr?.result === "passed" && r.result === "failed";
@@ -161,13 +162,13 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
                     <div className="chips">
                       {bugs.map((b) => <a key={b.id} className="chip" href={href("p", p, "bugs", b.num)} title={`${b.title} · ${find(BUG_STATUSES, b.status).label}`}>B{b.num}</a>)}
                       {canEdit && !bugs.length && (r.result === "failed" || r.result === "blocked") && (
-                        <button className="btn sm" onClick={() => setBugDraft(draftFromCase(c, run, r))}>+ Баг</button>
+                        <button className="btn sm" onClick={async () => setBugDraft(draftFromCase(await fullCase(c), run, r))}>+ Баг</button>
                       )}
                     </div>
                   </td>
                 </tr>
               );
-            })}
+            }}</PagedRows>
             {!rows.length && <tr><td colSpan={7} className="nores">Ничего не найдено.</td></tr>}
           </tbody>
         </table>
@@ -176,11 +177,12 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
       {bugDraft ? (
         <BugEditor pid={p} draft={bugDraft} onClose={() => setBugDraft(null)} />
       ) : sel ? (
+        <FullCase c={caseOf(sel)}>{(full) => (
         <ResultDrawer
           key={sel.id}
           run={run}
           r={sel}
-          c={caseOf(sel)}
+          c={full}
           prev={prev.get(sel.caseNum)}
           files={runFiles}
           onClose={() => setSelected(null)}
@@ -190,6 +192,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
             setSelected(next ? next.r.caseNum : null);
           }}
         />
+        )}</FullCase>
       ) : null}
       {modal === "edit" && <RunModal pid={p} run={run} onClose={() => setModal(null)} />}
       {modal === "add" && <AddCasesModal run={run} inRunNums={results.map((r) => r.caseNum)} onClose={() => setModal(null)} />}

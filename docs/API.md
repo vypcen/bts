@@ -119,49 +119,65 @@
 
 ### `GET /api/state`
 
-Всё состояние одним ответом: проекты, кейсы, папки кейсов, прогоны, результаты, баги, вложения, комментарии и сводка запусков автотестов. Нужна сессия. Возвращаются только доступные пользователю проекты и всё, что в них; админу — все.
+Общее состояние: проекты со сводкой, пользователи и тест-планы. Данных проектов (кейсов, прогонов, багов) здесь нет — они приходят отдельным запросом по одному проекту, иначе на больших базах ответ занимал бы десятки мегабайт. Нужна сессия.
 
 ```jsonc
 {
-  "projects": [{ "id": "LK", "name": "Личный кабинет", "desc": "", "createdBy": "ivanov", "created": 1761040000000, "members": ["ivanov", "petrov"] }],
-  "cases": [{
-    "id": "LK-12", "pid": "LK", "num": 12, "folder": 4, "title": "Вход по паролю", "priority": "high", "status": "ready",
-    "pre": "…", "steps": "…", "expected": "…", "createdBy": "ivanov", "updatedBy": "ivanov",
-    "created": 1761040000000, "updated": 1761040000000
+  "projects": [{
+    "id": "LK", "name": "Личный кабинет", "desc": "", "createdBy": "ivanov", "created": 1761040000000,
+    "members": ["ivanov", "petrov"], "memberRoles": {}, "myRole": "tester",
+    "stats": { "cases": 120, "runs": 14, "bugs": 31, "openBugs": 6,
+               "last": { "untested": 20, "passed": 90, "failed": 7, "blocked": 3, "skipped": 0 } }  // последние результаты активных кейсов
   }],
-  "folders": [{ "id": 4, "pid": "LK", "parent": null, "name": "Авторизация" }],
-  "runs": [{
-    "id": "LK-R3", "pid": "LK", "num": 3, "title": "Регресс 2.4", "build": "2.4.0", "env": "RC",
-    "state": "open", "createdBy": "ivanov", "created": 1761040000000, "closed": null
-  }],
-  "results": [{
-    "id": 101, "pid": "LK", "runNum": 3, "caseNum": 12, "result": "failed", "comment": "", "items": {"Вход работает": "failed"},
-    "executedBy": "ivanov", "executed": 1761040000000
-  }],
-  "bugs": [{
-    "id": "LK-B7", "pid": "LK", "num": 7, "title": "…", "status": "new", "severity": "major", "assignee": "petrov",
-    "env": "", "steps": "", "actual": "", "expected": "", "caseNum": 12, "runNum": 3, "resultId": 101,
-    "duplicateOf": null, "createdBy": "ivanov", "updatedBy": "ivanov", "created": 1761040000000, "updated": 1761040000000
-  }],
-  "attachments": [{
-    "id": "9b1d…uuid", "pid": "LK", "bugNum": 7, "resultId": null, "name": "screen.png", "mime": "image/png",
-    "size": 48213, "uploadedBy": "ivanov", "created": 1761040000000
-  }],
-  "autoruns": [{
-    "id": "LK-A5", "pid": "LK", "num": 5, "title": "Локальный запуск main", "build": "da98f83", "env": "RC",
-    "branch": "main", "scope": "supportcd", "url": "https://rc.example.ru", "state": "finished",
-    "createdBy": "ivanov", "created": 1761040000000, "finished": 1761040240000, "durationMs": 243000,
-    "counts": { "passed": 12, "failed": 1, "broken": 0, "skipped": 1 }
-  }],
-  "comments": [{
-    "id": 31, "pid": "LK", "bugNum": 7, "caseNum": null, "author": "petrov", "text": "Не воспроизводится на 2.4.1",
-    "created": 1761040000000, "edited": null
-  }],
+  "plans": [{ "id": "LK-P1", "pid": "LK", "num": 1, "title": "Регресс", "mode": "dynamic", "locked": false }],
   "users": { "ivanov": { "name": "Иван Иванов", "role": "tester" } }
 }
 ```
 
-Время везде в миллисекундах Unix (UTC), `null`, если события ещё не было. В `attachments` — вложения багов и ручных прогонов. Вложения автотестов отдаются вместе с запуском, см. [`GET /autoruns/:num`](#get-apiprojectskeyautorunsnum).
+### `GET /api/projects/:key/state`
+
+Данные одного проекта для интерфейса: `cases`, `folders`, `runs`, `results`, `bugs`, `attachments`, `autoruns`, `comments`, `plans`.
+
+- У тест-кейсов (`kind: "case"`) **нет текстов**: `pre`, `steps`, `expected` не приходят, вместо них `light: true` и `stepCount`. Кейс целиком — [`GET /cases/:num`](#get-apiprojectskeycasesnum). У чек-листов пункты (`steps`) есть.
+- `results` — последний выполненный результат каждого кейса и результаты, на которые ссылаются баги. Все результаты прогона — [`GET /runs/:num/results`](#get-apiprojectskeyrunsnumresults), история кейса — [`GET /cases/:num/history`](#get-apiprojectskeycasesnumhistory).
+- У прогона есть `counts` — сколько кейсов в каждом результате.
+- `attachments` — вложения багов и результатов, к которым привязаны баги.
+
+Ответ сжимается (gzip) и получает `ETag`: повторный запрос без изменений отвечает `304`.
+
+### `GET /api/projects/:key/cases/:num`
+
+Тест-кейс целиком, с предусловиями, шагами и ожидаемым результатом. Поля — как в [`POST …/cases`](#post-apiprojectskeycases) плюс `id`, `version`, `automated`, авторы и время.
+
+### `GET /api/projects/:key/runs/:num/results`
+
+```jsonc
+{
+  "results": [ /* все результаты прогона: id, caseNum, result, comment, items, executedBy, executed, assignee, caseVersion */ ],
+  "previous": [ /* по каждому кейсу прогона — результат в ближайшем более раннем прогоне, где его проверяли */ ],
+  "attachments": [ /* вложения результатов этого прогона */ ]
+}
+```
+
+### `GET /api/projects/:key/cases/:num/history`
+
+`{"results": [...]}` — выполненные результаты кейса во всех прогонах, свежие первыми (до 200).
+
+### Списки с постраничной выдачей и поиском
+
+Для интеграций и больших проектов. Курсор — номер последней записи страницы: `after=<next>` из прошлого ответа. Ответ: `{"items": [...], "next": "123" | null}`, с `count=1` ещё `total`. `limit` — до 500, по умолчанию 50. Значения фильтров можно перечислять через запятую.
+
+| Запрос | Фильтры |
+|---|---|
+| `GET /api/projects/:key/cases` | `q`, `folder` (номер папки — вместе с подпапками, `none` — без папки), `priority`, `status`, `kind` |
+| `GET /api/projects/:key/bugs` | `q`, `status`, `severity`, `assignee` (логин, пусто — без исполнителя) |
+| `GET /api/projects/:key/runs` | `q` (название или сборка), `state` |
+
+`q` понимает ID (`LK-12`, `LK-B7`, `LK-R3`, просто `12`) и текст: поиск с русской морфологией по названию и тексту шагов («оплаты» находит «Оплата картой»), плюс подстрока в названии.
+
+### `GET /api/search?q=…`
+
+Глобальный поиск по всем доступным проектам (в интерфейсе — Ctrl+K): `{"cases": [...], "bugs": [...], "runs": [...], "autotests": [...]}`, до 8 в каждой группе (`limit` — до 20).
 
 ### `GET /api/events`
 
@@ -169,10 +185,10 @@
 
 ```
 event: change
-data: {"type":"bugs","at":1761040000000}
+data: {"type":"bugs","pid":"LK","at":1761040000000}
 ```
 
-`type` — что изменилось: `users`, `projects`, `cases`, `runs`, `bugs`, `attachments`, `autoruns`. Сами данные в событие не входят: получив его, перечитайте `/api/state` или нужный ресурс. Каждые 25 секунд сервер шлёт комментарий-пинг, чтобы соединение не закрывалось.
+`type` — что изменилось (`users`, `projects`, `cases`, `runs`, `bugs`, `attachments`, `autoruns`, `plans`, `comments`, `folders`…), `pid` — проект (`null` — изменение вне проекта). Сигналы о проектах, к которым у пользователя нет доступа, не приходят. Сами данные в событие не входят: получив его, перечитайте нужный ресурс — обычно `GET /api/projects/<pid>/state` открытого проекта. Каждые 25 секунд сервер шлёт комментарий-пинг. Если пользователя заблокировали, поток закрывается.
 
 ## Проекты
 

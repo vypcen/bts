@@ -1,7 +1,8 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { find, PRIORITIES, RESULTS, SEVERITIES, type Tone } from "./labels";
-import { useStore } from "./store";
-import type { Priority, ResultValue, Severity } from "./types";
+import { api, paths } from "./api";
+import { useLoad, useStore } from "./store";
+import type { Priority, ResultValue, Severity, TestCase } from "./types";
 
 export const fmt = (ts: number | null | undefined) =>
   ts ? new Date(ts).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -166,3 +167,44 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
     </div>
   );
 }
+
+// Длинные таблицы рисуются порциями: на десятках тысяч строк браузер иначе подвисает.
+// Возвращает видимую часть и строку «Показать ещё» для конца tbody. Порция сбрасывается при смене фильтра (resetKey)
+export function usePaged<T>(list: T[], resetKey: unknown, step = 200): { visible: T[]; more: ReactNode } {
+  const [limit, setLimit] = useState(step);
+  const [key, setKey] = useState(resetKey);
+  if (key !== resetKey) {
+    setKey(resetKey);
+    setLimit(step);
+  }
+  const rest = list.length - limit;
+  return {
+    visible: rest > 0 ? list.slice(0, limit) : list,
+    more:
+      rest > 0 ? (
+        <tr className="more-row">
+          <td colSpan={99} style={{ textAlign: "center", padding: 10 }}>
+            <button className="btn" onClick={() => setLimit((l) => l + step)}>Показать ещё {Math.min(step, rest)} из {rest}</button>{" "}
+            <button className="btn ghost" onClick={() => setLimit(list.length)}>Показать все</button>
+          </td>
+        </tr>
+      ) : null,
+  };
+}
+
+// То же как компонент — для таблиц, которые строятся внутри map(): строки и «Показать ещё» в одном tbody
+export function PagedRows<T>({ items, reset, children }: { items: T[]; reset: unknown; children: (x: T) => ReactNode }) {
+  const { visible, more } = usePaged(items, reset);
+  return <>{visible.map(children)}{more}</>;
+}
+
+// Тест-кейс целиком: в состоянии проекта у кейса нет текстов шагов (light), их догружаем по требованию
+export function FullCase({ c, children }: { c: TestCase; children: (full: TestCase) => ReactNode }) {
+  const loaded = useLoad<TestCase>(c.light ? paths.testCase(c.pid, c.num) : null);
+  if (!c.light) return <>{children(c)}</>;
+  if (loaded.value && loaded.value.num === c.num) return <>{children(loaded.value)}</>;
+  return loaded.error ? <div className="banner">{loaded.error}</div> : null;
+}
+
+// То же для обработчиков: кейс с текстами (например, чтобы завести баг из строки таблицы)
+export const fullCase = async (c: TestCase): Promise<TestCase> => (c.light ? api<TestCase>("GET", paths.testCase(c.pid, c.num)) : c);

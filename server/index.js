@@ -1,5 +1,6 @@
 const path = require("path");
 const express = require("express");
+const compression = require("compression");
 const { pool, tx } = require("./db");
 const { migrate, waitForDb } = require("./migrate");
 const auth = require("./auth");
@@ -21,6 +22,7 @@ const trackers = require("./trackers");
 const ci = require("./ci");
 const projectio = require("./projectio");
 const state = require("./state");
+const lists = require("./lists");
 const { wrap, str, num, HttpError } = require("./util");
 
 const PORT = Number(process.env.PORT || 3000);
@@ -48,6 +50,9 @@ const { broadcast } = live;
 
 const app = express();
 app.disable("x-powered-by");
+// Сжатие ответов: состояние большого проекта в JSON сжимается в 10–15 раз. Поток живых обновлений не сжимаем — он должен
+// приходить сразу, а не копиться в буфере
+app.use(compression({ filter: (req, res) => !req.path.startsWith("/api/events") && compression.filter(req, res) }));
 // За обратным прокси (Cloudflare Tunnel, Caddy, nginx) нужно доверять X-Forwarded-*, чтобы cookie получали флаг Secure
 // TRUST_PROXY=false — никому (приложение открыто напрямую: иначе любой подделает свой IP и обойдёт лимиты входа)
 const TRUST = (process.env.TRUST_PROXY || "").trim();
@@ -236,7 +241,8 @@ app.use("/api/projects-import", auth.requireUser, access.requireWriter, projecti
 
 // Всё внутри проекта: доступ только участникам и админам, изменения — только тестировщикам и админам (кроме комментариев)
 app.use("/api/projects/:key", auth.requireUser, access.project, live.inProject);
-app.use("/api/projects/:key", state.router);
+app.use("/api/projects/:key", state.router, lists.router);
+app.use("/api/search", auth.requireUser, lists.searchRouter);
 // Настройки интеграций содержат адреса и заголовки внутренних систем — их видят только те, кто может менять проект
 app.use(["/api/projects/:key/webhooks", "/api/projects/:key/tracker"], (req, res, next) =>
   access.canWrite(req.projectRole) ? next() : res.status(403).json({ error: access.READ_ONLY }));

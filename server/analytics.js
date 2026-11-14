@@ -30,8 +30,8 @@ router.get("/analytics", wrap(async (req, res) => {
          count(rr.id) FILTER (WHERE rr.result='passed')::int AS passed, count(rr.id) FILTER (WHERE rr.result='failed')::int AS failed,
          count(rr.id) FILTER (WHERE rr.result='blocked')::int AS blocked, count(rr.id) FILTER (WHERE rr.result='skipped')::int AS skipped,
          count(rr.id) FILTER (WHERE rr.result='untested')::int AS untested
-       FROM test_runs t LEFT JOIN run_results rr ON rr.run_id=t.id WHERE t.project_key=$1
-       GROUP BY t.id ORDER BY t.num DESC LIMIT 20`),
+       FROM (SELECT * FROM test_runs WHERE project_key=$1 ORDER BY num DESC LIMIT 20) t LEFT JOIN run_results rr ON rr.run_id=t.id
+       GROUP BY t.id, t.num, t.title, t.state, t.created_at ORDER BY t.num DESC`),
     // открытые баги по серьёзности и статусу
     q(`SELECT severity, status, count(*)::int AS n FROM bugs WHERE project_key=$1 AND status NOT IN ('closed','rejected','duplicate')
        GROUP BY 1, 2`),
@@ -48,8 +48,9 @@ router.get("/analytics", wrap(async (req, res) => {
          count(ar.id) FILTER (WHERE ar.status='passed')::int AS passed, count(ar.id) FILTER (WHERE ar.status='failed')::int AS failed,
          count(ar.id) FILTER (WHERE ar.status='broken')::int AS broken, count(ar.id) FILTER (WHERE ar.status='skipped')::int AS skipped,
          count(ar.id) FILTER (WHERE ar.flaky)::int AS flaky, COALESCE(sum(ar.duration_ms), 0)::bigint AS duration
-       FROM auto_runs r LEFT JOIN auto_results ar ON ar.run_id=r.id WHERE r.project_key=$1 AND r.state IN ('running','finished')
-       GROUP BY r.id ORDER BY r.num DESC LIMIT 30`),
+       FROM (SELECT * FROM auto_runs WHERE project_key=$1 AND state IN ('running','finished') ORDER BY num DESC LIMIT 30) r
+       LEFT JOIN auto_results ar ON ar.run_id=r.id
+       GROUP BY r.id, r.num, r.title, r.branch, r.state, r.created_at ORDER BY r.num DESC`),
     // чаще всего падающие автотесты за период
     q(`SELECT t.id, t.suite, t.name, count(*) FILTER (WHERE ar.status IN ('failed','broken'))::int AS fails, count(*)::int AS runs
        FROM auto_results ar JOIN auto_runs r ON r.id=ar.run_id JOIN auto_tests t ON t.id=ar.test_id

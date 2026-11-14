@@ -42,13 +42,8 @@ async function byFilter(db, key, f) {
     `WITH RECURSIVE sub AS (
        SELECT id FROM case_folders WHERE project_key=$1 AND id = ANY($2::int[])
        UNION SELECT cf.id FROM case_folders cf JOIN sub ON cf.parent_id = sub.id
-     ),
-     last AS (
-       SELECT DISTINCT ON (rr.case_id) rr.case_id, rr.result FROM run_results rr
-       JOIN test_runs t ON t.id=rr.run_id WHERE t.project_key=$1 AND rr.result <> 'untested'
-       ORDER BY rr.case_id, rr.executed_at DESC NULLS LAST
      )
-     SELECT c.id, c.num, c.version FROM test_cases c LEFT JOIN last ON last.case_id=c.id
+     SELECT c.id, c.num, c.version FROM test_cases c
      WHERE c.project_key=$1
        AND (cardinality($2::int[]) = 0 AND NOT $3 OR c.folder_id IN (SELECT id FROM sub) OR ($3 AND c.folder_id IS NULL))
        AND (cardinality($4::text[]) = 0 OR c.priority = ANY($4::text[]))
@@ -56,7 +51,7 @@ async function byFilter(db, key, f) {
        AND (cardinality($6::text[]) = 0 OR c.kind = ANY($6::text[]))
        AND ($7 = '' OR c.title ILIKE '%' || $7 || '%')
        AND ($8 = 'any' OR ($8 = 'yes') = EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id))
-       AND (cardinality($9::text[]) = 0 OR COALESCE(last.result, 'untested') = ANY($9::text[]))
+       AND (cardinality($9::text[]) = 0 OR c.last_result = ANY($9::text[]))
      ORDER BY c.num`,
     [key, f.folders, f.root, f.priorities, f.statuses, f.kinds, f.text.replace(/[%_\\]/g, "\\$&"), f.automated, f.lastResults]
   );

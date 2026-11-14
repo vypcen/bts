@@ -63,3 +63,27 @@ test("все вкладки проекта открываются без оши�
   await expect(page.getByText("Личный кабинет").first()).toBeVisible();
   expect(errors).toEqual([]);
 });
+
+test("глобальный поиск по Ctrl+K находит кейс и открывает его", async ({ page }) => {
+  await login(page);
+  const k = await (await page.request.post("/api/projects/LK/cases", { data: { title: "Восстановление доступа по SMS", priority: "low", status: "ready" } })).json();
+  await page.keyboard.press("Control+k");
+  await page.getByRole("combobox").fill("восстановлению доступа");
+  await page.getByRole("option", { name: /Восстановление доступа по SMS/ }).click();
+  await expect(page).toHaveURL(new RegExp(`#/p/LK/cases/${k.num}$`));
+});
+
+test("карточка и редактор кейса догружают шаги; правка названия не стирает шаги", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const k = await (await api.post("/api/projects/LK/cases", { data: { title: "Шаги на месте", priority: "low", status: "ready", steps: "Первый шаг\nВторой шаг", expected: "Всё хорошо" } })).json();
+  await page.goto(`/#/p/LK/cases/${k.num}`);
+  await expect(page.getByText("Второй шаг")).toBeVisible();
+  await page.getByRole("button", { name: "Редактировать", exact: true }).last().click();
+  const title = page.getByLabel(/Название/).first();
+  await title.fill("Шаги на месте — правка");
+  await page.getByRole("button", { name: /Сохранить/ }).click();
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/cases/${k.num}`)).json()).title).toBe("Шаги на месте — правка");
+  const full = await (await api.get(`/api/projects/LK/cases/${k.num}`)).json();
+  expect(full.steps).toBe("Первый шаг\nВторой шаг");
+});

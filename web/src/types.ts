@@ -79,6 +79,9 @@ export interface TestCase {
   updated: number;
   version: number; // номер текущей версии содержимого
   automated: boolean; // есть связанный автотест
+  // В состоянии проекта у тест-кейса нет текстов (pre, steps, expected): light — нужно взять кейс целиком (useFullCase)
+  light?: boolean;
+  stepCount?: number; // число шагов, когда текстов нет
 }
 
 export interface Run {

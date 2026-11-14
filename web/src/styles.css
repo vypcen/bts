@@ -294,3 +294,10 @@ ol.steps{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px}
 .code{font-family:var(--f-mono);font-size:12px;background:var(--sunken);border-radius:var(--r);padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:0}
 .diff-old{background:var(--crit-soft)}
 .diff-new{background:var(--ok-soft)}
+
+/* глобальный поиск */
+.search-modal{place-items:start center;padding-top:12vh}
+.search-hits{list-style:none;margin:0;padding:0;max-height:50vh;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+.search-hits li{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer}
+.search-hits li[aria-selected="true"]{background:var(--hover, rgba(0,0,0,.06))}
+.search-hits li .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

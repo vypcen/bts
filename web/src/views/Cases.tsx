@@ -7,7 +7,7 @@ import { go, href } from "../router";
 import { countBy, folderPath, lastResults } from "../selectors";
 import { useCanEdit, useData, useLoad, useStore } from "../store";
 import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } from "../types";
-import { CommentCount, Confirm, Drawer, Empty, fmt, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
+import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { ImportModal } from "./CaseImport";
 import { Comments } from "./Comments";
@@ -39,7 +39,10 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const last = lastResults(data, p);
   const resultOf = (c: TestCase): ResultValue => last.get(c.num)?.result || "untested";
   const talk = countBy(data.comments.filter((x) => x.pid === p), (x) => x.caseNum);
-  const openBugs = (c: TestCase) => data.bugs.filter((b) => b.pid === p && b.caseNum === c.num && isOpenBug(b.status));
+  // открытые баги по кейсам: один проход по багам вместо фильтра на каждую строку таблицы
+  const bugsByCase = new Map<number, typeof data.bugs>();
+  for (const b of data.bugs) if (b.pid === p && b.caseNum !== null && isOpenBug(b.status)) bugsByCase.set(b.caseNum, [...(bugsByCase.get(b.caseNum) || []), b]);
+  const openBugs = (c: TestCase) => bugsByCase.get(c.num) || [];
   const scoped = all.filter((c) => (fStatus === "all" || (fStatus === "active" ? c.status !== "deprecated" : c.status === fStatus)) && (fPrio === "all" || c.priority === fPrio));
   const base = scoped.filter(inFolder(data, sel));
   const needle = q.trim().toLowerCase();
@@ -169,7 +172,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
                       </tr>
                     </thead>
                     <tbody>
-                      {list.map((c) => {
+                      <PagedRows items={list} reset={`${kind}|${sel}|${needle}|${fResult}|${fPrio}|${fStatus}`}>{(c) => {
                         const lr = last.get(c.num);
                         const bugs = openBugs(c);
                         const st = find(CASE_STATUSES, c.status);
@@ -201,7 +204,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
                             </td>
                           </tr>
                         );
-                      })}
+                      }}</PagedRows>
                       {!list.length && (
                         <tr><td colSpan={canEdit ? 9 : 8} className="nores">
                           {sel !== "all" && !inScope ? `В этой папке нет ${isList ? "чек-листов" : "тест-кейсов"}.` : "Ничего не найдено. Сбросьте фильтры или измените запрос."}
@@ -221,10 +224,14 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
       {bugDraft ? (
         <BugEditor pid={p} draft={bugDraft} onClose={() => setBugDraft(null)} />
       ) : editing ? (
-        <CaseEditor pid={p} c={typeof editing === "string" ? undefined : editing} kind={typeof editing === "string" ? editing : editing.kind}
-          folder={typeof sel === "number" ? sel : null} onClose={() => setEditing(null)} />
+        typeof editing === "string" ? (
+          <CaseEditor pid={p} kind={editing} folder={typeof sel === "number" ? sel : null} onClose={() => setEditing(null)} />
+        ) : (
+          // редактор открывается только с полным текстом кейса: иначе сохранение затёрло бы шаги пустыми
+          <FullCase c={editing}>{(full) => <CaseEditor pid={p} c={full} kind={full.kind} folder={null} onClose={() => setEditing(null)} />}</FullCase>
+        )
       ) : viewing ? (
-        <CaseDrawer c={viewing} onClose={close} onEdit={() => setEditing(viewing)} onDelete={() => setDeleting(viewing)} onBug={setBugDraft} />
+        <FullCase c={viewing}>{(full) => <CaseDrawer c={full} onClose={close} onEdit={() => setEditing(full)} onDelete={() => setDeleting(viewing)} onBug={setBugDraft} />}</FullCase>
       ) : null}
       {deleting && (
         <Confirm

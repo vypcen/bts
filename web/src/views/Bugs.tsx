@@ -6,7 +6,7 @@ import { go, href } from "../router";
 import { assigneesOf, countBy } from "../selectors";
 import { useCanEdit, useData, useLoad, useStore } from "../store";
 import type { Bug, BugStatus, Project, Result, Run, Severity, TestCase } from "../types";
-import { CommentCount, Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who } from "../ui";
+import { CommentCount, Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who, PagedRows } from "../ui";
 import { Attachments } from "./Attachments";
 import { Comments } from "./Comments";
 
@@ -104,7 +104,7 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
               </tr>
             </thead>
             <tbody>
-              {rows.map((b) => {
+              <PagedRows items={rows} reset={rows.length}>{(b) => {
                 const st = find(BUG_STATUSES, b.status);
                 return (
                   <tr key={b.id} className="click" aria-selected={viewing?.num === b.num} onClick={() => go("p", p, "bugs", b.num)}>
@@ -117,7 +117,7 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
                     <td className="muted small nowrap">{fmt(b.updated)}</td>
                   </tr>
                 );
-              })}
+              }}</PagedRows>
               {!rows.length && <tr><td colSpan={7} className="nores">Ничего не найдено. Сбросьте фильтры или измените запрос.</td></tr>}
             </tbody>
           </table>

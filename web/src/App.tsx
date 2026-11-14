@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { api } from "./api";
 import { go, href, useRoute } from "./router";
 import { useStore } from "./store";
@@ -9,6 +9,7 @@ import { ProjectPage } from "./views/ProjectPage";
 import { Projects } from "./views/Projects";
 import { Settings } from "./views/Settings";
 import { Users } from "./views/Users";
+import { SearchPalette, useSearchHotkey } from "./views/Search";
 import { roleOf } from "./labels";
 
 export function App() {
@@ -54,6 +55,8 @@ export function App() {
 function Topbar({ projectName, projectKey, users, settings }: { projectName?: string; projectKey?: string; users?: boolean; settings?: boolean }) {
   const { me, liveError, setMe, toast } = useStore();
   const [password, setPassword] = useState(false);
+  const [searching, setSearching] = useState(false);
+  useSearchHotkey(useCallback(() => setSearching(true), []));
   const logout = () => {
     api("POST", "/api/auth/logout", {}).catch(() => {});
     setMe(null);
@@ -83,6 +86,7 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
           )}
         </div>
         <div className="spacer" />
+        <button className="btn ghost" onClick={() => setSearching(true)} title="Поиск по всем проектам (Ctrl+K)">Поиск <span className="muted small mono">Ctrl+K</span></button>
         <span className={`live${liveError ? " off" : ""}`} title="Изменения других участников появляются автоматически">
           <span className="dot" />
           {liveError ? "Нет связи" : "Онлайн"}
@@ -101,6 +105,7 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
         <button className="btn" onClick={logout}>Выйти</button>
       </div>
       {password && <PasswordModal onClose={() => setPassword(false)} />}
+      {searching && <SearchPalette onClose={() => setSearching(false)} />}
     </div>
   );
 }
