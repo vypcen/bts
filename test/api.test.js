@@ -180,6 +180,41 @@ test("версия: в /api/auth/me и сведения о системе для
   assert.equal(r.data.history[0].version, v);
 });
 
+test("лицензия: бесплатная редакция ограничивает полные места, ключ их расширяет", async () => {
+  const license = require("../server/license");
+  const pem = require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures", "license-test-private.pem"), "utf8");
+  let r = await u.admin.get("/api/admin/license");
+  assert.equal(r.data.status, "none");
+  assert.equal(r.data.full, license.COMMUNITY.full);
+  assert.equal((await u.tester.get("/api/admin/license")).status, 403);
+  // занимаем все бесплатные полные места
+  const used = r.data.seats.full.used;
+  for (let i = used; i < license.COMMUNITY.full; i++) {
+    assert.equal((await u.admin.post("/api/admin/users", { login: `lic${i}`, name: "L", password: "password123", role: "tester" })).status, 201);
+  }
+  r = await u.admin.post("/api/admin/users", { login: "licx", name: "L", password: "password123", role: "tester" });
+  assert.equal(r.status, 409);
+  assert.match(r.data.error, /полные лицензии заняты/);
+  // просмотровые места без ограничений
+  assert.equal((await u.admin.post("/api/admin/users", { login: "licv", name: "V", password: "password123", role: "viewer" })).status, 201);
+  // поддельный ключ не принимается
+  assert.equal((await u.admin.put("/api/admin/license", { key: "TB1.e30.AAAA" })).status, 400);
+  const key = license.sign({ id: "T-2", customer: "ООО Тест", edition: "enterprise", full: 50, view: null, issued: "2026-01-01", expires: null }, pem);
+  r = await u.admin.put("/api/admin/license", { key });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.full, 50);
+  assert.equal(r.data.license.customer, "ООО Тест");
+  assert.match((await u.admin.get("/api/auth/me")).data.user.licenseNotice, /Тестовая лицензия/);
+  assert.equal((await u.admin.post("/api/admin/users", { login: "licx", name: "L", password: "password123", role: "tester" })).status, 201);
+  r = await u.admin.get("/api/admin/audit?action=settings.license");
+  assert.ok(r.data.items.length >= 1);
+  // вернуться к бесплатной: новых полных мест нет, но существующих не выкидывает
+  r = await u.admin.del("/api/admin/license");
+  assert.equal(r.data.status, "none");
+  assert.equal((await u.tester.get("/api/auth/me")).status, 200);
+  for (const login of ["licx", ...Array.from({ length: license.COMMUNITY.full }, (_, i) => `lic${i}`)]) await u.admin.del(`/api/admin/users/${login}`);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);

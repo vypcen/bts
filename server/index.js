@@ -29,6 +29,7 @@ const trash = require("./trash");
 const { wrap, str, num, HttpError } = require("./util");
 const { Limiter, MIN } = require("./limits");
 const version = require("./version");
+const license = require("./license");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
@@ -137,13 +138,19 @@ app.get("/api/events", auth.requireUser, live.events);
 
 // ---------- авторизация ----------
 const me = (u) => ({ login: u.login, name: u.name, role: u.role, provider: u.auth_provider || "local", version: version.VERSION });
+// Администратор видит предупреждения о лицензии (истекает, истекла, ключ не принят) в шапке
 const { limits, TOO_MANY } = auth;
 
 // Без входа — ещё и что показывать на странице входа: нужен ли код установки, открыта ли регистрация
 app.get("/api/auth/me", wrap(async (req, res) => {
   if (req.user) {
     const { rows } = await pool.query("SELECT auth_provider FROM users WHERE id=$1", [req.user.id]);
-    return res.json({ user: me({ ...req.user, auth_provider: rows[0]?.auth_provider }) });
+    const user = me({ ...req.user, auth_provider: rows[0]?.auth_provider });
+    if (req.user.role === "admin") {
+      const l = await license.current();
+      user.licenseNotice = l.notice;
+    }
+    return res.json({ user });
   }
   res.json({ user: null, setup: await auth.needsSetup(), registration: sso.cfg.localLogin ? REGISTRATION : "closed", providers: sso.providers() });
 }));
@@ -488,6 +495,27 @@ app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"),
 app.use("/api/llm", auth.requireUser, llm.router);
 // подключения к языковым моделям (облачные сервисы и свои модели) — только администратор
 app.use("/api/admin/llm", auth.requireUser, access.requireAdmin, llm.adminRouter);
+
+// Лицензия (админ): условия действующего ключа, ввод нового ключа, возврат к бесплатной редакции
+const licenseOut = (l) => ({ edition: l.edition, status: l.status, notice: l.notice, full: l.full, view: l.view, license: l.license || null, source: l.source });
+app.get("/api/admin/license", auth.requireUser, access.requireAdmin, wrap(async (_req, res) => {
+  res.json({ ...licenseOut(await license.current()), seats: await seats.usage(pool) });
+}));
+app.put("/api/admin/license", auth.requireUser, access.requireAdmin, wrap(async (req, res) => {
+  const key = str(req.body.key, 8000);
+  if (!key) return res.status(400).json({ error: "Вставьте лицензионный ключ" });
+  try {
+    const l = await license.save(key, req.user.id);
+    res.json({ ...licenseOut(l), seats: await seats.usage(pool) });
+  } catch (e) {
+    if (e.status === 400) return res.status(400).json({ error: e.message });
+    throw e;
+  }
+}));
+app.delete("/api/admin/license", auth.requireUser, access.requireAdmin, wrap(async (_req, res) => {
+  const l = await license.remove();
+  res.json({ ...licenseOut(l), seats: await seats.usage(pool) });
+}));
 
 // О системе (админ): версия, сборка, база, история обновлений
 app.get("/api/admin/system", auth.requireUser, access.requireAdmin, wrap(async (_req, res) => {

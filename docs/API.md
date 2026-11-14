@@ -650,6 +650,32 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 
 Отзывает токен: скрипты с ним сразу перестают работать. Ответ: `{"ok": true}`.
 
+## Лицензия и система (админ)
+
+### `GET /api/admin/license`
+
+```json
+{
+  "edition": "enterprise", "status": "active", "notice": null, "full": 50, "view": null, "source": "db",
+  "license": { "id": "TB-20261115-3F2A1C", "customer": "ООО Ромашка", "issued": "2026-11-15", "expires": "2027-12-31", "updatesUntil": "2027-12-31", "host": null, "test": false },
+  "seats": { "full": { "used": 12, "limit": 50 }, "view": { "used": 40, "limit": null } }
+}
+```
+
+`status`: `none` — ключа нет (бесплатная редакция), `active`, `grace` — истёк, идёт льготный период 14 дней, `expired`, `invalid` — подпись не сходится, `wrong-host` — ключ выдан для другого `PUBLIC_URL`. `notice` — предупреждение для администратора (оно же приходит в `GET /api/auth/me` как `user.licenseNotice`). `full`/`view` — лимиты мест, `null` — без ограничений. `source`: `db` — ключ введён в интерфейсе, `env` — из `LICENSE_KEY`.
+
+### `PUT /api/admin/license`
+
+Тело: `{"key": "TB1.…"}`. Проверяет подпись и сохраняет ключ; ответ — как у `GET`. Неверный ключ — `400` с причиной. Записывается в журнал аудита.
+
+### `DELETE /api/admin/license`
+
+Удаляет введённый ключ: снова действует `LICENSE_KEY` или бесплатная редакция. Пользователи и данные не меняются.
+
+### `GET /api/admin/system`
+
+Версия, коммит и дата сборки, версии Node.js и PostgreSQL, число миграций и история версий, запускавшихся на этой базе: `{"version": "1.1.0", "commit": "…", "built": "…", "node": "v20…", "postgres": "16.4", "migrations": {"count": 19, "last": "019_license.sql", "lastAt": …}, "history": [{"version": "1.1.0", "commit": null, "since": …, "last": …}]}`.
+
 ## Пользователи (админ)
 
 Все запросы раздела — только для `admin`, остальным `403`. Свою роль и блокировку админ поменять не может, себя удалить тоже (`409`): так нельзя случайно остаться без админа.

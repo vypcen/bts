@@ -1,5 +1,5 @@
 // Администрирование: журнал аудита и удалённые проекты (корзина проектов)
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useLoad, useStore } from "../store";
 import { Confirm, Empty, fmt, Modal } from "../ui";
@@ -143,8 +143,114 @@ interface System {
   history: { version: string; commit: string | null; since: number; last: number }[];
 }
 
+interface LicenseState {
+  edition: string; status: "none" | "active" | "grace" | "expired" | "invalid" | "wrong-host"; notice: string | null;
+  full: number | null; view: number | null; source: "db" | "env" | null;
+  license: { id: string; customer: string; issued: string | null; expires: string | null; updatesUntil: string | null; host: string | null; test: boolean } | null;
+  seats: { full: { used: number; limit: number | null }; view: { used: number; limit: number | null } };
+}
+
+const EDITIONS: Record<string, string> = { community: "Бесплатная", team: "Команда", enterprise: "Корпоративная" };
+const STATUS: Record<LicenseState["status"], string> = {
+  none: "ключ не введён", active: "действует", grace: "истекла, льготный период", expired: "истекла", invalid: "ключ не принят", "wrong-host": "ключ для другого адреса",
+};
+
+// Лицензия: условия ключа, занятые места, ввод нового ключа
+function LicenseCard() {
+  const [state, setState] = useState<LicenseState | null>(null);
+  const [error, setError] = useState("");
+  const [key, setKey] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const { toast, setMe, me } = useStore();
+  const apply = (s: LicenseState) => {
+    setState(s);
+    if (me) setMe({ ...me, licenseNotice: s.notice });
+  };
+  useEffect(() => {
+    api<LicenseState>("GET", "/api/admin/license").then(setState, (e) => setError(e.message));
+  }, []);
+  if (error) return <div className="banner">{error}</div>;
+  if (!state) return <div className="skel">Загружаем лицензию…</div>;
+  const l = state.license;
+  const seat = (s: { used: number; limit: number | null }) => `${s.used}${s.limit !== null ? ` из ${s.limit}` : " (без ограничений)"}`;
+  const rows: [string, string][] = [
+    ["Редакция", `${EDITIONS[state.edition] || state.edition}${l?.test ? " (тестовый ключ)" : ""}`],
+    ["Статус", STATUS[state.status]],
+    ...(l ? ([["Владелец", l.customer], ["Номер", l.id], ["Действует до", l.expires || "бессрочно"], ["Обновления до", l.updatesUntil || "—"], ...(l.host ? [["Адрес", l.host]] : [])] as [string, string][]) : []),
+    ["Полные места (админы, тестировщики)", seat(state.seats.full)],
+    ["Просмотровые места (разработчики, наблюдатели)", seat(state.seats.view)],
+  ];
+  async function save() {
+    try {
+      apply(await api<LicenseState>("PUT", "/api/admin/license", { key }));
+      setKey("");
+      setEditing(false);
+      toast("Лицензия применена");
+    } catch (e: any) {
+      toast(e.message);
+    }
+  }
+  return (
+    <section className="card">
+      <h3 style={{ marginTop: 0 }}>Лицензия</h3>
+      {state.notice && <div className="banner" style={{ marginBottom: 12 }}>{state.notice}</div>}
+      <table className="tbl">
+        <tbody>{rows.map(([k, v]) => <tr key={k}><td className="muted small" style={{ width: 280 }}>{k}</td><td className="small">{v}</td></tr>)}</tbody>
+      </table>
+      {state.status === "none" && (
+        <p className="muted small">
+          Без ключа работает бесплатная редакция: до {state.full} полных мест, просмотровых — без ограничений. Пользователей сверх лимита никто не
+          отключает, нельзя только выдать новые полные роли.
+        </p>
+      )}
+      {editing ? (
+        <div className="view-block">
+          <textarea className="input mono" rows={4} placeholder="TB1.…" value={key} onChange={(e) => setKey(e.target.value)} aria-label="Лицензионный ключ" />
+          <div className="acts" style={{ justifyContent: "flex-start" }}>
+            <button className="btn primary" disabled={!key.trim()} onClick={save}>Применить</button>
+            <button className="btn" onClick={() => setEditing(false)}>Отмена</button>
+          </div>
+        </div>
+      ) : (
+        <div className="acts" style={{ justifyContent: "flex-start" }}>
+          <button className="btn primary" onClick={() => setEditing(true)}>{l ? "Заменить ключ" : "Ввести ключ"}</button>
+          {state.source === "db" && <button className="btn ghost" onClick={() => setRemoving(true)}>Удалить ключ</button>}
+          {state.source === "env" && <span className="muted small">Ключ задан переменной LICENSE_KEY; введённый здесь ключ заменит его.</span>}
+        </div>
+      )}
+      {removing && (
+        <Confirm
+          title="Удалить лицензионный ключ?"
+          text={`Начнут действовать условия бесплатной редакции${state.source === "db" ? " (или ключ из LICENSE_KEY, если он задан)" : ""}. Пользователи и данные не пострадают.`}
+          action="Удалить"
+          onClose={() => setRemoving(false)}
+          onYes={async () => {
+            setRemoving(false);
+            try {
+              apply(await api<LicenseState>("DELETE", "/api/admin/license", {}));
+              toast("Ключ удалён");
+            } catch (e: any) {
+              toast(e.message);
+            }
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
 // О системе: версия и сборка, база, история обновлений — пригодится в обращении в поддержку
 export function SystemInfo() {
+  return (
+    <>
+      <LicenseCard />
+      <About />
+    </>
+  );
+}
+
+function About() {
   const { value, error } = useLoad<System>("/api/admin/system");
   if (error) return <div className="banner">{error}</div>;
   if (!value) return <div className="skel">Загружаем…</div>;
@@ -157,9 +263,10 @@ export function SystemInfo() {
   ];
   const text = rows.map(([k, v]) => `${k}: ${v}`).join("\n");
   return (
-    <section className="card">
+    <section className="card" style={{ marginTop: 16 }}>
+      <h3 style={{ marginTop: 0 }}>О системе</h3>
       <table className="tbl">
-        <tbody>{rows.map(([k, v]) => <tr key={k}><td className="muted small" style={{ width: 200 }}>{k}</td><td className="mono small">{v}</td></tr>)}</tbody>
+        <tbody>{rows.map(([k, v]) => <tr key={k}><td className="muted small" style={{ width: 280 }}>{k}</td><td className="mono small">{v}</td></tr>)}</tbody>
       </table>
       <div className="acts" style={{ justifyContent: "flex-start" }}>
         <button className="btn" onClick={() => navigator.clipboard?.writeText(text)}>Скопировать для поддержки</button>

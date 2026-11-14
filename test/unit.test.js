@@ -114,3 +114,42 @@ test("сравнение версий", () => {
   assert.equal(compare("1.1.0-rc.1", "1.1.0"), -1);
   assert.equal(compare("2.0.0", "10.0.0"), -1);
 });
+
+test("лицензия: подпись, срок, льготный период, адрес", () => {
+  const license = require("../server/license");
+  const pem = require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures", "license-test-private.pem"), "utf8");
+  const terms = { id: "T-1", customer: "ООО Тест", edition: "enterprise", full: 20, view: null, issued: "2026-01-01", expires: "2026-12-31" };
+  const key = license.sign(terms, pem);
+  assert.equal(license.verify(key).terms.full, 20);
+  assert.equal(license.verify(key).test, true);
+  // подделка: другое число мест с той же подписью
+  const [p, , sig] = key.split(".");
+  const forged = `${p}.${Buffer.from(JSON.stringify({ ...terms, full: 999 })).toString("base64url")}.${sig}`;
+  assert.throws(() => license.verify(forged), /Подпись ключа не сходится/);
+  assert.throws(() => license.verify("abc"), /начинается с TB1/);
+  const at = (d) => license.evaluate(key, Date.parse(d));
+  assert.equal(at("2026-06-01").status, "active");
+  assert.equal(at("2026-06-01").full, 20);
+  assert.match(at("2026-12-15").notice, /заканчивается 2026-12-31/);
+  assert.equal(at("2027-01-05").status, "grace");
+  assert.equal(at("2027-01-05").full, 20);
+  const expired = at("2027-02-01");
+  assert.equal(expired.status, "expired");
+  assert.equal(expired.full, license.COMMUNITY.full);
+  assert.equal(license.evaluate(null).status, "none");
+  assert.equal(license.evaluate(forged).status, "invalid");
+  const bound = license.sign({ ...terms, host: "qa.example.ru", expires: null }, pem);
+  const prev = process.env.PUBLIC_URL;
+  process.env.PUBLIC_URL = "https://other.example.ru";
+  assert.equal(license.evaluate(bound).status, "wrong-host");
+  process.env.PUBLIC_URL = "https://qa.example.ru/";
+  assert.equal(license.evaluate(bound).status, "active");
+  if (prev === undefined) delete process.env.PUBLIC_URL;
+  else process.env.PUBLIC_URL = prev;
+  // в production тестовый ключ не принимается
+  const env = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  assert.throws(() => license.verify(key), /Подпись/);
+  process.env.NODE_ENV = env;
+  if (env === undefined) delete process.env.NODE_ENV;
+});

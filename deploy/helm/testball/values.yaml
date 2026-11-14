@@ -20,7 +20,7 @@ database:
   poolSize: 10
 
 # Секреты приложения. existingSecret — свой Secret с теми же ключами (APP_SECRET, SETUP_CODE, OIDC_CLIENT_SECRET,
-# LDAP_BIND_PASSWORD, KERBEROS_PROXY_SECRET, S3_ACCESS_KEY, S3_SECRET_KEY); иначе Secret создаётся из значений ниже.
+# LDAP_BIND_PASSWORD, KERBEROS_PROXY_SECRET, S3_ACCESS_KEY, S3_SECRET_KEY, LICENSE_KEY); иначе Secret создаётся из значений ниже.
 secrets:
   existingSecret: ""
   # длинная случайная строка: шифрует токены интеграций в базе. Одинаковая на всех репликах, менять нельзя
@@ -32,6 +32,8 @@ secrets:
   kerberosProxySecret: ""
   s3AccessKey: ""
   s3SecretKey: ""
+  # лицензионный ключ TB1.… (можно не задавать и ввести в интерфейсе: «Пользователи → Лицензия и система»)
+  licenseKey: ""
 
 # Обычные переменные окружения приложения (см. .env.example): REGISTRATION, LOCAL_LOGIN, OIDC_*, LDAP_*, SSO_*,
 # LICENSE_*, FLAKY_*, WEBHOOK_* и т. д.

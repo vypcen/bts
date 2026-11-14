@@ -28,6 +28,7 @@ export interface User {
   role: Role;
   provider?: AuthProvider;
   version?: string;
+  licenseNotice?: string | null;
 }
 
 export interface Project {

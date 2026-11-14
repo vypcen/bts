@@ -15,6 +15,13 @@ import { CasePicker, RunModal } from "./Runs";
 
 const MARKS: ResultValue[] = ["passed", "failed", "blocked", "skipped"];
 
+// Фактический результат шага из поля ввода важнее сохранённого: живое обновление с сервера могло ещё не прийти
+function withActual(steps: Result["steps"], i: number, typed: string | undefined): Result["steps"] {
+  if (typed === undefined) return steps;
+  const prev = steps?.[i];
+  return { ...(steps || {}), [i]: { ...(prev || { result: "failed" }), actual: typed } } as Result["steps"];
+}
+
 export function RunPage({ project, num }: { project: Project; num: number }) {
   const data = useData();
   const { write, liveError, me } = useStore();
@@ -354,7 +361,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
                 <div className="step-mark">
                   {open ? <ResultButtons value={m} onPick={(v) => pickStep(i, v)} label={`Результат шага ${i + 1}`} /> : <ResultPill r={m} sm />}
                   {canEdit && bad && (
-                    <button className="btn sm" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(shown, run, { ...r, comment: comment.trim() }, undefined, i)); }}>+ Баг</button>
+                    <button className="btn sm" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(shown, run, { ...r, comment: comment.trim(), steps: withActual(r.steps, i, actuals[i]) }, undefined, i)); }}>+ Баг</button>
                   )}
                   {(bad || sr?.actual) && (
                     <input className="input" aria-label={`Фактический результат шага ${i + 1}`} placeholder="Что произошло на этом шаге" disabled={!open}

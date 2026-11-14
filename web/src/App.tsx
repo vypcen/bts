@@ -35,6 +35,11 @@ export function App() {
   return (
     <>
       <Topbar projectName={project?.name} projectKey={project?.id} users={section === "users"} settings={section === "settings"} />
+      {me.licenseNotice && !(section === "users" && key === "system") && (
+        <div className="wrap" style={{ paddingBottom: 0 }}>
+          <div className="banner">{me.licenseNotice} <a href={href("users", "system")}>Лицензия</a></div>
+        </div>
+      )}
       {!data ? (
         <main className="wrap"><div className="skel">Загружаем данные…</div></main>
       ) : section === "users" ? (

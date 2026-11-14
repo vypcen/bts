@@ -42,7 +42,7 @@ export function Users() {
         <a href={href("users")} aria-current={!sub ? "page" : undefined}>Пользователи</a>
         <a href={href("users", "audit")} aria-current={sub === "audit" ? "page" : undefined}>Журнал аудита</a>
         <a href={href("users", "trash")} aria-current={sub === "trash" ? "page" : undefined}>Удалённые проекты</a>
-        <a href={href("users", "system")} aria-current={sub === "system" ? "page" : undefined}>О системе</a>
+        <a href={href("users", "system")} aria-current={sub === "system" ? "page" : undefined}>Лицензия и система</a>
       </nav>
       {sub === "audit" ? <main className="wrap"><AuditLog /></main>
         : sub === "trash" ? <main className="wrap"><DeletedProjects /></main>

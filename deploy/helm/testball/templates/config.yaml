@@ -43,6 +43,9 @@ stringData:
   {{- with .Values.secrets.setupCode }}
   SETUP_CODE: {{ . | quote }}
   {{- end }}
+  {{- with .Values.secrets.licenseKey }}
+  LICENSE_KEY: {{ . | quote }}
+  {{- end }}
   {{- with .Values.secrets.oidcClientSecret }}
   OIDC_CLIENT_SECRET: {{ . | quote }}
   {{- end }}

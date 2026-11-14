@@ -154,3 +154,14 @@ test("модель кейса: поле в настройках, кейс со �
   await page.getByRole("button", { name: "Создать баг" }).click();
   await expect.poll(async () => (await (await api.get("/api/projects/LK/state")).json()).bugs.some((b) => b.title.includes("шаг 2"))).toBe(true);
 });
+
+test("лицензия и система: админ видит редакцию, версию и может ввести ключ", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/#/users/system");
+  await expect(page.getByRole("cell", { name: "Бесплатная", exact: true })).toBeVisible();
+  await expect(page.getByText("Версия TestBall")).toBeVisible();
+  await page.getByRole("button", { name: "Ввести ключ" }).click();
+  await page.getByLabel("Лицензионный ключ").fill("TB1.подделка.AAAA");
+  await page.getByRole("button", { name: "Применить" }).click();
+  await expect(page.getByText(/Ключ повреждён|Подпись ключа не сходится/)).toBeVisible();
+});
