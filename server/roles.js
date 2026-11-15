@@ -72,6 +72,7 @@ const RULES = [
   [/^\/templates(\/\d+)?$/, ["cases.edit", "settings"]],
   [/^\/shared-steps(\/\d+)?$/, "cases.edit"],
   [/^\/datasets(\/\d+)?$/, "cases.edit"],
+  [/^\/releases(\/\d+(\/link)?)?$/, "plans.edit"],
   [/^\/cases\/\d+\/review$/, "cases.edit"],
   [/^\/cases\/\d+\/review\/decision$/, "cases.review"],
   [/^\/review-settings$/, "settings"],

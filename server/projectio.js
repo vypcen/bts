@@ -29,12 +29,16 @@ async function exportProject(key, withFiles) {
   // значения пользовательских полей — по названию поля: id в другой установке будут другими
   const fieldName = new Map(customFields.map((f) => [String(f.id), f.name]));
   const byName = (vals) => Object.fromEntries(Object.entries(vals || {}).filter(([id]) => fieldName.has(id)).map(([id, v]) => [fieldName.get(id), v]));
-  const [requirements, reqCases, templates, sharedSteps, datasetList] = await Promise.all([
+  const [requirements, reqCases, templates, sharedSteps, datasetList, releaseList, releaseLinks] = await Promise.all([
     q("SELECT r.*, u.login AS cb FROM requirements r LEFT JOIN users u ON u.id=r.created_by WHERE r.project_key=$1 ORDER BY r.num"),
     q("SELECT r.num AS req, c.num FROM requirement_cases rc JOIN requirements r ON r.id=rc.requirement_id JOIN test_cases c ON c.id=rc.case_id WHERE r.project_key=$1"),
     q("SELECT kind, name, data, is_default FROM templates WHERE project_key=$1 ORDER BY id"),
     q("SELECT id, num, title, step_list FROM shared_steps WHERE project_key=$1 ORDER BY num"),
     q("SELECT id, num, name, columns, rows FROM datasets WHERE project_key=$1 ORDER BY num"),
+    q(`SELECT r.*, p.num AS parent_num FROM releases r LEFT JOIN releases p ON p.id=r.parent_id WHERE r.project_key=$1 ORDER BY r.num`),
+    q(`SELECT 'runs' AS kind, t.num, v.num AS rel FROM test_runs t JOIN releases v ON v.id=t.release_id WHERE t.project_key=$1
+       UNION ALL SELECT 'plans', p.num, v.num FROM test_plans p JOIN releases v ON v.id=p.release_id WHERE p.project_key=$1
+       UNION ALL SELECT 'bugs', b.num, v.num FROM bugs b JOIN releases v ON v.id=b.release_id WHERE b.project_key=$1`),
   ]);
   // в шаблонах пользовательские поля — по названию, как в кейсах
   const tplData = (d) => (d.fields ? { ...d, fields: byName(d.fields) } : d);
@@ -105,6 +109,14 @@ async function exportProject(key, withFiles) {
     sharedSteps: sharedSteps.map((s) => ({ id: s.id, num: s.num, title: s.title, stepList: s.step_list })),
     // наборы данных: в кейсах ссылка dataset: id — при импорте id пересчитываются
     datasets: datasetList.map((d) => ({ id: d.id, num: d.num, name: d.name, columns: d.columns, rows: d.rows })),
+    // релизы и спринты; связи — номерами прогонов, планов и багов
+    releases: releaseList.map((r) => ({
+      num: r.num, parent: r.parent_num ?? null, name: r.name, description: r.description, status: r.status,
+      starts: r.starts_on ? iso(r.starts_on).slice(0, 10) : null, due: r.due_on ? iso(r.due_on).slice(0, 10) : null,
+      runs: releaseLinks.filter((x) => x.kind === "runs" && x.rel === r.num).map((x) => x.num),
+      plans: releaseLinks.filter((x) => x.kind === "plans" && x.rel === r.num).map((x) => x.num),
+      bugs: releaseLinks.filter((x) => x.kind === "bugs" && x.rel === r.num).map((x) => x.num),
+    })),
     templates: templates.map((t) => ({ kind: t.kind, name: t.name, data: tplData(t.data), isDefault: t.is_default })),
     requirements: requirements.map((r) => ({
       num: r.num, title: r.title, description: r.description, status: r.status, priority: r.priority, extRef: r.ext_ref, url: r.url, tags: r.tags,
@@ -421,6 +433,24 @@ async function importProject(data, { key, name }, user) {
               str(x.message, 5000), str(x.details, 50000), JSON.stringify(arr(x.steps)), Math.max(0, Number(x.retries) || 0), x.flaky === true, date(x.created)]
           );
           if (ar[0]) await attach(x.attachments, { auto: ar[0].id });
+        }
+      }
+      // релизы: сначала без родителя, затем спринты; связи с прогонами, планами и багами — по номерам
+      const rels = arr(data.releases).filter((r) => num(r.num) && str(r.name, 200));
+      if (rels.length) await db.query("UPDATE projects SET release_seq=$2 WHERE key=$1", [key, rels.reduce((m, x) => Math.max(m, num(x.num)), 0)]);
+      const relId = new Map();
+      for (const r of [...rels.filter((x) => !x.parent), ...rels.filter((x) => x.parent)]) {
+        const d = (v) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+        const { rows } = await db.query(
+          `INSERT INTO releases(project_key, num, parent_id, name, description, status, starts_on, due_on, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id`,
+          [key, num(r.num), r.parent ? relId.get(num(r.parent)) ?? null : null, str(r.name, 200), str(r.description, 5000),
+            oneOf(r.status, ["planned", "active", "released", "cancelled"], "planned"), d(r.starts), d(r.due), user.id]);
+        if (!rows[0]) continue;
+        relId.set(num(r.num), rows[0].id);
+        for (const [k, table] of [["runs", "test_runs"], ["plans", "test_plans"], ["bugs", "bugs"]]) {
+          const nums = arr(r[k]).map(num).filter(Boolean);
+          if (nums.length) await db.query(`UPDATE ${table} SET release_id=$3 WHERE project_key=$1 AND num = ANY($2::int[])`, [key, nums, rows[0].id]);
         }
       }
       return summarize(data);

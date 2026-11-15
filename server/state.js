@@ -115,7 +115,7 @@ async function project(key) {
   const [cases, runs, last, bugs, files, autoruns, comments, caseFolders, testPlans, customFields] = await Promise.all([
     pool.query(`${caseSql} WHERE c.project_key=$1 ORDER BY c.num`, k),
     pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at, r.fields,
-                  p.num AS plan_num, COALESCE(p.locked, false) AS plan_locked, (SELECT o.num FROM test_runs o WHERE o.id=r.rerun_of) AS rerun_of,
+                  p.num AS plan_num, COALESCE(p.locked, false) AS plan_locked, (SELECT o.num FROM test_runs o WHERE o.id=r.rerun_of) AS rerun_of, (SELECT v.num FROM releases v WHERE v.id=r.release_id) AS release_num,
                   (SELECT json_object_agg(result, n) FROM (SELECT result, count(*)::int AS n FROM run_results WHERE run_id=r.id GROUP BY result) x) AS counts
                 FROM test_runs r LEFT JOIN users u ON u.id=r.created_by LEFT JOIN test_plans p ON p.id=r.plan_id
                 WHERE r.project_key=$1 ORDER BY r.num`, k),
@@ -125,7 +125,8 @@ async function project(key) {
                                 UNION SELECT run_result_id FROM bugs WHERE project_key=$1 AND run_result_id IS NOT NULL)`, k),
     pool.query(`SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
                   c.num AS case_num, t.num AS run_num, b.run_result_id, d.num AS dup_num, b.external_key, b.external_url, b.external_status,
-                  cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at, b.tags, b.fields
+                  cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at, b.tags, b.fields,
+                  (SELECT v.num FROM releases v WHERE v.id=b.release_id) AS release_num
                 FROM bugs b LEFT JOIN users au ON au.id=b.assignee_id LEFT JOIN test_cases c ON c.id=b.case_id
                 LEFT JOIN run_results rr ON rr.id=b.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
                 LEFT JOIN bugs d ON d.id=b.duplicate_of
@@ -150,14 +151,14 @@ async function project(key) {
                 LEFT JOIN users u ON u.id=cm.author_id
                 WHERE COALESCE(b.project_key, c.project_key)=$1 ORDER BY cm.created_at, cm.id`, k),
     pool.query(`SELECT id, project_key, parent_id, name FROM case_folders WHERE project_key=$1 ORDER BY name`, k),
-    pool.query(`SELECT project_key, num, title, mode, locked FROM test_plans WHERE project_key=$1 ORDER BY num`, k),
+    pool.query(`SELECT project_key, num, title, mode, locked, (SELECT v.num FROM releases v WHERE v.id=test_plans.release_id) AS release_num FROM test_plans WHERE project_key=$1 ORDER BY num`, k),
     pool.query(`SELECT id, entity, name, type, options, required, position FROM custom_fields WHERE project_key=$1 ORDER BY entity, position, id`, k),
   ]);
   const empty = { untested: 0, passed: 0, failed: 0, blocked: 0, skipped: 0 };
   return {
     pid: key,
     customFields: customFields.rows,
-    plans: testPlans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked })),
+    plans: testPlans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked, release: p.release_num ?? null })),
     // Тексты тест-кейсов (предусловия, шаги, ожидаемый результат) — бо́льшая часть объёма. В состоянии их нет,
     // карточка и редактор берут кейс целиком из GET /cases/:num. У чек-листа пункты нужны для счётчиков — остаются
     cases: cases.rows.map((r) => {
@@ -169,7 +170,7 @@ async function project(key) {
     runs: runs.rows.map((r) => ({
       id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
       state: r.state, createdBy: r.created_by, created: ms(r.created_at), closed: ms(r.closed_at), planNum: r.plan_num, planLocked: r.plan_locked,
-      counts: { ...empty, ...(r.counts || {}) }, fields: r.fields, rerunOf: r.rerun_of,
+      counts: { ...empty, ...(r.counts || {}) }, fields: r.fields, rerunOf: r.rerun_of, release: r.release_num ?? null,
     })),
     results: last.rows.map(toResult),
     bugs: bugs.rows.map((b) => ({
@@ -178,7 +179,7 @@ async function project(key) {
       caseNum: b.case_num, runNum: b.run_num, resultId: b.run_result_id, duplicateOf: b.dup_num,
       createdBy: b.created_by, updatedBy: b.updated_by, created: ms(b.created_at), updated: ms(b.updated_at),
       external: b.external_key ? { key: b.external_key, url: b.external_url, status: b.external_status || "" } : null,
-      tags: b.tags, fields: b.fields,
+      tags: b.tags, fields: b.fields, release: b.release_num ?? null,
     })),
     attachments: files.rows.map(toAttachment),
     autoruns: autoruns.rows.map((r) => ({

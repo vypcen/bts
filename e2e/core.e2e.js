@@ -399,3 +399,27 @@ test("параметры кейса: таблица в редакторе, ит�
   expect(res.iterResults["0"].result).toBe("passed");
   expect(res.iterResults["1"].steps["0"].result).toBe("failed");
 });
+
+test("релизы: создать релиз, прогон в релизе, страница готовности", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  await page.goto("/#/p/LK/releases");
+  await page.getByRole("button", { name: "+ Релиз" }).click();
+  await page.getByLabel("Название *").fill("E2E релиз 3.0");
+  await page.getByLabel("Срок").fill("2030-01-31");
+  await page.getByRole("button", { name: "Создать" }).click();
+  await expect(page.getByRole("heading", { name: "E2E релиз 3.0" })).toBeVisible();
+  await expect(page.getByText("Не готов к выпуску")).toBeVisible();
+  await expect(page.getByText("В релизе нет прогонов с кейсами")).toBeVisible();
+  const rel = Number(page.url().match(/releases\/(\d+)/)[1]);
+  const c = (await (await api.post("/api/projects/LK/cases", { data: { title: "Релизный кейс", priority: "high", status: "ready", steps: "a" } })).json()).num;
+  const run = (await (await api.post("/api/projects/LK/runs", { data: { title: "Релизный прогон", caseNums: [c], release: rel } })).json()).num;
+  await api.patch(`/api/projects/LK/runs/${run}/results/${c}`, { data: { result: "passed" } });
+  await page.reload();
+  await expect(page.getByText("✓ Готов к выпуску")).toBeVisible();
+  await expect(page.getByText("Релизный прогон")).toBeVisible();
+  // в форме прогона есть выбор релиза
+  await page.goto("/#/p/LK/runs");
+  await page.getByRole("button", { name: "+ Новый прогон" }).click();
+  await expect(page.getByLabel("Релиз", { exact: true })).toBeVisible();
+});

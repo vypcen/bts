@@ -280,6 +280,15 @@ data: {"type":"bugs","pid":"LK","at":1761040000000}
 
 Нужно разрешение `cases.edit`. Ссылка на блок другого проекта при сохранении кейса — `400`. Блоки переносятся при экспорте и импорте проекта.
 
+### Релизы: `/api/projects/:key/releases`
+
+- `GET` — `{"items": [{"num", "ref": "LK-V1", "name", "status": "planned|active|released|cancelled", "parent": null, "starts": "2026-11-01", "due": "2026-12-31", "released", "runs", "openBugs", "cases": {"total", "done", "passed"}}]}`. `parent` — номер релиза у спринта.
+- `GET /:num` — то же плюс `sprints`, `cases: {total, done, counts, progress, passRate}` (последний результат каждого кейса в прогонах релиза и спринтов), `bugs: {open, severe, list}`, `runs`, `plans`, `ready`, `blockers` (что мешает выпуску).
+- `POST` — `{"name", "description", "status", "starts", "due", "parent": номер релиза}` → `{num, ref}`; `PATCH /:num` — те же поля; `DELETE /:num` — релиз и его спринты удаляются, прогоны, планы и баги отвязываются.
+- `POST /:num/link` — `{"runs": [3], "plans": [1], "bugs": [7]}` привязать, с `"linked": false` — отвязать.
+
+У `POST /runs`, `POST`/`PATCH /plans`, `POST /plans/:num/runs`, `POST`/`PATCH /bugs`, `PATCH /runs/:num` есть поле `release` (номер, `null` — отвязать). Прогон по плану и перезапуск наследуют релиз, баг из прогона — релиз прогона. В состоянии у прогонов, планов и багов — `release`. Нужно `plans.edit` (у багов — `bugs.edit`).
+
 ### Параметры и наборы данных
 
 У тест-кейса (не чек-листа) в `POST`/`PATCH …/cases` можно прислать `params: {"columns": ["login", "role"], "rows": [{"name": "Админ", "values": {"login": "admin", "role": "администратор"}}]}` — своя таблица, или `dataset: <id набора>` — набор данных проекта; `params: null, dataset: null` — убрать параметры. До 20 параметров и 100 наборов, имя параметра — буквы, цифры, пробел, `.`, `-`, `_`. В ответе кейса — `params` или `dataset: {id, num, name, columns, rows}`. Параметры не входят в версии кейса.

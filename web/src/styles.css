@@ -400,3 +400,10 @@ label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;font-
 .iter-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
 .iter-tab{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px;font:inherit;font-size:13px;cursor:pointer}
 .iter-tab.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+
+/* релизы */
+.readiness{margin:12px 0;border-left:4px solid var(--line)}
+.readiness.ok{border-left-color:var(--ok)}
+.readiness.bad{border-left-color:var(--crit)}
+section>h3{margin:18px 0 8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:12px}

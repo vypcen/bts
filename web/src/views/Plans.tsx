@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { ReleaseSelect } from "./Releases";
 import { TagInput, useProjectTags } from "../casekit";
 import { api, paths } from "../api";
 import { CASE_STATUSES, DIST_STRATEGIES, PRIORITIES, RESULTS } from "../labels";
@@ -119,6 +120,7 @@ function PlanEditor({ pid, plan, onClose }: { pid: string; plan?: Plan; onClose:
   const { write, toast } = useStore();
   const cases = data.cases.filter((c) => c.pid === pid && c.status !== "deprecated").sort((a, b) => a.num - b.num);
   const [f, setF] = useState({ title: plan?.title || "", description: plan?.description || "", mode: plan?.mode || "static" });
+  const [rel, setRel] = useState(String(plan?.release ?? ""));
   const [filter, setFilter] = useState<PlanFilter>(plan?.filter || emptyFilter());
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [err, setErr] = useState("");
@@ -126,7 +128,7 @@ function PlanEditor({ pid, plan, onClose }: { pid: string; plan?: Plan; onClose:
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!f.title.trim()) return setErr("Укажите название плана");
-    const body = { ...f, filter };
+    const body = { ...f, filter, release: rel ? Number(rel) : null };
     if (plan) {
       if (await write(() => api("PATCH", paths.plan(pid, plan.num), body), "План сохранён")) onClose();
       return;
@@ -145,6 +147,7 @@ function PlanEditor({ pid, plan, onClose }: { pid: string; plan?: Plan; onClose:
         <h2>{plan ? "Параметры тест-плана" : "Новый тест-план"}</h2>
         <div className="field"><label htmlFor="pl-title">Название *</label>
           <input className="input" id="pl-title" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="Регресс релиза 2.0" autoFocus /></div>
+        <ReleaseSelect pid={pid} value={rel} onChange={setRel} id="pl-release" />
         <div className="field"><label htmlFor="pl-desc">Описание</label>
           <textarea className="input" id="pl-desc" rows={2} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></div>
         <div className="tabs" role="tablist">

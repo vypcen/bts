@@ -6,6 +6,7 @@ const { broadcast } = require("./live");
 const checklist = require("./checklist");
 const events = require("./events");
 const { distribute, executors } = require("./distribute");
+const releases = require("./releases");
 const { wrap, str, tooLong, num } = require("./util");
 
 const RESULTS = ["untested", "passed", "failed", "blocked", "skipped"];
@@ -47,6 +48,8 @@ router.post("/runs", wrap(async (req, res) => {
   if (error) return res.status(400).json({ error });
   const cf = await casemodel.readFields(pool, req.params.key, "run", req.body.fields, {});
   if (cf.error) return res.status(400).json({ error: cf.error });
+  const rel = await releases.releaseId(pool, req.params.key, req.body.release);
+  if (rel.error) return res.status(400).json({ error: rel.error });
   const out = await tx(async (db) => {
     const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [req.params.key]);
     if (!seq.rows[0]) return { status: 404, error: "Проект не найден" };
@@ -56,8 +59,8 @@ router.post("/runs", wrap(async (req, res) => {
     if (notReady) return { status: 409, error: notReady };
     const n = seq.rows[0].run_seq;
     const run = await db.query(
-      "INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-      [req.params.key, n, r.title, r.build, r.env, req.user.id, cf.fields]
+      "INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, release_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+      [req.params.key, n, r.title, r.build, r.env, req.user.id, cf.fields, rel.id]
     );
     await db.query("INSERT INTO run_results(run_id, case_id) SELECT $1, unnest($2::int[])", [run.rows[0].id, ids]);
     // {"assign": {"users": [...], "strategy": "balanced"}} — сразу распределить кейсы
@@ -118,6 +121,11 @@ router.patch("/runs/:num", wrap(async (req, res) => {
   if (cf.error) return res.status(400).json({ error: cf.error });
   const state = req.body.state === undefined ? rows[0].state : req.body.state;
   if (!["open", "closed"].includes(state)) return res.status(400).json({ error: "Неизвестное состояние прогона" });
+  if (req.body.release !== undefined) {
+    const rel = await releases.releaseId(pool, req.params.key, req.body.release);
+    if (rel.error) return res.status(400).json({ error: rel.error });
+    await pool.query("UPDATE test_runs SET release_id=$3 WHERE project_key=$1 AND num=$2", [req.params.key, n, rel.id]);
+  }
   await pool.query(
     `UPDATE test_runs SET title=$1, build=$2, environment=$3, state=$4, fields=$7,
        closed_at = CASE WHEN $4='closed' THEN COALESCE(closed_at, now()) ELSE NULL END
