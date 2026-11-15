@@ -111,7 +111,8 @@ app.use((req, res, next) => {
 const bigJson = express.json({ limit: "10mb" });
 app.use("/api/projects/:key/autoruns", (req, res, next) => (req.user ? bigJson(req, res, next) : next()));
 // импорт тест-кейсов — CSV на тысячи строк
-const importJson = express.json({ limit: "5mb" });
+// импорт из Excel присылает файл в base64 — до 15 МБ файла
+const importJson = express.json({ limit: "25mb" });
 app.use("/api/projects/:key/cases/import", (req, res, next) => (req.user ? importJson(req, res, next) : next()));
 // импорт проекта целиком (с вложениями в base64) и миграция из других TMS
 const projectJson = express.json({ limit: `${Number(process.env.IMPORT_MAX_MB || 200)}mb` });
@@ -630,7 +631,7 @@ app.post("/api/projects/:key/cases/:num/versions/:v/restore", auth.requireUser, 
 // подсказки языковой модели в формах; запись (черновики бага и кейса) — только тестировщикам, как и сами формы
 app.use("/api/projects/:key/ai", auth.requireUser, require("./assist"));
 app.use("/api/notifications", auth.requireUser, require("./notify").router);
-app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, autotests.projectRouter, attachments.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, require("./caseimport").router, autotests.projectRouter, attachments.projectRouter);
 app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, review.router, datasets.router, require("./releases").router, require("./configs").router, require("./notify").projectRouter, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);

@@ -66,7 +66,7 @@ const RULES = [
   [/^\/cases\/bulk-delete$/, "cases.delete"],
   [/^\/cases\/bulk$/, "cases.edit"],
   [/^\/cases\/\d+$/, (m) => (m === "DELETE" ? "cases.delete" : "cases.edit")],
-  [/^\/(cases|cases\/import|cases\/move|cases\/\d+\/versions\/\d+\/restore|folders(\/\d+)?)$/, "cases.edit"],
+  [/^\/(cases|cases\/import(\/table|\/mapped)?|cases\/move|cases\/\d+\/versions\/\d+\/restore|folders(\/\d+)?)$/, "cases.edit"],
   [/^\/(bugs|cases)\/\d+\/comments$|^\/comments\/\d+$/, "comments"],
   [/^\/requirements(\/.*)?$/, "requirements.edit"],
   [/^\/templates(\/\d+)?$/, ["cases.edit", "settings"]],

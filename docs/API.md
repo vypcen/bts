@@ -366,6 +366,13 @@ CSV-файл с кейсами проекта: UTF-8 с BOM, разделите�
 
 `line` — номер строки в файле с учётом многострочных ячеек. Без `dryRun` файл применяется одной транзакцией: при любой ошибке ничего не импортируется, ответ `400` с теми же `errors`. Удачный импорт отвечает `{"summary": {…}}`.
 
+### Импорт из Excel с сопоставлением колонок
+
+1. `POST /api/projects/:key/cases/import/table` — `{"file": "<base64>", "name": "cases.xlsx"}` (xlsx или CSV, до 15 МБ) → `{"targets": [{key, label}], "fields": [{id, name, type}], "sheets": [{"name", "headerRow", "header": [...], "sample": [[...]], "total", "suggest": {"map": {"title": 0, "steps": 4}, "fields": {"7": 9}}}]}`. Строка заголовков — первая непустая.
+2. `POST /api/projects/:key/cases/import/mapped` — тот же файл и `{"sheet": 1, "headerRow": 1, "map": {"title": 0, "steps": 4, "stepExpected": 6, "stepData": 5, "folder": 1}, "fields": {"7": 9}, "dryRun": true}`. Ответ — как у CSV-импорта, плюс `preview` (первые кейсы). Без `dryRun` — импорт одной транзакцией.
+
+Ключи `map`: `id`, `folder`, `title`, `priority`, `status`, `pre`, `steps`, `expected`, `kind`, `stepExpected`, `tags`, `stepData`. Строка без названия, но с шагом, дописывается к кейсу выше — так шаги лежат в выгрузках Zephyr Scale и Xray. Значение пользовательского поля-списка должно совпадать с вариантом (без учёта регистра), мультисписок — через запятую.
+
 ## Папки тест-кейсов
 
 Дерево папок внутри проекта. В одной папке не может быть двух подпапок с одинаковым названием (`409`), в корне тоже. Папки приходят в [`/api/state`](#get-apistate) в поле `folders`, у кейса папка в поле `folder`.

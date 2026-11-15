@@ -493,3 +493,28 @@ test("уведомления: упоминание через подсказку
   await expect(ap).toHaveURL(new RegExp(`#/p/LK/bugs/${n}$`));
   await ctx.close();
 });
+
+test("импорт из Excel: мастер сопоставляет колонки, шаги по строкам, проверка и импорт", async ({ page }) => {
+  const ExcelJS = require("exceljs");
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Тесты");
+  ws.addRow(["Summary", "Action", "Expected Result", "Labels"]);
+  ws.addRow(["E2E Excel: оформление заказа", "Добавить товар", "В корзине 1", "e2e"]);
+  ws.addRow(["", "Оформить заказ", "Заказ создан", ""]);
+  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  await login(page);
+  await page.goto("/#/p/LK/cases");
+  await page.getByRole("button", { name: "Импорт", exact: true }).click();
+  const modal = page.locator(".modal");
+  await modal.getByLabel("Файл").setInputFiles({ name: "xray.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: buf });
+  await expect(modal.getByLabel("Куда: Summary")).toHaveValue("t:title");
+  await expect(modal.getByLabel("Куда: Action")).toHaveValue("t:steps");
+  // Expected Result в выгрузке Xray — у шага, а не у кейса
+  await modal.getByLabel("Куда: Expected Result").selectOption("t:stepExpected");
+  await modal.getByRole("button", { name: "Проверить" }).click();
+  await expect(modal.getByText("создать 1")).toBeVisible();
+  await expect(modal.getByText(/шагов 2/)).toBeVisible();
+  await modal.getByRole("button", { name: "Импортировать (1)" }).click();
+  await page.locator("td.title", { hasText: "E2E Excel: оформление заказа" }).first().click();
+  await expect(page.locator("aside.drawer").getByText("Ожидается: Заказ создан")).toBeVisible();
+});
