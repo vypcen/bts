@@ -171,6 +171,18 @@ docker compose exec app node scripts/import.js import/export.json
 
 ### Шаг 8. Резервные копии
 
+Проще всего — в интерфейсе: **«Пользователи → Резервные копии»**. Приложение само делает копию раз в сутки (база и вложения, с проверкой), хранит последние 14 в папке `backups/` рядом с проектом; там же кнопки «Создать сейчас» и «Скачать». Восстановление:
+
+```sh
+docker compose stop app
+docker compose run --rm -v "$PWD/backups:/backups" app node scripts/backup.js restore /backups/testball-ГГГГММДД-ЧЧММСС.tar --yes
+docker compose start app
+```
+
+На Linux папку для копий создайте заранее и отдайте пользователю контейнера: `mkdir -p backups && sudo chown 1000:1000 backups` (на macOS и Windows не нужно). Подробности и настройки — [руководство администратора](docs/ADMIN_GUIDE.md#резервное-копирование-и-восстановление).
+
+Без интерфейса — скриптом:
+
 ```sh
 # Linux / macOS
 ./scripts/backup.sh

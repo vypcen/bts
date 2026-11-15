@@ -19,6 +19,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV UPLOAD_DIR=/app/data/uploads
 
+# pg_dump/pg_restore — для резервных копий из интерфейса (версия = версии сервера PostgreSQL или новее)
+RUN apk add --no-cache postgresql16-client
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
@@ -29,7 +32,7 @@ COPY docs ./docs
 COPY README.md CHANGELOG.md .env.example ./
 COPY --from=web /public ./public
 # Папка для вложений: Docker volume при первом подключении наследует её владельца
-RUN mkdir -p /app/data/uploads && chown -R node:node /app/data
+RUN mkdir -p /app/data/uploads /app/data/backups && chown -R node:node /app/data
 
 USER node
 EXPOSE 3000

@@ -435,3 +435,4 @@ section>h3{margin:18px 0 8px}
 .mention-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:6px;background:var(--surface);max-width:360px}
 .mention-list button{text-align:left;background:none;border:0;padding:6px 10px;font:inherit;color:inherit;cursor:pointer}
 .mention-list button:hover{background:var(--accent-soft)}
+.t-ok{color:var(--ok)} .t-crit{color:var(--crit)}

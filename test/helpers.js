@@ -58,6 +58,8 @@ async function startServer(env = {}) {
       TRUST_PROXY: "false",
       LLM_URL: "",
       STORAGE: "local",
+      // копия по расписанию ставится сразу при первом запуске — в тестах не нужна (test/backup.test.js)
+      BACKUP_EVERY_HOURS: "0",
       UPLOAD_DIR: path.join(require("node:os").tmpdir(), db),
       NODE_ENV: "test",
       // тестовые пользователи создаются админом — без принудительной смены пароля при первом входе

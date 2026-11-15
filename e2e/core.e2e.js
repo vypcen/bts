@@ -80,7 +80,8 @@ test("глобальный поиск по Ctrl+K находит кейс и о�
 test("поиск открывается и при русской раскладке (⌘/Ctrl + клавиша K = «л»)", async ({ page }) => {
   await login(page);
   await expect(page.getByRole("heading", { name: "Проекты" })).toBeVisible();
-  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "л", code: "KeyK", ctrlKey: true, bubbles: true })));
+  // код выполняется в браузере
+  await page.evaluate(() => globalThis.dispatchEvent(new globalThis.KeyboardEvent("keydown", { key: "л", code: "KeyK", ctrlKey: true, bubbles: true })));
   await expect(page.getByRole("combobox")).toBeVisible();
 });
 
@@ -517,4 +518,18 @@ test("импорт из Excel: мастер сопоставляет колон�
   await modal.getByRole("button", { name: "Импортировать (1)" }).click();
   await page.locator("td.title", { hasText: "E2E Excel: оформление заказа" }).first().click();
   await expect(page.locator("aside.drawer").getByText("Ожидается: Заказ создан")).toBeVisible();
+});
+
+test("резервные копии: создать сейчас, проверка пройдена, подробности и скачивание", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/#/users/backups");
+  await page.getByRole("button", { name: "Создать сейчас" }).click();
+  await expect(page.getByText("✓ пройдена").first()).toBeVisible({ timeout: 30000 });
+  await page.getByRole("link", { name: /^testball-.*\.tar$/ }).first().click();
+  await expect(page.locator(".modal").getByText("Чтение дампа")).toBeVisible();
+  await expect(page.locator(".modal").getByText("Файлы вложений")).toBeVisible();
+  await page.locator(".modal").getByRole("button", { name: "Закрыть" }).click();
+  const dl = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Скачать" }).first().click();
+  expect((await dl).suggestedFilename()).toMatch(/^testball-.*\.tar$/);
 });

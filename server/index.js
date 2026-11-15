@@ -635,7 +635,7 @@ app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bu
 app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, review.router, datasets.router, require("./releases").router, require("./configs").router, require("./notify").projectRouter, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
-app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"), require("./personal").router, audit.router, trash.adminRouter);
+app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./backup").router, require("./users"), require("./personal").router, audit.router, trash.adminRouter);
 app.use("/api/llm", auth.requireUser, llm.router);
 // подключения к языковым моделям (облачные сервисы и свои модели) — только администратор
 app.use("/api/admin/llm", auth.requireUser, access.requireAdmin, llm.adminRouter);
@@ -743,6 +743,7 @@ app.use((err, req, res, _next) => {
   // уборка раз в час: корзина, журнал аудита, журнал вебхуков, выполненные фоновые задачи
   jobs.define("housekeeping", () => Promise.all([trash.purgeExpired(), audit.purge(), require("./personal").purgeIps(), webhooks.trimDeliveries(), jobs.cleanup()]), { maxAttempts: 1, title: "Уборка устаревших данных" });
   jobs.every("housekeeping", 60 * 60 * 1000);
+  require("./backup").startSchedule();
   trackers.startSync();
   jobs.start();
   const server = app.listen(PORT, "0.0.0.0", () => {

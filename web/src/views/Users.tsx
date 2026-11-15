@@ -8,6 +8,7 @@ import { Avatar, Confirm, Empty, fmt, Modal, Pill, useRoles } from "../ui";
 import { NewUserModal, PasswordModal } from "./Password";
 import { AuditLog, DeletedProjects, SystemInfo } from "./Admin";
 import { RolesAdmin } from "./Roles";
+import { Backups } from "./Backups";
 
 // Ответ GET /api/admin/users
 interface AdminUser {
@@ -47,11 +48,13 @@ export function Users() {
         <a href={href("users", "audit")} aria-current={sub === "audit" ? "page" : undefined}>Журнал аудита</a>
         <a href={href("users", "trash")} aria-current={sub === "trash" ? "page" : undefined}>Удалённые проекты</a>
         <a href={href("users", "roles")} aria-current={sub === "roles" ? "page" : undefined}>Роли</a>
+        <a href={href("users", "backups")} aria-current={sub === "backups" ? "page" : undefined}>Резервные копии</a>
         <a href={href("users", "system")} aria-current={sub === "system" ? "page" : undefined}>Лицензия и система</a>
       </nav>
       {sub === "audit" ? <main className="wrap"><AuditLog /></main>
         : sub === "roles" ? <main className="wrap"><RolesAdmin /></main>
         : sub === "trash" ? <main className="wrap"><DeletedProjects /></main>
+        : sub === "backups" ? <main className="wrap"><Backups /></main>
         : sub === "system" ? <main className="wrap"><SystemInfo /></main>
         : <UsersList />}
     </>
