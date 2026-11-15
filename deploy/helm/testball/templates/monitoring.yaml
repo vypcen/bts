@@ -1,0 +1,21 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "testball.name" . }}
+  labels:
+    {{- include "testball.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels: {{- include "testball.selector" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      bearerTokenSecret:
+        name: {{ include "testball.secretName" . }}
+        key: METRICS_TOKEN
+{{- end }}

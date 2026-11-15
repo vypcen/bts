@@ -1,0 +1,74 @@
+# Правила оповещений Prometheus для TestBall QA.
+# Обычный Prometheus: добавьте файл в rule_files. Prometheus Operator: kubectl apply -f alerts-operator.yaml
+groups:
+  - name: testball
+    rules:
+      - alert: TestBallDown
+        expr: up{job=~".*testball.*"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "TestBall недоступен ({{ $labels.instance }})"
+          description: "Prometheus не может получить метрики 2 минуты: процесс упал, под перезапускается или неверный METRICS_TOKEN."
+
+      - alert: TestBallHighErrorRate
+        expr: |
+          sum(rate(testball_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(testball_http_requests_total[5m])), 0.1) > 0.02
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Больше 2% запросов к TestBall завершаются ошибкой 500"
+          description: "Найдите в журнале записи level=error (component=server): в них номер запроса, путь и стек."
+
+      - alert: TestBallSlowResponses
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(testball_http_request_duration_seconds_bucket{route!~"/api/events|.*/report|.*/export.*|/api/projects-import"}[10m]))) > 2
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "95% запросов к TestBall отвечают дольше 2 секунд"
+          description: "Посмотрите медленные запросы к базе (component=db, «медленный запрос») и ожидание соединений в пуле."
+
+      - alert: TestBallDbPoolExhausted
+        expr: max(testball_db_pool_connections{state="waiting"}) > 5
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Запросы TestBall ждут свободное соединение с базой"
+          description: "Увеличьте DB_POOL_SIZE (и max_connections в PostgreSQL) или найдите медленные запросы."
+
+      - alert: TestBallDbErrors
+        expr: sum(rate(testball_db_query_errors_total[5m])) > 0.5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Частые ошибки запросов к PostgreSQL"
+
+      - alert: TestBallMemoryHigh
+        expr: max(testball_process_resident_memory_bytes) > 1.5e9
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "TestBall занимает больше 1,5 ГБ памяти"
+
+      - alert: TestBallEventLoopLag
+        expr: max(testball_nodejs_eventloop_lag_p99_seconds) > 0.5
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Сервер TestBall перегружен: задержка обработки событий больше 0,5 с"
+
+      - alert: TestBallWebhooksFailing
+        expr: max(testball_webhook_failed_last_hour) > 20
+        for: 15m
+        labels: { severity: info }
+        annotations:
+          summary: "Вебхуки TestBall не доставляются"
+          description: "Проверьте получателей во вкладке проекта «Настройки» → «Вебхуки» → «Журнал»."
+
+      - alert: TestBallErrorsLogged
+        expr: sum by (component) (increase(testball_log_errors_total{level="error"}[15m])) > 20
+        labels: { severity: info }
+        annotations:
+          summary: "Много ошибок в журнале TestBall: {{ $labels.component }}"

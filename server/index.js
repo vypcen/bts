@@ -1,3 +1,7 @@
+// журнал работы и метрики подключаются первыми: остальные модули уже при загрузке пишут в журнал и ходят в базу
+const log = require("./log");
+log.install();
+const metrics = require("./metrics");
 const path = require("path");
 const express = require("express");
 const compression = require("compression");
@@ -57,6 +61,8 @@ const { broadcast } = live;
 
 const app = express();
 app.disable("x-powered-by");
+// номер запроса, метрики и журнал запросов (server/metrics.js)
+app.use(metrics.middleware());
 // Версия API в пути: /api/v1/... — то же, что /api/... (текущая и единственная версия). Интеграциям лучше
 // использовать /api/v1: при несовместимых изменениях появится /api/v2, а v1 продолжит работать
 app.use((req, _res, next) => {
@@ -545,6 +551,9 @@ app.get("/readyz", wrap(async (_req, res) => {
   await pool.query("SELECT 1");
   res.json({ ok: true });
 }));
+// Метрики Prometheus — только с METRICS_TOKEN
+app.get("/metrics", metrics.handler());
+metrics.gauges({ pool, live, version });
 app.get("/healthz", wrap(async (_req, res) => {
   await pool.query("SELECT 1");
   res.json({ ok: true });
@@ -561,14 +570,14 @@ app.get(["/testball-reporter.js", "/report.js"], (req, res) => {
 // Интерфейс собирается из web/ командой npm run build:web (в Docker — автоматически)
 app.use(express.static(path.join(__dirname, "..", "public"), { index: "index.html", maxAge: 0 }));
 
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
   if (err.type === "entity.parse.failed") return res.status(400).json({ error: "Некорректный JSON" });
   // ошибки с понятным пользователю кодом (модель недоступна, сервер перегружен, тело слишком большое) — не ошибки сервера
   if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
   if (err.expose && err.status) return res.status(err.status).json({ error: err.status === 413 ? "Слишком большой запрос" : "Некорректный запрос" });
-  console.error("[server]", err);
+  log.error("server", err.message, { reqId: req.id, method: req.method, path: req.originalUrl.split("?")[0], user: req.user?.login || null, err: err.code || err.name, stack: err.stack });
   if (res.headersSent) return res.destroy();
-  res.status(500).json({ error: "Внутренняя ошибка сервера. Подробности в логах." });
+  res.status(500).json({ error: `Внутренняя ошибка сервера. Код запроса для поддержки: ${req.id}`, requestId: req.id });
 });
 
 (async () => {

@@ -111,4 +111,4 @@ function closeAll() {
   clients.clear();
 }
 
-module.exports = { broadcast, events, listen, closeAll, inProject, context };
+module.exports = { broadcast, events, listen, closeAll, inProject, context, clientCount: () => clients.size };

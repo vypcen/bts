@@ -168,3 +168,18 @@ test("справка: все документы открываются, ссыл
   assert.deepEqual(broken, []);
   assert.equal(help.slug("Единый вход: OpenID Connect, LDAP / AD, Kerberos"), "единый-вход-openid-connect-ldap--ad-kerberos");
 });
+
+test("журнал: метка [компонент] и ошибка разбираются в поля", () => {
+  const { spawnSync } = require("node:child_process");
+  const code = `const log=require("./server/log");log.install();console.error("[trackers] автосоздание:", Object.assign(new Error("нет связи"),{code:"ECONNREFUSED"}));console.log("просто строка", {a:1});`;
+  const r = spawnSync(process.execPath, ["-e", code], { cwd: require("node:path").join(__dirname, ".."), env: { ...process.env, LOG_FORMAT: "json" }, encoding: "utf8" });
+  const err = JSON.parse(r.stderr.trim().split("\n")[0]);
+  assert.equal(err.level, "error");
+  assert.equal(err.component, "trackers");
+  assert.equal(err.msg, "автосоздание: нет связи");
+  assert.equal(err.err, "ECONNREFUSED");
+  assert.match(err.stack, /Error: нет связи/);
+  const info = JSON.parse(r.stdout.trim());
+  assert.equal(info.component, "server");
+  assert.equal(info.msg, "просто строка { a: 1 }");
+});

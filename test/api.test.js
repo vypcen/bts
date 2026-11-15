@@ -281,6 +281,10 @@ test("справка: доступна вошедшим, ссылки переп
   assert.equal((await u.viewer.get("/api/help/..%2F..%2Fetc%2Fpasswd")).status, 404);
 });
 
+test("метрики без METRICS_TOKEN выключены", async () => {
+  assert.equal((await fetch(`${srv.base}/metrics`)).status, 404);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);

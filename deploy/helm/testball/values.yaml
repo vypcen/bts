@@ -34,10 +34,14 @@ secrets:
   s3SecretKey: ""
   # лицензионный ключ TB1.… (можно не задавать и ввести в интерфейсе: «Пользователи → Лицензия и система»)
   licenseKey: ""
+  # токен для /metrics (Prometheus). Пусто — метрики выключены
+  metricsToken: ""
 
 # Обычные переменные окружения приложения (см. .env.example): REGISTRATION, LOCAL_LOGIN, OIDC_*, LDAP_*, SSO_*,
 # LICENSE_*, FLAKY_*, WEBHOOK_* и т. д.
 env:
+  # журнал в JSON — для Loki, ELK, Graylog; с журналом запросов (номер запроса, код ответа, время, пользователь)
+  LOG_FORMAT: "json"
   PUBLIC_URL: "https://testball.company.ru"
   REGISTRATION: "closed"
   TRUST_PROXY: "true"
@@ -95,3 +99,12 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 podAnnotations: {}
+
+# Метрики для Prometheus Operator: нужен secrets.metricsToken (или ключ METRICS_TOKEN в secrets.existingSecret).
+# Готовый дашборд Grafana и правила оповещений — deploy/monitoring/
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    # метки, по которым ваш Prometheus находит ServiceMonitor (например, release: kube-prometheus-stack)
+    labels: {}

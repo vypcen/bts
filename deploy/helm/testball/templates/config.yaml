@@ -46,6 +46,9 @@ stringData:
   {{- with .Values.secrets.licenseKey }}
   LICENSE_KEY: {{ . | quote }}
   {{- end }}
+  {{- with .Values.secrets.metricsToken }}
+  METRICS_TOKEN: {{ . | quote }}
+  {{- end }}
   {{- with .Values.secrets.oidcClientSecret }}
   OIDC_CLIENT_SECRET: {{ . | quote }}
   {{- end }}
