@@ -9,7 +9,7 @@ import { countBy, folderPath, lastResults } from "../selectors";
 import { useCan, useData, useLoad, useStore } from "../store";
 import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } from "../types";
 import { CaseRequirements } from "./Requirements";
-import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
+import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, Modal, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { ImportModal } from "./CaseImport";
 import { Comments } from "./Comments";
@@ -41,6 +41,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const [folderSel, setFolderSel] = useState<FolderSel>("all");
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [moveTo, setMoveTo] = useState("");
+  const [bulk, setBulk] = useState<"edit" | "delete" | null>(null);
   const [importing, setImporting] = useState(false);
   const { write, toast } = useStore();
   const canEdit = useCan("cases.edit");
@@ -102,6 +103,23 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
         {canEdit && <button className="btn" onClick={() => setImporting(true)}>Импорт</button>}
         {canEdit && <button className="btn primary" onClick={() => setEditing("case")}>+ Тест-кейс</button>}
       </div>
+      {bulk === "edit" && <BulkEditModal pid={p} nums={shown.map((c) => c.num)} tags={projectTags} onClose={(done) => { setBulk(null); if (done) setPicked(new Set()); }} />}
+      {bulk === "delete" && (
+        <Confirm
+          title={`Удалить кейсы (${shown.length})?`}
+          text="Кейсы уйдут в корзину проекта вместе с версиями, результатами и комментариями — их можно восстановить в течение 30 дней. Кейсы из заблокированных тест-планов останутся."
+          action="Удалить"
+          onClose={() => setBulk(null)}
+          onYes={async () => {
+            setBulk(null);
+            let r = { deleted: 0, locked: [] as number[] };
+            if (await write(async () => { r = await api("POST", `${paths.cases(p)}/bulk-delete`, { nums: shown.map((c) => c.num) }); })) {
+              toast(`Удалено в корзину: ${r.deleted}${r.locked.length ? `, в заблокированных планах (остались): ${r.locked.length}` : ""}`);
+              setPicked(new Set());
+            }
+          }}
+        />
+      )}
       {importing && <ImportModal pid={p} onClose={() => setImporting(false)} />}
       <div className="cases-layout">
       {(all.length > 0 || data.folders.some((f) => f.pid === p)) && <FolderTree pid={p} cases={scoped} sel={sel} onSelect={(s) => { setFolderSel(s); setPicked(new Set()); }} />}
@@ -142,6 +160,8 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
             <FolderOptions pid={p} rootLabel="— корень проекта (без папки) —" />
           </select>
           <button className="btn primary sm" onClick={move}>Переместить</button>
+          <button className="btn sm" onClick={() => setBulk("edit")}>Изменить…</button>
+          {canDelete && <button className="btn sm danger" onClick={() => setBulk("delete")}>Удалить</button>}
           <button className="btn sm" onClick={() => setPicked(new Set())}>Снять выделение</button>
         </div>
       )}
@@ -585,5 +605,47 @@ function Versions({ c }: { c: TestCase }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Массовое изменение выбранных кейсов: каждый изменённый кейс получает новую версию
+function BulkEditModal({ pid, nums, tags, onClose }: { pid: string; nums: number[]; tags: string[]; onClose: (done: boolean) => void }) {
+  const { write, toast } = useStore();
+  const [f, setF] = useState({ status: "", priority: "", add: [] as string[], remove: [] as string[] });
+  const empty = !f.status && !f.priority && !f.add.length && !f.remove.length;
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    let r = { changed: 0, skipped: 0 };
+    const body = { nums, status: f.status || undefined, priority: f.priority || undefined, addTags: f.add, removeTags: f.remove };
+    if (await write(async () => { r = await api("POST", `${paths.cases(pid)}/bulk`, body); })) {
+      toast(`Изменено кейсов: ${r.changed}${r.skipped ? `, без изменений: ${r.skipped}` : ""}`);
+      onClose(true);
+    }
+  }
+  return (
+    <Modal onClose={() => onClose(false)}>
+      <form onSubmit={submit} id="bulkForm">
+        <h2>Изменить выбранные кейсы ({nums.length})</h2>
+        <p className="muted small" style={{ marginTop: 0 }}>Пустые поля не меняются. Каждый изменённый кейс получит новую версию.</p>
+        <div className="row2">
+          <div className="field"><label htmlFor="bk-status">Статус</label>
+            <select id="bk-status" className="input" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
+              <option value="">Не менять</option>
+              {CASE_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+            </select></div>
+          <div className="field"><label htmlFor="bk-prio">Приоритет</label>
+            <select id="bk-prio" className="input" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })}>
+              <option value="">Не менять</option>
+              {PRIORITIES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+            </select></div>
+        </div>
+        <div className="field"><label htmlFor="bk-add">Добавить теги</label><TagInput id="bk-add" value={f.add} onChange={(v) => setF({ ...f, add: v })} suggestions={tags} /></div>
+        <div className="field"><label htmlFor="bk-rm">Убрать теги</label><TagInput id="bk-rm" value={f.remove} onChange={(v) => setF({ ...f, remove: v })} suggestions={tags} /></div>
+        <div className="acts">
+          <button type="button" className="btn" onClick={() => onClose(false)}>Отмена</button>
+          <button type="submit" className="btn primary" disabled={empty}>Применить</button>
+        </div>
+      </form>
+    </Modal>
   );
 }

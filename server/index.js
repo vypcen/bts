@@ -484,6 +484,68 @@ app.post("/api/projects/:key/cases/:num/check", auth.requireUser, wrap(async (re
   res.json({ ok: true });
 }));
 
+// Массовое изменение выбранных кейсов: статус, приоритет, теги (добавить / убрать), пользовательские поля.
+// Каждый изменённый кейс получает новую версию, как при ручной правке. До 1000 кейсов за раз
+const CASE_STATUSES = ["draft", "ready", "deprecated"];
+const CASE_PRIORITIES = ["low", "medium", "high"];
+app.post("/api/projects/:key/cases/bulk", auth.requireUser, wrap(async (req, res) => {
+  const key = req.params.key;
+  const nums = [...new Set((Array.isArray(req.body.nums) ? req.body.nums : []).map(num).filter(Boolean))].slice(0, 1000);
+  if (!nums.length) return res.status(400).json({ error: "Выберите хотя бы один тест-кейс" });
+  const { status, priority } = req.body;
+  if (status !== undefined && !CASE_STATUSES.includes(status)) return res.status(400).json({ error: `Статус: ${CASE_STATUSES.join(", ")}` });
+  if (priority !== undefined && !CASE_PRIORITIES.includes(priority)) return res.status(400).json({ error: `Приоритет: ${CASE_PRIORITIES.join(", ")}` });
+  const add = casemodel.normalizeTags(req.body.addTags || []) || [];
+  const removeTags = new Set(casemodel.normalizeTags(req.body.removeTags || []) || []);
+  const patch = req.body.fields;
+  if (status === undefined && priority === undefined && !add.length && !removeTags.size && !patch) return res.status(400).json({ error: "Укажите, что изменить" });
+  const members = patch ? await memberLogins(key) : null;
+  const out = await tx(async (db) => {
+    const { rows } = await db.query("SELECT id, num, status, priority, tags, fields FROM test_cases WHERE project_key=$1 AND num = ANY($2::int[]) FOR UPDATE", [key, nums]);
+    let changed = 0;
+    for (const c of rows) {
+      const tags = [...new Set([...c.tags, ...add])].filter((t) => !removeTags.has(t));
+      let fields = c.fields;
+      if (patch) {
+        const cf = await casemodel.readFields(db, key, "case", patch, c.fields, { members });
+        if (cf.error) return { status: 400, error: `${key}-${c.num}: ${cf.error}` };
+        fields = cf.fields;
+      }
+      const same = (status ?? c.status) === c.status && (priority ?? c.priority) === c.priority
+        && JSON.stringify(tags) === JSON.stringify(c.tags) && JSON.stringify(fields) === JSON.stringify(c.fields);
+      if (same) continue;
+      await db.query("UPDATE test_cases SET status=$2, priority=$3, tags=$4, fields=$5, updated_by=$6, updated_at=now() WHERE id=$1",
+        [c.id, status ?? c.status, priority ?? c.priority, tags, fields, req.user.id]);
+      changed++;
+    }
+    return { changed, found: rows.length };
+  });
+  if (out.error) return res.status(out.status).json({ error: out.error });
+  if (out.changed) broadcast("cases");
+  res.json({ changed: out.changed, skipped: nums.length - out.changed });
+}));
+
+// Массовое удаление в корзину. Кейсы из заблокированных планов пропускаются
+app.post("/api/projects/:key/cases/bulk-delete", auth.requireUser, wrap(async (req, res) => {
+  const key = req.params.key;
+  const nums = [...new Set((Array.isArray(req.body.nums) ? req.body.nums : []).map(num).filter(Boolean))].slice(0, 1000);
+  if (!nums.length) return res.status(400).json({ error: "Выберите хотя бы один тест-кейс" });
+  const locked = new Set((await pool.query(
+    `SELECT DISTINCT c.num FROM plan_cases pc JOIN test_plans p ON p.id=pc.plan_id JOIN test_cases c ON c.id=pc.case_id
+     WHERE c.project_key=$1 AND c.num = ANY($2::int[]) AND p.locked`, [key, nums]
+  )).rows.map((r) => r.num));
+  let deleted = 0;
+  for (const n of nums) {
+    if (locked.has(n)) continue;
+    const r = await trash.remove(req, "case", n);
+    if (!r) continue;
+    deleted++;
+    events.emit(key, "case.deleted", { case: { id: `${key}-${n}`, num: n, title: r.title } }, req.user);
+  }
+  if (deleted) broadcast("cases");
+  res.json({ deleted, locked: [...locked] });
+}));
+
 app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, res) => {
   const locked = await pool.query(
     `SELECT p.num FROM plan_cases pc JOIN test_plans p ON p.id=pc.plan_id JOIN test_cases c ON c.id=pc.case_id

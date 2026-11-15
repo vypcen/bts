@@ -357,6 +357,38 @@ test("перезапуск упавших: новый прогон из упав
   assert.equal((await u.tester.post(`/api/projects/LK/runs/${rerun}/rerun`, { results: ["passed"] })).status, 409);
 });
 
+test("массовое изменение кейсов: статус, приоритет, теги, поля; новая версия; удаление в корзину", async () => {
+  const mk = async (title, tags) => (await u.tester.post("/api/projects/LK/cases", { title, priority: "low", status: "draft", tags })).data.num;
+  const a = await mk("Массово А", ["smoke"]);
+  const b = await mk("Массово Б", ["smoke", "old"]);
+  const c = await mk("Массово В", []);
+  const field = (await u.tester.post("/api/projects/LK/fields", { entity: "case", name: "Платформа", type: "select", options: ["web", "ios"] })).data;
+  const fid = field.id ?? field.field?.id;
+  let r = await u.tester.post("/api/projects/LK/cases/bulk", { nums: [a, b, c], status: "ready", priority: "high", addTags: ["regress"], removeTags: ["old"], fields: { [fid]: "web" } });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.changed, 3);
+  const items = (await u.tester.get("/api/projects/LK/cases?q=" + encodeURIComponent("Массово"))).data.items;
+  const byNum = Object.fromEntries(items.map((x) => [x.num, x]));
+  assert.deepEqual([byNum[a].status, byNum[a].priority], ["ready", "high"]);
+  assert.deepEqual(byNum[a].tags.sort(), ["regress", "smoke"]);
+  assert.deepEqual(byNum[b].tags.sort(), ["regress", "smoke"]);
+  assert.equal(byNum[c].fields[fid], "web");
+  const hist = (await u.tester.get(`/api/projects/LK/cases/${a}/history`)).data;
+  const full = (await u.tester.get(`/api/projects/LK/cases/${a}`)).data;
+  assert.equal(full.version, 2, "новая версия");
+  assert.ok(hist);
+  // повтор ничего не меняет
+  r = await u.tester.post("/api/projects/LK/cases/bulk", { nums: [a, b, c], status: "ready" });
+  assert.equal(r.data.changed, 0);
+  assert.equal((await u.tester.post("/api/projects/LK/cases/bulk", { nums: [a], status: "bad" })).status, 400);
+  assert.equal((await u.viewer.post("/api/projects/LK/cases/bulk", { nums: [a], status: "draft" })).status, 403);
+  r = await u.tester.post("/api/projects/LK/cases/bulk-delete", { nums: [b, c] });
+  assert.equal(r.data.deleted, 2);
+  assert.equal((await u.tester.get(`/api/projects/LK/cases/${b}`)).status, 404);
+  const trash = (await u.tester.get("/api/projects/LK/trash")).data;
+  assert.ok((trash.items || trash).filter((t) => /Массово/.test(t.title)).length >= 2);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);

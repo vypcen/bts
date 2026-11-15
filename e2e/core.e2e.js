@@ -263,3 +263,19 @@ test("152-ФЗ: админ обезличивает пользователя и�
   await expect(page.getByRole("row", { name: /Удалённый пользователь/ })).toBeVisible();
   await expect(page.getByRole("row", { name: /Уходящий Сотрудник/ })).toHaveCount(0);
 });
+
+test("массовое изменение: выбрать кейсы, поставить статус и тег", async ({ page }) => {
+  await login(page);
+  for (const t of ["E2E массово 1", "E2E массово 2"]) await page.request.post("/api/projects/LK/cases", { data: { title: t, priority: "low", status: "draft" } });
+  await page.goto("/#/p/LK/cases");
+  for (const t of ["E2E массово 1", "E2E массово 2"]) await page.getByRole("row", { name: new RegExp(t) }).getByRole("checkbox").check();
+  await expect(page.getByText("Выбрано: 2")).toBeVisible();
+  await page.getByRole("button", { name: "Изменить…" }).click();
+  await page.locator("#bulkForm").getByLabel("Статус").selectOption("ready");
+  await page.locator("#bulkForm").getByLabel("Добавить теги").fill("массовый");
+  await page.locator("#bulkForm").getByLabel("Добавить теги").press("Enter");
+  await page.locator("#bulkForm").getByRole("button", { name: "Применить" }).click();
+  await expect(page.getByText("Изменено кейсов: 2")).toBeVisible();
+  const items = (await (await page.request.get("/api/projects/LK/cases?q=" + encodeURIComponent("E2E массово"))).json()).items;
+  expect(items.every((c) => c.status === "ready" && c.tags.includes("массовый"))).toBe(true);
+});
