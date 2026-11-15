@@ -32,7 +32,7 @@ async function runData(key, n) {
   const run = runs[0];
   if (!run) throw new HttpError(404, "Прогон не найден");
   const { rows: results } = await pool.query(
-    `SELECT c.num, c.title, c.priority, c.kind, rr.result, rr.comment, rr.step_results, rr.executed_at, eu.name AS executor, au.name AS assignee,
+    `SELECT c.num, c.title, c.priority, c.kind, rr.result, rr.comment, rr.step_results, rr.iterations, rr.iter_results, rr.executed_at, eu.name AS executor, au.name AS assignee,
        expand_steps(COALESCE(v.step_list, c.step_list)) AS step_list
      FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
      LEFT JOIN test_case_versions v ON v.case_id=c.id AND v.version=rr.case_version
@@ -49,7 +49,7 @@ async function runData(key, n) {
       ["Сборка", run.build || "—"], ["Окружение", run.environment || "—"], ["Создал", run.author || "—"],
       ["Начат", fmtDate(run.created_at)], ["Закрыт", run.state === "closed" ? fmtDate(run.closed_at) : "идёт"],
     ],
-    results, bugs,
+    results: withIterations(results), bugs,
   };
 }
 
@@ -60,7 +60,7 @@ async function planData(key, n) {
   if (!plan) throw new HttpError(404, "Тест-план не найден");
   // последний выполненный результат каждого кейса в прогонах этого плана
   const { rows: results } = await pool.query(
-    `SELECT DISTINCT ON (c.id) c.num, c.title, c.priority, c.kind, COALESCE(rr.result, 'untested') AS result, rr.comment, rr.step_results,
+    `SELECT DISTINCT ON (c.id) c.num, c.title, c.priority, c.kind, COALESCE(rr.result, 'untested') AS result, rr.comment, rr.step_results, rr.iterations, rr.iter_results,
        rr.executed_at, eu.name AS executor, au.name AS assignee, expand_steps(c.step_list) AS step_list, t.num AS run_num
      FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
      LEFT JOIN users eu ON eu.id=rr.executed_by LEFT JOIN users au ON au.id=rr.assignee_id
@@ -79,8 +79,23 @@ async function planData(key, n) {
       ["Прогоны", runs.map((r) => `${key}-R${r.num}${r.build ? ` (${r.build})` : ""}`).join(", ") || "—"],
       ["Режим", plan.mode === "dynamic" ? "динамический" : "статический"], ["Зафиксирован", plan.locked ? "да" : "нет"],
     ],
-    results, bugs,
+    results: withIterations(results), bugs,
   };
+}
+
+// Кейс с наборами данных: итоги итераций — в комментарий отчёта («Админ» — упал на шаге 2; «Гость» — пройден)
+const RES_RU = { untested: "не проверен", passed: "пройден", failed: "упал", blocked: "заблокирован", skipped: "пропущен" };
+function withIterations(rows) {
+  for (const r of rows) {
+    if (!Array.isArray(r.iterations) || !r.iterations.length) continue;
+    const lines = r.iterations.map((it, i) => {
+      const x = r.iter_results?.[i] || { result: "untested", steps: {} };
+      const bad = Object.entries(x.steps || {}).filter(([, m]) => m.result === "failed" || m.result === "blocked").map(([k, m]) => `шаге ${Number(k) + 1}${m.actual ? ` (${m.actual})` : ""}`);
+      return `«${it.name}» — ${RES_RU[x.result] || x.result}${bad.length ? ` на ${bad.join(", ")}` : ""}`;
+    });
+    r.comment = [r.comment, `Наборы данных: ${lines.join("; ")}`].filter(Boolean).join("\n");
+  }
+  return rows;
 }
 
 function summarize(d) {

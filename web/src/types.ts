@@ -99,6 +99,8 @@ export interface TestCase {
   light?: boolean;
   stepCount?: number; // число шагов, когда текстов нет
   stepSource?: Step[]; // шаги со ссылками на общие шаги — для редактора
+  params?: ParamTable; // своя таблица параметров
+  dataset?: Dataset; // или набор данных проекта
   review?: { reviewer: string | null; by: string | null }[]; // ожидают решения (reviewer null — любой с правом ревью)
 }
 
@@ -162,7 +164,14 @@ export interface Result {
   assignee: string | null; // кому назначен кейс в прогоне
   caseVersion: number | null; // какая версия кейса проверялась
   steps: Record<string, StepResult>; // результаты шагов тест-кейса: {номер шага с 0: …}
+  iterations?: ParamRow[]; // кейс с параметрами: снимок наборов на момент добавления в прогон
+  iterResults?: Record<string, { result: ResultValue; steps: Record<string, StepResult> }>; // результаты по наборам {"0": …}
 }
+
+// Параметры кейса: в шагах {{имя}} заменяется значением из набора
+export interface ParamRow { name: string; values: Record<string, string> }
+export interface ParamTable { columns: string[]; rows: ParamRow[] }
+export interface Dataset extends ParamTable { id: number; num: number; name: string; usedIn?: number; updatedBy?: string | null; updated?: number }
 
 export interface Bug {
   id: string;

@@ -366,3 +366,36 @@ test("ревью: автор отправляет кейс на ревью, ре
   await expect(rd.getByLabel("Статус кейса")).toHaveValue("ready");
   await ctx.close();
 });
+
+test("параметры кейса: таблица в редакторе, итерации по наборам в прогоне с подстановкой значений", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const n = (await (await api.post("/api/projects/LK/cases", { data: { title: "Вход ролью", priority: "high", status: "ready", stepList: [{ action: "Войти как {{login}}", expected: "Кабинет открыт" }] } })).json()).num;
+  // параметры через редактор
+  await page.goto(`/#/p/LK/cases/${n}`);
+  await page.locator("aside.drawer").getByRole("button", { name: "Редактировать" }).click();
+  const form = page.locator("aside.drawer");
+  await form.getByLabel("Своя таблица").check();
+  await form.getByLabel("Новый параметр").fill("login");
+  await form.getByRole("button", { name: "+ Параметр" }).click();
+  await form.getByRole("button", { name: "+ Набор" }).click();
+  await form.getByRole("button", { name: "+ Набор" }).click();
+  await form.getByLabel("login, Набор 1").fill("admin");
+  await form.getByLabel("login, Набор 2").fill("guest");
+  await form.getByRole("button", { name: "Сохранить", exact: true }).click();
+  await expect(page.locator("aside.drawer").getByText("Параметры · 2 наб.")).toBeVisible();
+
+  const run = (await (await api.post("/api/projects/LK/runs", { data: { title: "Роли", caseNums: [n] } })).json()).num;
+  await page.goto(`/#/p/LK/runs/${run}`);
+  await page.getByText("Вход ролью").click();
+  const d = page.locator("aside.drawer");
+  await expect(d.getByText("Войти как admin")).toBeVisible();
+  await d.getByRole("group", { name: "Результат набора Набор 1" }).getByRole("button", { name: "Пройден" }).click();
+  await d.getByRole("tab", { name: /Набор 2/ }).click();
+  await expect(d.getByText("Войти как guest")).toBeVisible();
+  await d.getByRole("group", { name: "Результат шага 1" }).getByRole("button", { name: "Упал" }).click();
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results[0].result).toBe("failed");
+  const res = (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results[0];
+  expect(res.iterResults["0"].result).toBe("passed");
+  expect(res.iterResults["1"].steps["0"].result).toBe("failed");
+});

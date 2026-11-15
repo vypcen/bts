@@ -16,6 +16,7 @@ const caseSql = `SELECT c.project_key, c.num, c.kind, c.checked, c.folder_id, c.
   expand_steps(c.step_list) AS step_list, c.step_list AS step_source, c.tags, c.fields,
   EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id) AS automated,
   cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at,
+  c.params, c.dataset_id, (SELECT json_build_object('id', ds.id, 'num', ds.num, 'name', ds.name, 'columns', ds.columns, 'rows', ds.rows) FROM datasets ds WHERE ds.id=c.dataset_id) AS dataset,
   CASE WHEN c.status='review' THEN (SELECT json_agg(json_build_object('reviewer', ru.login, 'by', qu.login) ORDER BY r.id) FROM case_reviews r
     LEFT JOIN users ru ON ru.id=r.reviewer_id LEFT JOIN users qu ON qu.id=r.requested_by WHERE r.case_id=c.id AND r.status='pending') END AS review
   FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by`;
@@ -27,16 +28,20 @@ const toCase = (r) => ({
   createdBy: r.created_by, updatedBy: r.updated_by, version: r.version, automated: r.automated,
   // ожидающие решения рецензенты (reviewer null — любой с правом ревью)
   review: r.review || undefined,
+  // параметры: своя таблица или набор данных проекта ({id, num, name, columns, rows})
+  params: r.params || undefined, dataset: r.dataset || undefined,
   created: r.created_at.getTime(), updated: r.updated_at.getTime(),
 });
 
 const resultSql = `SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, rr.items, rr.step_results, u.login AS executed_by, rr.executed_at,
-    au.login AS assignee, rr.case_version
+    au.login AS assignee, rr.case_version, rr.iterations, rr.iter_results
   FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
   LEFT JOIN users u ON u.id=rr.executed_by LEFT JOIN users au ON au.id=rr.assignee_id`;
 const toResult = (r) => ({
   id: r.id, pid: r.project_key, runNum: r.run_num, caseNum: r.case_num, result: r.result, comment: r.comment, items: r.items, steps: r.step_results,
   executedBy: r.executed_by, executed: ms(r.executed_at), assignee: r.assignee, caseVersion: r.case_version,
+  // итерации кейса с параметрами: снимок наборов [{name, values}] и результаты {"0": {result, steps}}
+  iterations: r.iterations || undefined, iterResults: r.iterations ? r.iter_results : undefined,
 });
 
 const attachmentSql = `SELECT a.id, COALESCE(b.project_key, t.project_key) AS project_key, b.num AS bug_num, a.run_result_id, a.step_index,

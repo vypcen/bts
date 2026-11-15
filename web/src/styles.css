@@ -392,3 +392,11 @@ label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;font-
 .step-row.shared-ref{background:var(--accent-soft);border-radius:var(--r)}
 .step-row.shared-ref .step-cells{display:flex;flex-direction:column;gap:2px;justify-content:center}
 .shared-label{color:var(--accent);font-weight:600;margin:6px 0 2px}
+
+/* наборы данных (параметры кейса) */
+.params-tbl table{min-width:0}
+.params-tbl td,.params-tbl th{padding:6px 8px}
+.params-editor .input{min-width:90px}
+.iter-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.iter-tab{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px;font:inherit;font-size:13px;cursor:pointer}
+.iter-tab.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
