@@ -52,6 +52,16 @@ function readSteps(list, budget = { left: MAX_STEPS }, depth = 0) {
 // Для реестра нужны только названия шагов
 const stepTitles = (steps) => steps.map((s) => ({ title: s.title, steps: stepTitles(s.steps) }));
 
+// Номера ручных кейсов, которые проверяет автотест: явный список cases (репортер Playwright: теги и аннотации,
+// Allure: метки) и номера вида LK-12 / @LK-12 в названии теста или набора (так их пишут в JUnit, pytest, Jest).
+// Чужие проекты отсекаются при сохранении — связь ставится только с кейсом этого проекта
+const CASE_REF = /(?<![\w-])@?([A-Z][A-Z0-9]{1,9}-\d{1,7})(?![\w-])/g;
+function caseRefsOf(x, t) {
+  const list = Array.isArray(x.cases) ? x.cases.slice(0, 20).map((c) => String(c).toUpperCase().replace(/^@/, "")) : [];
+  for (const m of `${t.suite} ${t.name}`.matchAll(CASE_REF)) list.push(m[1]);
+  return [...new Set(list.filter((c) => /^[A-Z][A-Z0-9]*-\d+$/.test(c)))];
+}
+
 function readResult(x) {
   if (!x || typeof x !== "object") return null;
   const t = {
@@ -70,6 +80,7 @@ function readResult(x) {
   if (!t.name || !STATUSES.includes(t.status)) return null;
   // по этому ключу тест узнаётся в следующих запусках и не создаётся повторно
   t.key = t.suite ? `${t.suite} › ${t.name}` : t.name;
+  t.cases = caseRefsOf(x, t);
   return t;
 }
 
@@ -179,7 +190,7 @@ router.post("/autoruns/:num/allure", wrap(async (req, res) => {
   if (list.length > MAX_BATCH) return res.status(413).json({ error: `Не больше ${MAX_BATCH} результатов за один запрос` });
   const converted = allure.convert(list);
   if (!converted.length) return res.status(400).json({ error: "Ни одного результата Allure: нужны name и status" });
-  const parsed = converted.map((x) => ({ ...readResult(x), cases: x.cases }));
+  const parsed = converted.map((x) => readResult(x));
   const ids = await storeResults(req.params.key, num(req.params.num), parsed);
   if (!ids) return res.status(404).json({ error: "Запуск не найден" });
   broadcast("autoruns");

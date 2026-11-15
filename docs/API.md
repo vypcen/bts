@@ -923,6 +923,7 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 ## Нестабильные автотесты
 
 - У результата в `POST /autoruns/:num/results` есть необязательные поля `retries` (число повторных попыток) и `flaky` (прошёл не с первой).
+- **Связь с ручным кейсом:** необязательное поле `cases: ["LK-12"]`, а также номер вида `LK-12` или `@LK-12` в `name` или `suite` (так удобно в JUnit, pytest, Jest: `test_login[LK-12]`, `"вход @LK-12"`). Связь ставится с кейсом этого проекта, если автотест ещё ни с чем не связан; связь, выбранную вручную, отчёт не меняет.
 - После `PATCH /autoruns/:num {"state": "finished"}` нестабильность тестов запуска пересчитывается.
 - `GET /autotests` возвращает `flaky: {score, reason, since} | null`, `quarantined`, `caseNum`.
 - `PATCH /api/projects/:key/autotests/:id` — `{quarantined: bool, caseNum: число | null}`.

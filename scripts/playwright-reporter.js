@@ -187,6 +187,12 @@ class TestballReporter {
       retries: result.retry,
       flaky: outcome === "flaky",
       attachments: status === "failed" || status === "broken" ? result.attachments : [],
+      // связь с ручным кейсом: тег test("…", { tag: "@LK-12" }) или аннотация { type: "testball", description: "LK-12" }.
+      // Номер в названии теста («вход @LK-12») сервер найдёт и сам
+      cases: [
+        ...(test.tags || []).map((t) => t.replace(/^@/, "")),
+        ...test.annotations.filter((a) => a.type === "testball" || a.type === "tms").map((a) => String(a.description || "")),
+      ].filter((c) => /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(c)),
     };
   }
 

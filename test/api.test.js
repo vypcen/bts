@@ -285,6 +285,31 @@ test("метрики без METRICS_TOKEN выключены", async () => {
   assert.equal((await fetch(`${srv.base}/metrics`)).status, 404);
 });
 
+test("автотест связывается с кейсом по номеру в названии, тегу или списку cases; ручную связь не перезаписывает", async () => {
+  const mk = async (title) => (await u.tester.post("/api/projects/LK/cases", { title, priority: "high", status: "ready" })).data.num;
+  const [a, b, c, d] = [await mk("Связь: в названии"), await mk("Связь: в наборе"), await mk("Связь: cases"), await mk("Связь: ручная")];
+  const run = (await u.tester.post("/api/projects/LK/autoruns", { title: "Связи" })).data.num;
+  await u.tester.post(`/api/projects/LK/autoruns/${run}/results`, { results: [
+    { suite: "auth", name: `Вход по паролю @LK-${a}`, status: "passed" },
+    { suite: `[LK-${b}] Профиль`, name: "Смена имени", status: "failed" },
+    { name: "Оплата", status: "passed", cases: [`@LK-${c}`] },
+    { name: "Чужой проект PAY-12 и LKX-1 и XLK-1", status: "passed" },
+  ] });
+  const tests = (await u.tester.get("/api/projects/LK/autotests")).data;
+  const list = Array.isArray(tests) ? tests : tests.items || tests.tests;
+  const byName = (n) => list.find((t) => t.name === n);
+  assert.equal(byName(`Вход по паролю @LK-${a}`).caseNum, a);
+  assert.equal(byName("Смена имени").caseNum, b);
+  assert.equal(byName("Оплата").caseNum, c);
+  assert.equal(byName("Чужой проект PAY-12 и LKX-1 и XLK-1").caseNum, null);
+  // ручная связь остаётся, даже если в названии другой номер
+  const t = byName("Оплата");
+  await u.tester.patch(`/api/projects/LK/autotests/${t.id}`, { caseNum: d });
+  await u.tester.post(`/api/projects/LK/autoruns/${run}/results`, { results: [{ name: "Оплата", status: "failed", cases: [`LK-${c}`] }] });
+  const again = (await u.tester.get("/api/projects/LK/autotests")).data;
+  assert.equal((Array.isArray(again) ? again : again.items || again.tests).find((x) => x.name === "Оплата").caseNum, d);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);
