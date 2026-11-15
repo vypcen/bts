@@ -22,7 +22,7 @@ const iso = (d) => (d ? d.toISOString() : null);
 // ---------- экспорт ----------
 async function exportProject(key, withFiles) {
   const q = (sql) => pool.query(sql, [key]).then((r) => r.rows);
-  const [project] = await q("SELECT key, name, description FROM projects WHERE key=$1");
+  const [project] = await q("SELECT key, name, description, review_required FROM projects WHERE key=$1");
   if (!project) throw new HttpError(404, "Проект не найден");
   const [customFields] = [await q("SELECT id, entity, name, type, options, required, position FROM custom_fields WHERE project_key=$1 ORDER BY entity, position, id")];
   // значения пользовательских полей — по названию поля: id в другой установке будут другими
@@ -85,7 +85,7 @@ async function exportProject(key, withFiles) {
 
   return {
     format: FORMAT, version: 1, exported: new Date().toISOString(),
-    project: { key: project.key, name: project.name, description: project.description },
+    project: { key: project.key, name: project.name, description: project.description, reviewRequired: project.review_required },
     folders: folders.map((f) => ({ id: f.id, parent: f.parent_id, name: f.name })),
     customFields: customFields.map((f) => ({ entity: f.entity, name: f.name, type: f.type, options: f.options, required: f.required, position: f.position })),
     cases: cases.map((c) => ({
@@ -177,6 +177,7 @@ async function importProject(data, { key, name }, user) {
         [key, name || str(data.project?.name, 200) || key, str(data.project?.description, 2000), maxNum(cases), maxNum(runs), maxNum(bugs),
           maxNum(autoruns), maxNum(plans), user.id]
       );
+      if (data.project?.reviewRequired === true) await db.query("UPDATE projects SET review_required=true WHERE key=$1", [key]);
       await db.query("INSERT INTO project_members(project_key, user_id) VALUES ($1,$2)", [key, user.id]);
 
       // папки: родители раньше детей

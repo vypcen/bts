@@ -14,7 +14,7 @@ const { isAdmin } = require("./access");
 const { wrap, str, num, HttpError } = require("./util");
 
 const PRIORITIES = ["critical", "high", "medium", "low"];
-const STATUSES = ["draft", "ready", "deprecated"];
+const STATUSES = ["draft", "review", "ready", "deprecated"];
 const KINDS = ["case", "checklist"];
 const RESULTS = ["untested", "passed", "failed", "blocked", "skipped"];
 

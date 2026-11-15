@@ -1,5 +1,5 @@
 // Формат ответа GET /api/state (server/index.js)
-export type CaseStatus = "draft" | "ready" | "deprecated";
+export type CaseStatus = "draft" | "review" | "ready" | "deprecated";
 export type Priority = "critical" | "high" | "medium" | "low";
 export type ResultValue = "untested" | "passed" | "failed" | "blocked" | "skipped";
 export type BugStatus = "new" | "in_progress" | "fixed" | "verified" | "closed" | "rejected" | "duplicate";
@@ -21,7 +21,7 @@ export interface AutoStep {
 export type Role = "tester" | "developer" | "viewer" | "admin" | (string & {});
 export type ProjectRole = "tester" | "developer" | "viewer" | (string & {});
 export type Permission =
-  | "cases.edit" | "cases.delete" | "requirements.edit" | "plans.edit" | "runs.manage" | "runs.execute"
+  | "cases.edit" | "cases.delete" | "cases.review" | "requirements.edit" | "plans.edit" | "runs.manage" | "runs.execute"
   | "bugs.create" | "bugs.edit" | "bugs.status" | "bugs.delete" | "comments" | "ai" | "autotests.manage"
   | "trash.restore" | "settings" | "projects.create";
 // Откуда учётная запись: локальная или из каталога / SSO
@@ -47,6 +47,7 @@ export interface Project {
   createdBy: string | null;
   created: number;
   members: string[]; // логины участников; админы видят проект и без этого
+  reviewRequired?: boolean; // кейс становится «Готов» только после ревью
   memberRoles: Record<string, ProjectRole>; // роли участников в этом проекте (если отличаются от глобальной)
   myRole: Role; // действующая роль текущего пользователя в проекте
   myPermissions?: Permission[]; // что эта роль разрешает
@@ -98,6 +99,7 @@ export interface TestCase {
   light?: boolean;
   stepCount?: number; // число шагов, когда текстов нет
   stepSource?: Step[]; // шаги со ссылками на общие шаги — для редактора
+  review?: { reviewer: string | null; by: string | null }[]; // ожидают решения (reviewer null — любой с правом ревью)
 }
 
 export interface Run {
@@ -474,7 +476,7 @@ export interface Analytics {
   // предрасчёт: когда посчитано и идёт ли пересчёт в фоне
   computedAt?: number;
   refreshing?: boolean;
-  cases: { total: number; ready: number; draft: number; deprecated: number; checklists: number; automated: number; changed: number };
+  cases: { total: number; ready: number; draft: number; review?: number; deprecated: number; checklists: number; automated: number; changed: number };
   coverage: { executed: number; executedPct: number | null; automatedPct: number | null };
   execution: { day: string; result: ResultValue; n: number }[];
   runs: { num: number; title: string; state: string; created: number; counts: Record<Exclude<ResultValue, never>, number>; total: number; passRate: number | null }[];

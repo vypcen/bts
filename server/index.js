@@ -37,10 +37,11 @@ const version = require("./version");
 const license = require("./license");
 const security = require("./security");
 const shared = require("./shared");
+const review = require("./review");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
-const STATUSES = ["draft", "ready", "deprecated"];
+const STATUSES = ["draft", "review", "ready", "deprecated"];
 const PRIORITIES = ["critical", "high", "medium", "low"];
 const KEY_RE = /^[A-Z]{2,6}$/;
 // closed — зарегистрироваться самому нельзя, учётные записи создаёт админ («Пользователи» → «Новый пользователь»)
@@ -405,6 +406,8 @@ app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => 
   if (error) return res.status(400).json({ error });
   const badRef = await shared.checkRefs(req.params.key, c.stepList);
   if (badRef) return res.status(400).json({ error: badRef });
+  const gate = await review.gateStatus(req, null, c);
+  if (gate.error) return res.status(409).json({ error: gate.error });
   const cf = await casemodel.readFields(pool, req.params.key, "case", req.body.fields, {}, { members: await memberLogins(req.params.key) });
   if (cf.error) return res.status(400).json({ error: cf.error });
   const folder = await folders.folderId(pool, req.params.key, req.body.folder);
@@ -433,7 +436,7 @@ app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, re
   const n = num(req.params.num);
   // частичное обновление: можно прислать только status
   const { rows } = await pool.query(
-    `SELECT kind, folder_id, title, priority, status, preconditions AS pre, steps, expected, version, step_list, tags, fields
+    `SELECT id, kind, folder_id, title, priority, status, preconditions AS pre, steps, expected, version, step_list, tags, fields
      FROM test_cases WHERE project_key=$1 AND num=$2`, [req.params.key, n]);
   if (!rows[0]) return res.status(404).json({ error: "Тест-кейс не найден" });
   // шаги: прислали structure — берём её; прислали только текст — разбираем, сохраняя ожидаемые результаты; ничего — как были
@@ -442,6 +445,10 @@ app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, re
   if (error) return res.status(400).json({ error });
   const badRef = await shared.checkRefs(req.params.key, c.stepList);
   if (badRef) return res.status(400).json({ error: badRef });
+  // ревью: «На ревью» — только кнопкой, «Готов» в режиме согласования — через ревью, правка готового — снова черновик
+  const gate = await review.gateStatus(req, rows[0], c);
+  if (gate.error) return res.status(409).json({ error: gate.error });
+  c.status = gate.status;
   const cf = await casemodel.readFields(pool, req.params.key, "case", req.body.fields, rows[0].fields, { members: await memberLogins(req.params.key) });
   if (cf.error) return res.status(400).json({ error: cf.error });
   // folder: null — в корень проекта; не прислали — остаётся где был
@@ -460,8 +467,9 @@ app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, re
   );
   broadcast("cases");
   const version = upd.rows[0].version;
+  if (rows[0].status === "review" && c.status !== "review") await review.cancelPending(pool, [rows[0].id]);
   if (version !== rows[0].version) events.emit(req.params.key, "case.updated", { case: await events.snap.testCase(req.params.key, n), previousVersion: rows[0].version }, req.user);
-  res.json({ ok: true, version });
+  res.json({ ok: true, version, statusReset: gate.reset ? "draft" : undefined });
 }));
 
 // Отметить пункт чек-листа выполненным: {"item": "текст", "done": true | false}, или снять все отметки: {"reset": true}.
@@ -491,14 +499,18 @@ app.post("/api/projects/:key/cases/:num/check", auth.requireUser, wrap(async (re
 
 // Массовое изменение выбранных кейсов: статус, приоритет, теги (добавить / убрать), пользовательские поля.
 // Каждый изменённый кейс получает новую версию, как при ручной правке. До 1000 кейсов за раз
+// «На ревью» массово не ставится — только отправкой на ревью
 const CASE_STATUSES = ["draft", "ready", "deprecated"];
-const CASE_PRIORITIES = ["low", "medium", "high"];
+const CASE_PRIORITIES = PRIORITIES;
 app.post("/api/projects/:key/cases/bulk", auth.requireUser, wrap(async (req, res) => {
   const key = req.params.key;
   const nums = [...new Set((Array.isArray(req.body.nums) ? req.body.nums : []).map(num).filter(Boolean))].slice(0, 1000);
   if (!nums.length) return res.status(400).json({ error: "Выберите хотя бы один тест-кейс" });
   const { status, priority } = req.body;
   if (status !== undefined && !CASE_STATUSES.includes(status)) return res.status(400).json({ error: `Статус: ${CASE_STATUSES.join(", ")}` });
+  if (status === "ready" && !access.can(req.projectRole, "cases.review") && (await review.required(pool, key))) {
+    return res.status(409).json({ error: "В этом проекте кейс становится готовым только после ревью" });
+  }
   if (priority !== undefined && !CASE_PRIORITIES.includes(priority)) return res.status(400).json({ error: `Приоритет: ${CASE_PRIORITIES.join(", ")}` });
   const add = casemodel.normalizeTags(req.body.addTags || []) || [];
   const removeTags = new Set(casemodel.normalizeTags(req.body.removeTags || []) || []);
@@ -521,6 +533,7 @@ app.post("/api/projects/:key/cases/bulk", auth.requireUser, wrap(async (req, res
       if (same) continue;
       await db.query("UPDATE test_cases SET status=$2, priority=$3, tags=$4, fields=$5, updated_by=$6, updated_at=now() WHERE id=$1",
         [c.id, status ?? c.status, priority ?? c.priority, tags, fields, req.user.id]);
+      if (c.status === "review" && status !== undefined && status !== "review") await review.cancelPending(db, [c.id]);
       changed++;
     }
     return { changed, found: rows.length };
@@ -606,7 +619,7 @@ app.post("/api/projects/:key/cases/:num/versions/:v/restore", auth.requireUser, 
 // подсказки языковой модели в формах; запись (черновики бага и кейса) — только тестировщикам, как и сами формы
 app.use("/api/projects/:key/ai", auth.requireUser, require("./assist"));
 app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, autotests.projectRouter, attachments.projectRouter);
-app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, review.router, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"), require("./personal").router, audit.router, trash.adminRouter);

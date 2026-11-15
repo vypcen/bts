@@ -9,7 +9,7 @@ const { normalizeSteps, normalizeTags } = require("./casemodel");
 const { wrap, str, num } = require("./util");
 
 const KINDS = ["case", "bug"];
-const PRIORITIES = ["low", "medium", "high"];
+const PRIORITIES = ["critical", "high", "medium", "low"];
 const STATUSES = ["draft", "ready", "deprecated"];
 const SEVERITIES = ["blocker", "critical", "major", "minor"];
 

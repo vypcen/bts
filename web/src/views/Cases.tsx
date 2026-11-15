@@ -11,6 +11,7 @@ import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } fr
 import { CaseRequirements } from "./Requirements";
 import { SaveAsTemplate, TemplatePicker } from "./Templates";
 import { SharedStepsModal } from "./SharedSteps";
+import { ReviewBlock, statusOptions, useMyReviews, useReviewGate } from "./Review";
 import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, Modal, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { ImportModal } from "./CaseImport";
@@ -49,6 +50,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const { write, toast } = useStore();
   const canEdit = useCan("cases.edit");
   const canDelete = useCan("cases.delete");
+  const myReviews = useMyReviews(p);
   // выбранную папку могли удалить в другой вкладке или другие участники
   const sel: FolderSel = typeof folderSel === "number" && !data.folders.some((f) => f.id === folderSel) ? "all" : folderSel;
 
@@ -60,7 +62,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const bugsByCase = new Map<number, typeof data.bugs>();
   for (const b of data.bugs) if (b.pid === p && b.caseNum !== null && isOpenBug(b.status)) bugsByCase.set(b.caseNum, [...(bugsByCase.get(b.caseNum) || []), b]);
   const openBugs = (c: TestCase) => bugsByCase.get(c.num) || [];
-  const scoped = all.filter((c) => (fStatus === "all" || (fStatus === "active" ? c.status !== "deprecated" : c.status === fStatus)) && (fPrio === "all" || c.priority === fPrio)
+  const scoped = all.filter((c) => (fStatus === "all" || (fStatus === "active" ? c.status !== "deprecated" : fStatus === "my-review" ? Boolean(myReviews?.has(c.num)) : c.status === fStatus)) && (fPrio === "all" || c.priority === fPrio)
     && (!fTag || c.tags?.includes(fTag)) && fieldMatch(c));
   const base = scoped.filter(inFolder(data, sel));
   const needle = q.trim().toLowerCase();
@@ -143,6 +145,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
           <option value="active">Кроме устаревших</option>
           <option value="all">Любой статус</option>
           {CASE_STATUSES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+          {myReviews && <option value="my-review">Мне на ревью{myReviews.size ? ` (${myReviews.size})` : ""}</option>}
         </select>
         {projectTags.length > 0 && (
           <select className="input" aria-label="Тег" value={fTag} onChange={(e) => setFTag(e.target.value)}>
@@ -307,6 +310,7 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
   const canDelete = useCan("cases.delete");
   const canMark = useCan("runs.execute");
   const canBug = useCan("bugs.create");
+  const reviewGate = useReviewGate(c.pid);
   const { reload, toast } = useStore();
   const nameOf = useNames();
   const [resetting, setResetting] = useState(false);
@@ -364,12 +368,13 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
     >
       {c.folder !== null && <div className="view-block"><span className="label">Папка</span><span>{folderPath(data, c.folder)}</span></div>}
       <CaseRequirements pid={p} caseNum={c.num} />
+      <ReviewBlock c={c} />
       <div className="row2">
         <div className="view-block"><span className="label">Приоритет</span><Prio p={c.priority} /></div>
         <div className="view-block">
           <span className="label">Статус</span>
-          <select className="input" value={c.status} disabled={!canEdit} onChange={(e) => { const status = e.target.value; write(() => api("PATCH", paths.testCase(p, c.num), { status }), `Статус: ${find(CASE_STATUSES, status as TestCase["status"]).label}`); }}>
-            {CASE_STATUSES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
+          <select className="input" aria-label="Статус кейса" value={c.status} disabled={!canEdit} onChange={(e) => { const status = e.target.value; write(() => api("PATCH", paths.testCase(p, c.num), { status }), `Статус: ${find(CASE_STATUSES, status as TestCase["status"]).label}`); }}>
+            {statusOptions(c.status, reviewGate)}
           </select>
         </div>
       </div>
@@ -465,6 +470,7 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
 
 function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCase; kind: CaseKind; folder: number | null; onClose: () => void }) {
   const { write, toast } = useStore();
+  const reviewGate = useReviewGate(pid);
   // новый кейс по умолчанию попадает в папку, открытую в дереве
   const [f, setF] = useState({
     kind, title: c?.title || "", priority: c?.priority || "medium", status: c?.status || "draft",
@@ -502,7 +508,10 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
     const body = { ...rest, ...(list ? {} : { stepList: stepList.filter((s) => isRef(s) || s.action.trim() || s.expected.trim()).map((s) => (isRef(s) ? { shared: s.shared } : s)) }), folder: f.folder ? Number(f.folder) : null };
     if (c) {
       // baseVersion: если кейс успели поменять, сервер не даст затереть чужую правку
-      if (await write(() => api("PATCH", paths.testCase(pid, c.num), { ...body, baseVersion: c.version }), "Изменения сохранены")) {
+      let reset = false;
+      if (await write(async () => { reset = Boolean((await api<{ statusReset?: string }>("PATCH", paths.testCase(pid, c.num), { ...body, baseVersion: c.version })).statusReset); },
+        "Изменения сохранены")) {
+        if (reset) toast("Кейс изменён после утверждения и снова стал черновиком — отправьте его на ревью");
         onClose();
         go("p", pid, "cases", c.num);
       }
@@ -542,7 +551,7 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
           <div className="field"><label htmlFor="c-prio">Приоритет</label>
             <select className="input" id="c-prio" value={f.priority} onChange={set("priority")}>{PRIORITIES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</select></div>
           <div className="field"><label htmlFor="c-status">Статус</label>
-            <select className="input" id="c-status" value={f.status} onChange={set("status")}>{CASE_STATUSES.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}</select></div>
+            <select className="input" id="c-status" value={f.status} onChange={set("status")}>{statusOptions(f.status as TestCase["status"], reviewGate && c?.status !== "ready")}</select></div>
         </div>
         {aiReady && (
           <AiBar busy={ai.busy} onRun={draft} label="Заполнить по названию"
@@ -623,6 +632,7 @@ function Versions({ c }: { c: TestCase }) {
 // Массовое изменение выбранных кейсов: каждый изменённый кейс получает новую версию
 function BulkEditModal({ pid, nums, tags, onClose }: { pid: string; nums: number[]; tags: string[]; onClose: (done: boolean) => void }) {
   const { write, toast } = useStore();
+  const reviewGate = useReviewGate(pid);
   const [f, setF] = useState({ status: "", priority: "", add: [] as string[], remove: [] as string[] });
   const empty = !f.status && !f.priority && !f.add.length && !f.remove.length;
   async function submit(e: FormEvent) {
@@ -643,7 +653,7 @@ function BulkEditModal({ pid, nums, tags, onClose }: { pid: string; nums: number
           <div className="field"><label htmlFor="bk-status">Статус</label>
             <select id="bk-status" className="input" value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
               <option value="">Не менять</option>
-              {CASE_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+              {CASE_STATUSES.filter((s) => s.key !== "review").map((s) => <option key={s.key} value={s.key} disabled={reviewGate && s.key === "ready"}>{s.label}{reviewGate && s.key === "ready" ? " — через ревью" : ""}</option>)}
             </select></div>
           <div className="field"><label htmlFor="bk-prio">Приоритет</label>
             <select id="bk-prio" className="input" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })}>

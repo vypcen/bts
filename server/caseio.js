@@ -48,7 +48,7 @@ const KIND = {
 const LABEL = {
   kind: { case: "Тест-кейс", checklist: "Чек-лист" },
   priority: { critical: "Критический", high: "Высокий", medium: "Средний", low: "Низкий" },
-  status: { draft: "Черновик", ready: "Готов", deprecated: "Устарел" },
+  status: { draft: "Черновик", review: "На ревью", ready: "Готов", deprecated: "Устарел" },
 };
 
 // ---------- CSV ----------

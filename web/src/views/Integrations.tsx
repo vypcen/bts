@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { FieldsSettings } from "./FieldsSettings";
 import { TemplatesSettings } from "./Templates";
+import { ReviewSettings } from "./Review";
 import { api, paths } from "../api";
 import { SEVERITIES } from "../labels";
 import { useCan, useLoad, useStore } from "../store";
@@ -14,6 +15,7 @@ export function IntegrationsTab({ project }: { project: Project }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       <FieldsSettings pid={project.id} />
+      <ReviewSettings pid={project.id} />
       <TemplatesSettings pid={project.id} />
       <Webhooks pid={project.id} />
       <TrackerSection pid={project.id} />

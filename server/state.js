@@ -15,7 +15,9 @@ const { wrap, num, ms } = require("./util");
 const caseSql = `SELECT c.project_key, c.num, c.kind, c.checked, c.folder_id, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected, c.version,
   expand_steps(c.step_list) AS step_list, c.step_list AS step_source, c.tags, c.fields,
   EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id) AS automated,
-  cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at
+  cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at,
+  CASE WHEN c.status='review' THEN (SELECT json_agg(json_build_object('reviewer', ru.login, 'by', qu.login) ORDER BY r.id) FROM case_reviews r
+    LEFT JOIN users ru ON ru.id=r.reviewer_id LEFT JOIN users qu ON qu.id=r.requested_by WHERE r.case_id=c.id AND r.status='pending') END AS review
   FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by`;
 const toCase = (r) => ({
   id: `${r.project_key}-${r.num}`, pid: r.project_key, num: r.num, kind: r.kind, checked: r.checked, folder: r.folder_id, title: r.title, priority: r.priority, status: r.status,
@@ -23,6 +25,8 @@ const toCase = (r) => ({
   // шаги для редактора: со ссылками на общие шаги вместо их содержимого
   stepSource: r.step_source && r.step_source.some((s) => s.shared) ? r.step_source : undefined,
   createdBy: r.created_by, updatedBy: r.updated_by, version: r.version, automated: r.automated,
+  // ожидающие решения рецензенты (reviewer null — любой с правом ревью)
+  review: r.review || undefined,
   created: r.created_at.getTime(), updated: r.updated_at.getTime(),
 });
 
@@ -51,7 +55,7 @@ async function meta(user) {
   const mine = (col) => `($1::text[] IS NULL OR ${col} = ANY($1::text[]))`;
   const [projects, users, plans, stats] = await Promise.all([
     // myRole — действующая роль текущего пользователя в проекте (роль в проекте или глобальная)
-    pool.query(`SELECT p.key, p.name, p.description, p.created_at, u.login AS created_by,
+    pool.query(`SELECT p.key, p.name, p.description, p.created_at, p.review_required, u.login AS created_by,
                   ARRAY(SELECT mu.login FROM project_members m JOIN users mu ON mu.id=m.user_id WHERE m.project_key=p.key ORDER BY mu.login) AS members,
                   COALESCE(json_object_agg(mu2.login, m2.role) FILTER (WHERE m2.role IS NOT NULL), '{}') AS member_roles,
                   CASE WHEN $3 = 'admin' THEN 'admin' ELSE COALESCE((SELECT role FROM project_members WHERE project_key=p.key AND user_id=$2), $3) END AS my_role
@@ -88,7 +92,7 @@ async function meta(user) {
       const s = statsOf[p.key] || {};
       return {
         id: p.key, name: p.name, desc: p.description, createdBy: p.created_by, created: p.created_at.getTime(), members: p.members,
-        memberRoles: p.member_roles, myRole: p.my_role, myPermissions: p.my_role === "admin" ? roles.ALL : [...roles.permsOf(p.my_role)],
+        memberRoles: p.member_roles, reviewRequired: p.review_required, myRole: p.my_role, myPermissions: p.my_role === "admin" ? roles.ALL : [...roles.permsOf(p.my_role)],
         stats: { cases: s.cases || 0, runs: s.runs || 0, bugs: s.bugs || 0, openBugs: s.open_bugs || 0, last: { ...empty, ...(s.last || {}) } },
       };
     }),

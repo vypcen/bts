@@ -7,6 +7,8 @@ const EVENTS = {
   "case.created": "Тест-кейс создан",
   "case.updated": "Тест-кейс изменён (новая версия)",
   "case.deleted": "Тест-кейс удалён",
+  "case.review_requested": "Тест-кейс отправлен на ревью",
+  "case.reviewed": "Ревью тест-кейса: решение",
   "run.created": "Прогон создан",
   "run.closed": "Прогон закрыт",
   "run.result": "Результат кейса в прогоне отмечен",

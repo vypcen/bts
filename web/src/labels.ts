@@ -5,6 +5,7 @@ type Def<K extends string> = { key: K; label: string; tone: Tone }[];
 
 export const CASE_STATUSES: Def<CaseStatus> = [
   { key: "draft", label: "Черновик", tone: "neutral" },
+  { key: "review", label: "На ревью", tone: "accent" },
   { key: "ready", label: "Готов", tone: "info" },
   { key: "deprecated", label: "Устарел", tone: "warn" },
 ];

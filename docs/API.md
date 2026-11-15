@@ -280,6 +280,19 @@ data: {"type":"bugs","pid":"LK","at":1761040000000}
 
 Нужно разрешение `cases.edit`. Ссылка на блок другого проекта при сохранении кейса — `400`. Блоки переносятся при экспорте и импорте проекта.
 
+### Ревью кейсов
+
+Статус кейса `review` («На ревью») ставится только отправкой на ревью. В ответе кейса на ревью есть `review: [{"reviewer": "petrova", "by": "ivanova"}]` (`reviewer: null` — любой с правом ревью); у проекта в `/api/state` — `reviewRequired`.
+
+- `POST /api/projects/:key/cases/:num/review` — `{"reviewers": ["petrova", "sidorov"], "comment": "Проверьте шаги"}` → `201`. Без `reviewers` — любому с правом `cases.review`. Прежние незавершённые заявки отменяются. Нужно `cases.edit`.
+- `POST /api/projects/:key/cases/:num/review/decision` — `{"decision": "approve" | "changes", "comment": "…"}` (при `changes` комментарий обязателен) → `{"status": "review" | "ready" | "draft", "left": 1}`. Когда утвердили все назначенные — кейс `ready`, при возврате — `draft`. Своё ревью — `409`. Нужно `cases.review`.
+- `GET /api/projects/:key/cases/:num/reviews` — история: `{"reviews": [{"id", "version", "status": "pending|approved|changes|cancelled", "reviewer", "requestedBy", "requestComment", "comment", "decidedBy", "created", "decided"}], "required": false}`.
+- `GET /api/projects/:key/reviews` — кейсы, ждущие решения текущего пользователя: `{"items": [{"num", "title", "requestedBy", "since", "assigned"}]}`.
+- `GET /api/projects/:key/reviewers` — кого можно назначить: `{"reviewers": [{"login", "name"}]}`.
+- `PUT /api/projects/:key/review-settings` — `{"required": true}`: «Готов» только после ревью. Тогда без `cases.review` перевод в `ready` (правкой, созданием или массово) — `409`, а правка содержимого готового кейса возвращает его в `draft` (в ответе `PATCH` — `"statusReset": "draft"`). Нужно `settings`.
+
+События вебхуков: `case.review_requested`, `case.reviewed`.
+
 ### Шаблоны: `/api/projects/:key/templates`
 
 - `GET ?kind=case|bug` — `{"templates": [{"id": 3, "kind": "case", "name": "API-проверка", "data": {...}, "isDefault": true, "createdBy": "ivanova", "updated": …}]}`.
@@ -714,7 +727,7 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 
 `{"permissions": [{"key": "cases.edit", "group": "Тест-кейсы", "label": "…"}, …], "viewPermissions": ["comments", "bugs.status", "ai"], "roles": [{"key": "tester", "name": "Тестировщик", "permissions": [...], "seat": "full", "builtin": true, "users": 12}, {"key": "r_3f9c1a7b2e", "name": "Тест-менеджер", …, "builtin": false}]}`
 
-Разрешения: `cases.edit`, `cases.delete`, `requirements.edit`, `plans.edit`, `runs.manage`, `runs.execute`, `bugs.create`, `bugs.edit`, `bugs.status`, `bugs.delete`, `comments`, `ai`, `autotests.manage`, `trash.restore`, `settings`, `projects.create`.
+Разрешения: `cases.edit`, `cases.delete`, `cases.review`, `requirements.edit`, `plans.edit`, `runs.manage`, `runs.execute`, `bugs.create`, `bugs.edit`, `bugs.status`, `bugs.delete`, `comments`, `ai`, `autotests.manage`, `trash.restore`, `settings`, `projects.create`.
 
 ### `POST /api/admin/roles`, `PATCH /api/admin/roles/:key`
 
@@ -942,7 +955,7 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 | `GET /api/projects/:key/webhooks/:id/deliveries` | Последние 50 доставок с запросом и ответом |
 | `POST /api/projects/:key/webhooks/:id/test` | `{event?}` — отправить пример, ответ получателя сразу |
 
-События: `case.created`, `case.updated`, `case.deleted`, `run.created`, `run.closed`, `run.result`, `bug.created`, `bug.updated`, `bug.status`, `plan.locked`, `plan.unlocked`, `autorun.created`, `autorun.finished`, `test.flaky`.
+События: `case.created`, `case.updated`, `case.deleted`, `case.review_requested`, `case.reviewed`, `run.created`, `run.closed`, `run.result`, `bug.created`, `bug.updated`, `bug.status`, `plan.locked`, `plan.unlocked`, `autorun.created`, `autorun.finished`, `test.flaky`.
 
 Тело события по умолчанию: `{event, title, at, project: {key, name}, actor: {login, name}, ...данные}`, где данные — `bug`, `run`, `case`, `autorun`, `test`, `from`/`to` (для `bug.status`). Заголовки запроса: `X-TestBall-Event`, `X-TestBall-Delivery`, `X-TestBall-Signature: sha256=<HMAC тела>`.
 

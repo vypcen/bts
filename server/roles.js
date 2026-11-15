@@ -10,6 +10,7 @@ const { pool } = require("./db");
 const PERMS = [
   { key: "cases.edit", group: "Тест-кейсы", label: "Создавать и изменять тест-кейсы, папки, импорт" },
   { key: "cases.delete", group: "Тест-кейсы", label: "Удалять тест-кейсы" },
+  { key: "cases.review", group: "Тест-кейсы", label: "Проводить ревью и утверждать кейсы" },
   { key: "requirements.edit", group: "Тест-кейсы", label: "Вести требования и их связи с кейсами" },
   { key: "plans.edit", group: "Прогоны", label: "Вести тест-планы" },
   { key: "runs.manage", group: "Прогоны", label: "Создавать, закрывать, удалять прогоны и распределять кейсы" },
@@ -70,6 +71,9 @@ const RULES = [
   [/^\/requirements(\/.*)?$/, "requirements.edit"],
   [/^\/templates(\/\d+)?$/, ["cases.edit", "settings"]],
   [/^\/shared-steps(\/\d+)?$/, "cases.edit"],
+  [/^\/cases\/\d+\/review$/, "cases.edit"],
+  [/^\/cases\/\d+\/review\/decision$/, "cases.review"],
+  [/^\/review-settings$/, "settings"],
   [/^\/plans\/preview$/, ["plans.edit", "runs.manage"]],
   [/^\/plans\/\d+\/runs$/, "runs.manage"],
   [/^\/plans(\/.*)?$/, "plans.edit"],

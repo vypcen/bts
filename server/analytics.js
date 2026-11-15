@@ -21,7 +21,7 @@ async function compute(key, days) {
   const [cases, execution, runs, bugsNow, bugFlow, autoRuns, topFailing, flaky, workload, coverage] = await Promise.all([
     // кейсы: всего, по статусу и виду, сколько автоматизировано
     q(`SELECT count(*)::int AS total,
-         count(*) FILTER (WHERE status='ready')::int AS ready, count(*) FILTER (WHERE status='draft')::int AS draft,
+         count(*) FILTER (WHERE status='ready')::int AS ready, count(*) FILTER (WHERE status='draft')::int AS draft, count(*) FILTER (WHERE status='review')::int AS review,
          count(*) FILTER (WHERE status='deprecated')::int AS deprecated, count(*) FILTER (WHERE kind='checklist')::int AS checklists,
          count(*) FILTER (WHERE EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id))::int AS automated,
          count(*) FILTER (WHERE updated_at > now() - make_interval(days => $2))::int AS changed

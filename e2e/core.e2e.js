@@ -284,7 +284,7 @@ test("шаблоны: шаблон по умолчанию заполняет н
   await login(page);
   await page.request.post("/api/projects/LK/templates", { data: { kind: "case", name: "E2E шаблон", isDefault: true, data: { pre: "Пользователь вошёл", priority: "high", tags: ["e2e-шаблон"] } } });
   await page.goto("/#/p/LK/cases");
-  await page.getByRole("button", { name: "+ Тест-кейс" }).click();
+  await page.getByRole("button", { name: "+ Тест-кейс" }).first().click();
   const form = page.locator("aside.drawer");
   await expect(form.locator("#tpl-case")).toHaveValue(/\d+/);
   await expect(form.getByLabel("Предусловия")).toHaveValue("Пользователь вошёл");
@@ -295,6 +295,7 @@ test("шаблоны: шаблон по умолчанию заполняет н
   await page.locator(".modal").getByRole("button", { name: "Сохранить" }).click();
   await expect(page.getByText("Шаблон «E2E из формы» сохранён")).toBeVisible();
   await form.getByRole("button", { name: "Создать" }).click();
+  await expect(page).toHaveURL(/#\/p\/LK\/cases\/\d+$/);
   const items = (await (await page.request.get("/api/projects/LK/cases?q=" + encodeURIComponent("Кейс по шаблону"))).json()).items;
   expect(items[0].priority).toBe("high");
   expect(items[0].tags).toContain("e2e-шаблон");
@@ -324,4 +325,37 @@ test("общие шаги: создать блок, вставить в кейс
   await expect(page.locator("aside.drawer").getByText("⧉ Общие шаги: E2E вход")).toBeVisible();
   await expect(page.locator("aside.drawer").getByText("Открыть вход")).toBeVisible();
   await expect(page.locator("aside.drawer").getByText("Открыть профиль")).toBeVisible();
+});
+
+test("ревью: автор отправляет кейс на ревью, рецензент возвращает, затем утверждает", async ({ page, browser }) => {
+  await login(page);
+  const n = (await (await page.request.post("/api/projects/LK/cases", { data: { title: "E2E на ревью", priority: "high", status: "draft", steps: "Открыть" } })).json()).num;
+  await page.goto(`/#/p/LK/cases/${n}`);
+  const drawer = page.locator("aside.drawer");
+  await drawer.getByRole("button", { name: "Отправить на ревью" }).click();
+  await page.locator(".modal").getByLabel("Админ").check();
+  await page.locator(".modal").getByLabel("Комментарий для рецензента").fill("Посмотри шаги");
+  await page.locator(".modal").getByRole("button", { name: "Отправить" }).click();
+  await expect(drawer.getByText("На ревью у Админ")).toBeVisible();
+  await expect(drawer.getByLabel("Статус кейса")).toHaveValue("review");
+
+  const ctx = await browser.newContext();
+  const rp = await ctx.newPage();
+  await login(rp, "admin");
+  await rp.goto("/#/p/LK/cases");
+  await rp.getByLabel("Статус", { exact: true }).selectOption("my-review");
+  await rp.getByText("E2E на ревью").click();
+  const rd = rp.locator("aside.drawer");
+  await rd.getByRole("button", { name: "Вернуть на доработку" }).click();
+  await rp.locator(".modal").getByLabel("Что поправить").fill("Добавь ожидаемый результат");
+  await rp.locator(".modal").getByRole("button", { name: "Вернуть" }).click();
+  await expect(rd.getByText("Добавь ожидаемый результат")).toBeVisible();
+  await expect(rd.getByLabel("Статус кейса")).toHaveValue("draft");
+
+  await page.request.post(`/api/projects/LK/cases/${n}/review`, { data: { reviewers: ["admin"] } });
+  await rp.reload();
+  await rd.getByRole("button", { name: "Утвердить" }).click();
+  await rp.locator(".modal").getByRole("button", { name: "Утвердить" }).click();
+  await expect(rd.getByLabel("Статус кейса")).toHaveValue("ready");
+  await ctx.close();
 });
