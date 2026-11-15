@@ -105,7 +105,7 @@ router.get("/requirements/matrix.csv", wrap(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT r.num, r.title, r.ext_ref, r.status, c.num AS case_num, c.title AS case_title, c.last_result,
        t.num AS run_num, rr.executed_at,
-       (SELECT string_agg('BUG-' || b.num, ', ' ORDER BY b.num) FROM bugs b WHERE b.case_id=c.id AND ${OPEN_BUGS}) AS bugs
+       (SELECT string_agg(b.project_key || '-B' || b.num, ', ' ORDER BY b.num) FROM bugs b WHERE b.case_id=c.id AND ${OPEN_BUGS}) AS bugs
      FROM requirements r
      LEFT JOIN requirement_cases rc ON rc.requirement_id=r.id
      LEFT JOIN test_cases c ON c.id=rc.case_id
@@ -119,7 +119,7 @@ router.get("/requirements/matrix.csv", wrap(async (req, res) => {
   let out = "﻿" + csvRow(["Требование", "Название", "Внешний ключ", "Статус", "Покрытие", "Тест-кейс", "Название кейса", "Последний результат", "Прогон", "Когда", "Открытые баги"]);
   for (const r of rows) {
     out += csvRow([
-      `R-${r.num}`, r.title, r.ext_ref, STATUS_LABELS[r.status], COVERAGE_LABELS[cov[r.num]],
+      `${key}-REQ${r.num}`, r.title, r.ext_ref, STATUS_LABELS[r.status], COVERAGE_LABELS[cov[r.num]],
       r.case_num ? `${key}-${r.case_num}` : "", r.case_title || "", r.case_num ? RESULT_LABELS[r.last_result] || r.last_result : "",
       r.run_num ? `#${r.run_num}` : "", r.executed_at ? r.executed_at.toISOString().slice(0, 16).replace("T", " ") : "", r.bugs || "",
     ]);

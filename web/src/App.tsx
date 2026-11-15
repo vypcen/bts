@@ -9,6 +9,7 @@ import { ProjectPage } from "./views/ProjectPage";
 import { Projects } from "./views/Projects";
 import { Settings } from "./views/Settings";
 import { Users } from "./views/Users";
+import { Help } from "./views/Help";
 import { SearchPalette, useSearchHotkey } from "./views/Search";
 import { roleOf } from "./labels";
 
@@ -46,6 +47,8 @@ export function App() {
         <Users />
       ) : section === "settings" ? (
         <Settings />
+      ) : section === "help" ? (
+        <Help page={key} anchor={tab} />
       ) : section === "p" && project && projectLoading ? (
         <main className="wrap"><div className="skel">Загружаем проект…</div></main>
       ) : section === "p" && project ? (
@@ -96,6 +99,7 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
           <span className="dot" />
           {liveError ? "Нет связи" : "Онлайн"}
         </span>
+        <a className="btn ghost" href={href("help", "user")} style={{ textDecoration: "none" }} title="Руководства пользователя и администратора, API">Справка</a>
         {me?.role === "admin" && <a className="btn" href={href("users")} style={{ textDecoration: "none" }}>Пользователи</a>}
         {me?.role === "admin" && <a className="btn" href={href("settings")} style={{ textDecoration: "none" }} title="Подключение языковой модели">Настройки</a>}
         {me && (

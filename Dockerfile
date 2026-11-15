@@ -24,6 +24,9 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY server ./server
 COPY scripts ./scripts
+# документация — для встроенной справки (кнопка «Справка»)
+COPY docs ./docs
+COPY README.md CHANGELOG.md .env.example ./
 COPY --from=web /public ./public
 # Папка для вложений: Docker volume при первом подключении наследует её владельца
 RUN mkdir -p /app/data/uploads && chown -R node:node /app/data

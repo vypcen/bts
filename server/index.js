@@ -496,6 +496,9 @@ app.use("/api/llm", auth.requireUser, llm.router);
 // подключения к языковым моделям (облачные сервисы и свои модели) — только администратор
 app.use("/api/admin/llm", auth.requireUser, access.requireAdmin, llm.adminRouter);
 
+// Встроенная справка (docs/, README, CHANGELOG) — для всех вошедших
+app.use("/api/help", auth.requireUser, require("./help").router);
+
 // Лицензия (админ): условия действующего ключа, ввод нового ключа, возврат к бесплатной редакции
 const licenseOut = (l) => ({ edition: l.edition, status: l.status, notice: l.notice, full: l.full, view: l.view, license: l.license || null, source: l.source });
 app.get("/api/admin/license", auth.requireUser, access.requireAdmin, wrap(async (_req, res) => {

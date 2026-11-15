@@ -188,3 +188,13 @@ test("требования: создать, связать с кейсом, ув
   await page.locator("aside.drawer").getByRole("link", { name: `LK-${kase.num}` }).click();
   await expect(page.locator("aside.drawer").getByRole("link", { name: /Корзина сохраняется/ })).toBeVisible();
 });
+
+test("справка: открывается из шапки, ссылка ведёт в нужный раздел другого документа", async ({ page }) => {
+  await login(page);
+  await page.getByRole("link", { name: "Справка" }).click();
+  await expect(page.getByRole("heading", { name: "Руководство пользователя TestBall QA" })).toBeVisible();
+  await page.locator(".help-doc").getByRole("link", { name: "руководство администратора", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Перенос данных из других систем" })).toBeInViewport();
+  await page.getByRole("navigation", { name: "Разделы справки" }).getByRole("link", { name: "API" }).click();
+  await expect(page.getByRole("heading", { name: "TestBall QA — HTTP API" })).toBeVisible();
+});

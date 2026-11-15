@@ -50,7 +50,7 @@ export function RequirementsTab({ project, openNum }: { project: Project; openNu
     const s = q.trim().toLowerCase();
     return (value?.items || []).filter(
       (r) =>
-        (!s || r.title.toLowerCase().includes(s) || r.extRef.toLowerCase().includes(s) || `r-${r.num}` === s) &&
+        (!s || r.title.toLowerCase().includes(s) || r.extRef.toLowerCase().includes(s) || `${p}-req${r.num}`.toLowerCase() === s || `req${r.num}` === s) &&
         (!cov || r.coverage === cov) &&
         (status ? r.status === status : r.status !== "obsolete")
     );
@@ -64,7 +64,7 @@ export function RequirementsTab({ project, openNum }: { project: Project; openNu
   return (
     <section>
       <div className="toolbar" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-        <input className="input" style={{ width: 240 }} placeholder="Поиск: название, ключ, R-12" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск требований" />
+        <input className="input" style={{ width: 240 }} placeholder="Поиск: название, ключ, номер" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск требований" />
         <select className="input" style={{ width: "auto" }} value={status} onChange={(e) => setStatus(e.target.value as ReqStatus | "")} aria-label="Статус">
           <option value="">Действующие</option>
           {REQ_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
@@ -97,7 +97,7 @@ export function RequirementsTab({ project, openNum }: { project: Project; openNu
             <tbody>
               {items.map((r) => (
                 <tr key={r.num} onClick={() => go("p", p, "reqs", r.num)} style={{ cursor: "pointer" }}>
-                  <td className="mono small">R-{r.num}</td>
+                  <td className="mono small">{p}-REQ{r.num}</td>
                   <td>
                     <Prio p={r.priority} /> {r.title}
                     {r.extRef && <span className="mono muted small" style={{ marginLeft: 6 }}>{r.extRef}</span>}
@@ -128,8 +128,8 @@ function RequirementDrawer({ project, base, req, onEdit, onClose }: { project: P
   const p = project.id;
   return (
     <Drawer
-      label={`Требование R-${req.num}`}
-      idTag={`R-${req.num}`}
+      label={`Требование ${p}-REQ${req.num}`}
+      idTag={`${p}-REQ${req.num}`}
       title={req.title}
       onClose={onClose}
       footer={canEdit && (
@@ -174,7 +174,7 @@ function RequirementDrawer({ project, base, req, onEdit, onClose }: { project: P
             <tbody>
               {value.bugs.map((b) => (
                 <tr key={b.num}>
-                  <td className="mono small"><a href={href("p", p, "bugs", String(b.num))}>BUG-{b.num}</a></td>
+                  <td className="mono small"><a href={href("p", p, "bugs", String(b.num))}>{p}-B{b.num}</a></td>
                   <td>{b.title}</td>
                   <td className="small">{find(BUG_STATUSES, b.status as never)?.label || b.status}</td>
                   <td className="mono small muted">{p}-{b.caseNum}</td>
@@ -186,11 +186,11 @@ function RequirementDrawer({ project, base, req, onEdit, onClose }: { project: P
       )}
       <p className="muted small">Создал {req.createdBy || "—"} {fmt(req.created)} · изменено {fmt(req.updated)}</p>
       {deleting && (
-        <Confirm title={`Удалить R-${req.num}?`} text="Требование и его связи с кейсами удалятся. Сами кейсы, результаты и баги останутся." action="Удалить"
+        <Confirm title={`Удалить ${p}-REQ${req.num}?`} text="Требование и его связи с кейсами удалятся. Сами кейсы, результаты и баги останутся." action="Удалить"
           onClose={() => setDeleting(false)}
           onYes={async () => {
             setDeleting(false);
-            if (await write(() => api("DELETE", `${base}/${req.num}`, {}), `R-${req.num} удалено`)) onClose();
+            if (await write(() => api("DELETE", `${base}/${req.num}`, {}), `${p}-REQ${req.num} удалено`)) onClose();
           }} />
       )}
     </Drawer>
@@ -217,14 +217,14 @@ function RequirementEditor({ project, base, req, onClose }: { project: Project; 
     e.preventDefault();
     const ok = await write(
       () => (req ? api("PATCH", `${base}/${req.num}`, f) : api("POST", base, f)),
-      req ? `R-${req.num} сохранено` : "Требование создано"
+      req ? `${p}-REQ${req.num} сохранено` : "Требование создано"
     );
     if (ok) onClose();
   }
   return (
     <Modal onClose={onClose} wide>
       <form onSubmit={submit} id="reqForm">
-        <h2>{req ? `R-${req.num}` : "Новое требование"}</h2>
+        <h2>{req ? `${p}-REQ${req.num}` : "Новое требование"}</h2>
         <div className="field"><label htmlFor="rq-title">Название *</label>
           <input id="rq-title" className="input" value={f.title} onChange={(e) => set("title", e.target.value)} autoFocus required maxLength={500} /></div>
         <div className="field"><label htmlFor="rq-desc">Описание</label>
@@ -372,7 +372,7 @@ export function CaseRequirements({ pid, caseNum }: { pid: string; caseNum: numbe
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {value.items.map((r) => (
           <a key={r.num} href={href("p", pid, "reqs", String(r.num))} className="small">
-            <span className="mono">R-{r.num}</span> {r.title}{r.extRef && <span className="mono muted"> · {r.extRef}</span>}
+            <span className="mono">{pid}-REQ{r.num}</span> {r.title}{r.extRef && <span className="mono muted"> · {r.extRef}</span>}
           </a>
         ))}
       </div>

@@ -153,3 +153,18 @@ test("лицензия: подпись, срок, льготный период,
   process.env.NODE_ENV = env;
   if (env === undefined) delete process.env.NODE_ENV;
 });
+
+test("справка: все документы открываются, ссылки между ними ведут на существующие разделы", () => {
+  const help = require("../server/help");
+  const rendered = Object.fromEntries(Object.keys(help.PAGES).map((k) => [k, help.render(k)]));
+  const broken = [];
+  for (const [page, html] of Object.entries(rendered)) {
+    for (const m of html.matchAll(/href="#\/help\/(\w+)(?:\/([^"]+))?"/g)) {
+      const target = rendered[m[1]];
+      if (!target) broken.push(`${page} → ${m[1]} (нет страницы)`);
+      else if (m[2] && !target.includes(`id="h-${decodeURIComponent(m[2])}"`)) broken.push(`${page} → ${m[1]}#${decodeURIComponent(m[2])}`);
+    }
+  }
+  assert.deepEqual(broken, []);
+  assert.equal(help.slug("Единый вход: OpenID Connect, LDAP / AD, Kerberos"), "единый-вход-openid-connect-ldap--ad-kerberos");
+});

@@ -268,6 +268,19 @@ test("требования: связь с кейсами, покрытие по 
   assert.equal((await u.viewer.get(`/api/projects/LK/requirements/${req2}`)).status, 404);
 });
 
+test("справка: доступна вошедшим, ссылки переписаны на страницы справки", async () => {
+  const anon = client(srv.base);
+  assert.equal((await anon.get("/api/help/user")).status, 401);
+  const list = (await u.viewer.get("/api/help")).data.pages.map((p) => p.key);
+  assert.ok(list.includes("user") && list.includes("admin") && list.includes("api"));
+  const r = await u.viewer.get("/api/help/user");
+  assert.equal(r.status, 200);
+  assert.match(r.data.html, /<h2 id="h-прогоны-как-проводить-тестирование">/);
+  assert.ok(r.data.html.includes(`href="#/help/admin/${encodeURIComponent("перенос-данных-из-других-систем")}"`));
+  assert.equal((await u.viewer.get("/api/help/secret")).status, 404);
+  assert.equal((await u.viewer.get("/api/help/..%2F..%2Fetc%2Fpasswd")).status, 404);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);
