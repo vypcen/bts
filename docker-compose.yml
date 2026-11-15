@@ -43,6 +43,9 @@ services:
     volumes:
       - ./import:/app/import:ro
       - uploads:/app/data/uploads
+      # резервные копии из интерфейса («Пользователи → Резервные копии»): лежат в папке backups/ рядом с проектом
+      # и переживают docker compose down -v
+      - ./backups:/app/data/backups
 
   # Доступ из интернета через Cloudflare Tunnel (необязательно).
   # Запускается только командой: docker compose --profile tunnel up -d

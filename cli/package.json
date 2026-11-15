@@ -1,0 +1,13 @@
+{
+  "name": "@testball/cli",
+  "version": "1.1.0",
+  "description": "testbolctl — загрузка результатов автотестов (JUnit XML, allure-results) в TestBall QA и управление запусками из CI",
+  "bin": { "testbolctl": "bin/testbolctl.js" },
+  "files": ["bin", "lib", "README.md"],
+  "engines": { "node": ">=20" },
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "prepack": "node -e \"require('fs').mkdirSync('lib',{recursive:true});require('fs').copyFileSync('../scripts/report.js','lib/report.js')\"",
+    "build:binary": "sh build-binary.sh"
+  }
+}

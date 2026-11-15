@@ -95,65 +95,69 @@ async function s3fail(res, what) {
   return new Error(`S3 ${what}: ${code}`);
 }
 
-const s3 = {
-  tmpDir: os.tmpdir(),
-  async put(id, file) {
-    try {
-      const size = (await fs.promises.stat(file)).size;
-      const { href, headers } = sign("PUT", S3.prefix + id, {}, { "content-length": String(size) });
-      const res = await fetch(href, { method: "PUT", headers, body: Readable.toWeb(fs.createReadStream(file)), duplex: "half" });
-      if (!res.ok) throw await s3fail(res, "загрузка");
-    } finally {
-      await fs.promises.unlink(file).catch(() => {});
-    }
-  },
-  // Поток, который отдаёт файл по мере скачивания из хранилища
-  get(id) {
-    const out = new (require("stream").PassThrough)();
-    const { href, headers } = sign("GET", S3.prefix + id);
-    fetch(href, { headers }).then(
-      async (res) => {
-        if (!res.ok) return out.destroy(await s3fail(res, "чтение"));
-        Readable.fromWeb(res.body).on("error", (e) => out.destroy(e)).pipe(out);
-      },
-      (e) => out.destroy(e)
-    );
-    return out;
-  },
-  async remove(id) {
-    const { href, headers } = sign("DELETE", S3.prefix + id);
-    const res = await fetch(href, { method: "DELETE", headers }).catch(() => null);
-    if (res && !res.ok && res.status !== 404) console.error("[storage] не удалось удалить", id, res.status);
-  },
-  async list() {
-    const out = [];
-    let token = null;
-    do {
-      const q = { "list-type": "2", prefix: S3.prefix, "max-keys": "1000" };
-      if (token) q["continuation-token"] = token;
-      const { href, headers } = sign("GET", null, q);
-      const res = await fetch(href, { headers });
-      if (!res.ok) throw await s3fail(res, "список");
-      const xml = await res.text();
-      for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
-        const key = /<Key>([^<]+)<\/Key>/.exec(m[1])?.[1] || "";
-        const at = /<LastModified>([^<]+)<\/LastModified>/.exec(m[1])?.[1];
-        out.push({ name: key.slice(S3.prefix.length), mtimeMs: at ? Date.parse(at) : Date.now() });
+// Объекты под заданным префиксом: вложения (S3_PREFIX), резервные копии (S3_BACKUP_PREFIX)
+function s3store(prefix) {
+  return {
+    tmpDir: os.tmpdir(),
+    async put(id, file) {
+      try {
+        const size = (await fs.promises.stat(file)).size;
+        const { href, headers } = sign("PUT", prefix + id, {}, { "content-length": String(size) });
+        const res = await fetch(href, { method: "PUT", headers, body: Readable.toWeb(fs.createReadStream(file)), duplex: "half" });
+        if (!res.ok) throw await s3fail(res, "загрузка");
+      } finally {
+        await fs.promises.unlink(file).catch(() => {});
       }
-      token = /<IsTruncated>true<\/IsTruncated>/.test(xml) ? /<NextContinuationToken>([^<]+)</.exec(xml)?.[1] : null;
-    } while (token);
-    return out;
-  },
-  async check() {
-    const { href, headers } = sign("GET", null, { "list-type": "2", "max-keys": "1", prefix: S3.prefix });
-    const res = await fetch(href, { headers });
-    if (!res.ok) throw await s3fail(res, "проверка доступа");
-  },
-};
+    },
+    // Поток, который отдаёт файл по мере скачивания из хранилища
+    get(id) {
+      const out = new (require("stream").PassThrough)();
+      const { href, headers } = sign("GET", prefix + id);
+      fetch(href, { headers }).then(
+        async (res) => {
+          if (!res.ok) return out.destroy(await s3fail(res, "чтение"));
+          Readable.fromWeb(res.body).on("error", (e) => out.destroy(e)).pipe(out);
+        },
+        (e) => out.destroy(e)
+      );
+      return out;
+    },
+    async remove(id) {
+      const { href, headers } = sign("DELETE", prefix + id);
+      const res = await fetch(href, { method: "DELETE", headers }).catch(() => null);
+      if (res && !res.ok && res.status !== 404) console.error("[storage] не удалось удалить", id, res.status);
+    },
+    async list() {
+      const out = [];
+      let token = null;
+      do {
+        const q = { "list-type": "2", prefix: prefix, "max-keys": "1000" };
+        if (token) q["continuation-token"] = token;
+        const { href, headers } = sign("GET", null, q);
+        const res = await fetch(href, { headers });
+        if (!res.ok) throw await s3fail(res, "список");
+        const xml = await res.text();
+        for (const m of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
+          const key = /<Key>([^<]+)<\/Key>/.exec(m[1])?.[1] || "";
+          const at = /<LastModified>([^<]+)<\/LastModified>/.exec(m[1])?.[1];
+          out.push({ name: key.slice(prefix.length), mtimeMs: at ? Date.parse(at) : Date.now() });
+        }
+        token = /<IsTruncated>true<\/IsTruncated>/.test(xml) ? /<NextContinuationToken>([^<]+)</.exec(xml)?.[1] : null;
+      } while (token);
+      return out;
+    },
+    async check() {
+      const { href, headers } = sign("GET", null, { "list-type": "2", "max-keys": "1", prefix: prefix });
+      const res = await fetch(href, { headers });
+      if (!res.ok) throw await s3fail(res, "проверка доступа");
+    },
+  };
+}
+const s3 = s3store(S3.prefix);
 
 if (KIND === "s3" && (!S3.bucket || !S3.accessKey || !S3.secretKey)) {
   throw new Error("STORAGE=s3: задайте S3_BUCKET, S3_ACCESS_KEY и S3_SECRET_KEY");
 }
 if (KIND === "local") fs.mkdirSync(DIR, { recursive: true });
 
-module.exports = { kind: KIND, DIR, ...(KIND === "s3" ? s3 : local) };
+module.exports = { kind: KIND, DIR, s3store: KIND === "s3" ? s3store : null, ...(KIND === "s3" ? s3 : local) };

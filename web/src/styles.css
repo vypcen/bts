@@ -116,7 +116,8 @@ tbody tr.click:hover{background:var(--sunken)}
 tbody tr:last-child td{border-bottom:0}
 tbody tr[aria-selected="true"]{background:var(--accent-soft)}
 td.id{font-family:var(--f-mono);font-size:13px;color:var(--muted);white-space:nowrap}
-td.title{font-weight:500}
+td.title{font-weight:500;overflow-wrap:anywhere;min-width:200px}
+td.wrap{overflow-wrap:anywhere;min-width:160px}
 td.actions{text-align:right;white-space:nowrap}
 td.nowrap{white-space:nowrap}
 .nores{text-align:center;padding:28px;cursor:default;color:var(--muted)}
@@ -391,3 +392,52 @@ label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;font-
 .step-row.shared-ref{background:var(--accent-soft);border-radius:var(--r)}
 .step-row.shared-ref .step-cells{display:flex;flex-direction:column;gap:2px;justify-content:center}
 .shared-label{color:var(--accent);font-weight:600;margin:6px 0 2px}
+
+/* наборы данных (параметры кейса) */
+.params-tbl table{min-width:0}
+.params-tbl td,.params-tbl th{padding:6px 8px}
+.params-editor .input{min-width:90px}
+.iter-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.iter-tab{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px;font:inherit;font-size:13px;cursor:pointer}
+.iter-tab.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+
+/* релизы */
+.readiness{margin:12px 0;border-left:4px solid var(--line)}
+.readiness.ok{border-left-color:var(--ok)}
+.readiness.bad{border-left-color:var(--crit)}
+section>h3{margin:18px 0 8px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:12px}
+
+/* режим выполнения прогона */
+.exec-layout{display:grid;grid-template-columns:minmax(240px,340px) minmax(0,1fr);gap:14px;align-items:start;margin-top:8px}
+.exec-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--surface);max-height:calc(100vh - 120px);overflow:auto;position:sticky;top:12px}
+.exec-list li+li{border-top:1px solid var(--line)}
+.exec-list button{display:flex;gap:8px;align-items:center;width:100%;text-align:left;background:none;border:0;padding:8px 10px;font:inherit;font-size:13px;cursor:pointer;color:inherit}
+.exec-list button .t{flex:1;min-width:0;overflow-wrap:anywhere}
+.exec-list button[aria-current=true]{background:var(--accent-soft)}
+.exec-empty{border:1px dashed var(--line);border-radius:8px;padding:40px;text-align:center}
+.drawer.docked{position:sticky;top:12px;height:calc(100vh - 24px);width:auto;z-index:auto;border:1px solid var(--line);border-radius:8px;animation:none}
+.kbd-hint{align-self:center}
+@media (max-width:900px){.exec-layout{grid-template-columns:1fr}.exec-list{position:static;max-height:240px}.drawer.docked{position:static;height:auto}}
+
+/* уведомления */
+.bell{position:relative}
+.bell-n{display:inline-block;min-width:18px;padding:0 5px;margin-left:2px;border-radius:999px;background:var(--crit);color:#fff;font-size:11px;font-weight:600;line-height:18px;text-align:center}
+.bell-panel{position:absolute;right:0;top:calc(100% + 6px);width:min(420px,92vw);max-height:70vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:30}
+.bell-head{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface)}
+.bell-panel ul{list-style:none;margin:0;padding:0}
+.bell-panel li+li{border-top:1px solid var(--line)}
+.bell-panel li button{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;background:none;border:0;padding:10px 12px;font:inherit;color:inherit;cursor:pointer}
+.bell-panel li.unread{background:var(--accent-soft)}
+.bell-panel .t{font-size:14px;overflow-wrap:anywhere}
+.bell-panel .b{overflow-wrap:anywhere}
+.mention{color:var(--accent);font-weight:600}
+.mention-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:6px;background:var(--surface);max-width:360px}
+.mention-list button{text-align:left;background:none;border:0;padding:6px 10px;font:inherit;color:inherit;cursor:pointer}
+.mention-list button:hover{background:var(--accent-soft)}
+.t-ok{color:var(--ok)} .t-crit{color:var(--crit)}
+/* H-04: матрица покрытия */
+.cov-matrix th.cov-col{writing-mode:vertical-rl;transform:rotate(180deg);padding:6px 2px;font-weight:500;font-size:11px;white-space:nowrap;min-width:26px}
+.cov-matrix td.cov-cell{text-align:center;padding:3px 2px;min-width:26px}
+.cov-matrix .cov-mark{display:inline-flex;width:20px;height:20px;align-items:center;justify-content:center;border-radius:4px;font-size:12px;font-weight:700;cursor:default}
+.cov-matrix .cov-sticky{position:sticky;left:0;background:var(--surface);z-index:1;min-width:260px;max-width:420px}

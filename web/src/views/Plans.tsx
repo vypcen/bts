@@ -1,4 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { combos, ConfigPicker, useConfigs } from "./Configs";
+import { ReleaseSelect } from "./Releases";
 import { TagInput, useProjectTags } from "../casekit";
 import { api, paths } from "../api";
 import { CASE_STATUSES, DIST_STRATEGIES, PRIORITIES, RESULTS } from "../labels";
@@ -18,8 +20,10 @@ export function executorsOf(data: State, pid: string): string[] {
     const global = data.users[login].role;
     if (global === "admin") return true;
     if (!members.has(login)) return false;
+    // исполнитель — участник, чья роль в проекте позволяет отмечать результаты (встроенная или своя)
     const role = p.memberRoles?.[login] || global;
-    return role === "tester";
+    const perms = data.roles?.[role]?.permissions;
+    return perms ? perms.includes("runs.execute") : role === "tester";
   }).sort();
 }
 
@@ -117,6 +121,7 @@ function PlanEditor({ pid, plan, onClose }: { pid: string; plan?: Plan; onClose:
   const { write, toast } = useStore();
   const cases = data.cases.filter((c) => c.pid === pid && c.status !== "deprecated").sort((a, b) => a.num - b.num);
   const [f, setF] = useState({ title: plan?.title || "", description: plan?.description || "", mode: plan?.mode || "static" });
+  const [rel, setRel] = useState(String(plan?.release ?? ""));
   const [filter, setFilter] = useState<PlanFilter>(plan?.filter || emptyFilter());
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [err, setErr] = useState("");
@@ -124,7 +129,7 @@ function PlanEditor({ pid, plan, onClose }: { pid: string; plan?: Plan; onClose:
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!f.title.trim()) return setErr("Укажите название плана");
-    const body = { ...f, filter };
+    const body = { ...f, filter, release: rel ? Number(rel) : null };
     if (plan) {
       if (await write(() => api("PATCH", paths.plan(pid, plan.num), body), "План сохранён")) onClose();
       return;
@@ -143,6 +148,7 @@ function PlanEditor({ pid, plan, onClose }: { pid: string; plan?: Plan; onClose:
         <h2>{plan ? "Параметры тест-плана" : "Новый тест-план"}</h2>
         <div className="field"><label htmlFor="pl-title">Название *</label>
           <input className="input" id="pl-title" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} placeholder="Регресс релиза 2.0" autoFocus /></div>
+        <ReleaseSelect pid={pid} value={rel} onChange={setRel} id="pl-release" />
         <div className="field"><label htmlFor="pl-desc">Описание</label>
           <textarea className="input" id="pl-desc" rows={2} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></div>
         <div className="tabs" role="tablist">
@@ -208,12 +214,15 @@ function PlanRunModal({ pid, plan, onClose }: { pid: string; plan: Plan; onClose
   const { write, toast } = useStore();
   const [f, setF] = useState({ title: plan.title, build: "", env: "" });
   const [assign, setAssign] = useState<Assign>({ users: [], strategy: "balanced" });
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const groups = useConfigs(pid);
+  const cfgs = combos(groups, picked);
   async function submit(e: FormEvent) {
     e.preventDefault();
-    let num = 0;
-    if (await write(async () => { num = (await api<{ num: number }>("POST", `${paths.plan(pid, plan.num)}/runs`, { ...f, assign })).num; })) {
-      toast(`Создан ${pid}-R${num}`);
-      go("p", pid, "runs", num);
+    let out = { num: 0, runs: [] as number[] };
+    if (await write(async () => { out = await api<{ num: number; runs: number[] }>("POST", `${paths.plan(pid, plan.num)}/runs`, { ...f, assign, configs: cfgs }); })) {
+      toast(out.runs.length > 1 ? `Создано прогонов: ${out.runs.length} (${out.runs.map((n) => `${pid}-R${n}`).join(", ")})` : `Создан ${pid}-R${out.num}`);
+      go("p", pid, "runs", out.num);
     }
   }
   return (
@@ -226,10 +235,13 @@ function PlanRunModal({ pid, plan, onClose }: { pid: string; plan: Plan; onClose
           <div className="field"><label htmlFor="pr-build">Сборка</label><input id="pr-build" className="input mono" value={f.build} onChange={(e) => setF({ ...f, build: e.target.value })} /></div>
           <div className="field"><label htmlFor="pr-env">Окружение</label><input id="pr-env" className="input" value={f.env} onChange={(e) => setF({ ...f, env: e.target.value })} /></div>
         </div>
+        <ConfigPicker pid={pid} picked={picked} onChange={setPicked} />
         <AssignPicker pid={pid} value={assign} onChange={setAssign} />
         <div className="acts">
           <button type="button" className="btn" onClick={onClose}>Отмена</button>
-          <button className="btn primary" type="submit">Создать прогон ({plan.caseCount})</button>
+          <button className="btn primary" type="submit" disabled={cfgs.length > 50}>
+            {cfgs.length > 1 ? `Создать ${cfgs.length} прогонов (по ${plan.caseCount} кейсов)` : `Создать прогон (${plan.caseCount})`}
+          </button>
         </div>
       </form>
     </Modal>

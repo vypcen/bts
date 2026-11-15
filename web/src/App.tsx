@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Bell } from "./views/Notifications";
 import { api } from "./api";
 import { go, href, useRoute } from "./router";
 import { useStore } from "./store";
@@ -10,7 +11,7 @@ import { Projects } from "./views/Projects";
 import { Settings } from "./views/Settings";
 import { Users } from "./views/Users";
 import { Help } from "./views/Help";
-import { SearchPalette, useSearchHotkey } from "./views/Search";
+import { SEARCH_HOTKEY, SearchPalette, useSearchHotkey } from "./views/Search";
 
 export function App() {
   const { me, bootError, data, projectLoading } = useStore();
@@ -96,11 +97,12 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
           )}
         </div>
         <div className="spacer" />
-        <button className="btn ghost" onClick={() => setSearching(true)} title="Поиск по всем проектам (Ctrl+K)">Поиск <span className="muted small mono">Ctrl+K</span></button>
+        <button className="btn ghost" onClick={() => setSearching(true)} title={`Поиск по всем проектам (${SEARCH_HOTKEY})`}>Поиск <span className="muted small mono">{SEARCH_HOTKEY}</span></button>
         <span className={`live${liveError ? " off" : ""}`} title="Изменения других участников появляются автоматически">
           <span className="dot" />
           {liveError ? "Нет связи" : "Онлайн"}
         </span>
+        {me && <Bell />}
         <a className="btn ghost" href={href("help", "user")} style={{ textDecoration: "none" }} title="Руководства пользователя и администратора, API">Справка</a>
         {me?.role === "admin" && <a className="btn" href={href("users")} style={{ textDecoration: "none" }}>Пользователи</a>}
         {me?.role === "admin" && <a className="btn" href={href("settings")} style={{ textDecoration: "none" }} title="Подключение языковой модели">Настройки</a>}

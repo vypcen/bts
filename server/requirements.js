@@ -6,7 +6,7 @@ const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const { normalizeTags } = require("./casemodel");
 const { csvRow } = require("./csvutil");
-const { wrap, str, num } = require("./util");
+const { wrap, str, tooLong, num } = require("./util");
 
 const STATUSES = ["draft", "approved", "implemented", "obsolete"];
 const STATUS_LABELS = { draft: "Черновик", approved: "Согласовано", implemented: "Реализовано", obsolete: "Устарело" };
@@ -75,6 +75,7 @@ function readBody(body, prev = {}) {
     tags: body.tags !== undefined ? normalizeTags(body.tags) : prev.tags ?? [],
   };
   if (!out.title) return { error: "Укажите название требования" };
+  if (tooLong(body.title, 500)) return { error: tooLong(body.title, 500) };
   if (!STATUSES.includes(out.status)) return { error: `Статус: ${STATUSES.join(", ")}` };
   if (!PRIORITIES.includes(out.priority)) return { error: `Приоритет: ${PRIORITIES.join(", ")}` };
   if (out.url && !/^https?:\/\//i.test(out.url)) return { error: "Ссылка должна начинаться с http:// или https://" };

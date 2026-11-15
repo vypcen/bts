@@ -9,6 +9,7 @@ const { broadcast } = require("./live");
 const access = require("./access");
 const roles = require("./roles");
 const events = require("./events");
+const notify = require("./notify");
 const casemodel = require("./casemodel");
 const { wrap, str, num } = require("./util");
 
@@ -58,6 +59,16 @@ async function reviewers(key, logins) {
   return { users: out };
 }
 
+// все, кто может провести ревью в проекте (для заявки «любому»)
+async function eligibleIds(key) {
+  await roles.load();
+  const { rows } = await pool.query(
+    `SELECT u.id, CASE WHEN u.role='admin' THEN 'admin' ELSE COALESCE(m.role, u.role) END AS role
+     FROM users u LEFT JOIN project_members m ON m.user_id=u.id AND m.project_key=$1
+     WHERE NOT u.blocked AND (u.role='admin' OR m.user_id IS NOT NULL)`, [key]);
+  return rows.filter((r) => roles.can(r.role, "cases.review")).map((r) => r.id).slice(0, 50);
+}
+
 const reviewOut = (r) => ({
   id: r.id, version: r.case_version, status: r.status, reviewer: r.reviewer_login || null, requestedBy: r.requested_login || null,
   requestComment: r.request_comment, comment: r.comment, decidedBy: r.decided_login || null,
@@ -97,6 +108,10 @@ router.post("/cases/:num(\\d+)/review", wrap(async (req, res) => {
   });
   if (out.error) return res.status(out.status).json({ error: out.error });
   broadcast("cases");
+  // уведомить назначенных рецензентов, а при заявке «любому» — всех участников с правом ревью
+  const targets = rv.users.length ? rv.users.map((x) => x.id) : await eligibleIds(key);
+  const title = (await pool.query("SELECT title FROM test_cases WHERE project_key=$1 AND num=$2", [key, num(req.params.num)])).rows[0]?.title || "";
+  await notify.onReviewRequested(req, { num: num(req.params.num), title, reviewerIds: targets }).catch((e) => console.error("[notify]", e.message));
   events.emit(key, "case.review_requested", { case: await events.snap.testCase(key, num(req.params.num)), reviewers: logins }, req.user);
   res.status(201).json({ ok: true });
 }));
@@ -126,10 +141,13 @@ router.post("/cases/:num(\\d+)/review/decision", wrap(async (req, res) => {
       status = "draft";
     } else if (pending.length === 1) status = "ready"; // утвердили все назначенные
     if (status !== "review") await db.query("UPDATE test_cases SET status=$2, updated_by=$3, updated_at=now() WHERE id=$1", [c.id, status, req.user.id]);
-    return { status, left: decision === "approve" ? pending.length - 1 : 0 };
+    return { status, left: decision === "approve" ? pending.length - 1 : 0, requesters: [...new Set(pending.map((p) => p.requested_by))] };
   });
   if (out.error) return res.status(out.status).json({ error: out.error });
   broadcast("cases");
+  const ctitle = (await pool.query("SELECT title FROM test_cases WHERE project_key=$1 AND num=$2", [key, num(req.params.num)])).rows[0]?.title || "";
+  await notify.onReviewed(req, { num: num(req.params.num), title: ctitle, requesterIds: out.requesters, decision, status: out.status, comment }).catch((e) => console.error("[notify]", e.message));
+  delete out.requesters;
   events.emit(key, "case.reviewed", { case: await events.snap.testCase(key, num(req.params.num)), decision, comment }, req.user);
   res.json(out);
 }));

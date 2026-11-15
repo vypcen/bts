@@ -99,6 +99,8 @@ export interface TestCase {
   light?: boolean;
   stepCount?: number; // число шагов, когда текстов нет
   stepSource?: Step[]; // шаги со ссылками на общие шаги — для редактора
+  params?: ParamTable; // своя таблица параметров
+  dataset?: Dataset; // или набор данных проекта
   review?: { reviewer: string | null; by: string | null }[]; // ожидают решения (reviewer null — любой с правом ревью)
 }
 
@@ -118,6 +120,27 @@ export interface Run {
   counts: Record<ResultValue, number>; // сколько кейсов прогона в каждом результате
   fields: FieldValues;
   rerunOf?: number | null; // номер прогона, из упавших кейсов которого создан этот
+  release?: number | null; // номер релиза (или спринта)
+  config?: Record<string, string> | null; // конфигурация: {"Браузер": "Chrome"}
+  batch?: string | null; // прогоны одного плана на разные конфигурации — общая матрица
+}
+
+export interface ConfigGroup { id: number; name: string; options: string[]; position: number }
+
+// Релиз или спринт (E-01)
+export type ReleaseStatus = "planned" | "active" | "released" | "cancelled";
+export interface Release {
+  id: number; num: number; ref: string; name: string; description: string; status: ReleaseStatus; parent: number | null;
+  starts: string | null; due: string | null; released: number | null; createdBy: string | null; created: number;
+  runs?: number; openBugs?: number; cases?: { total: number; done: number; passed: number };
+}
+export interface ReleaseDetail extends Omit<Release, "runs" | "cases" | "openBugs"> {
+  sprints: Release[];
+  cases: { total: number; done: number; passed: number; counts: Record<ResultValue, number>; progress: number; passRate: number };
+  bugs: { open: number; severe: number; list: { num: number; title: string; severity: Severity; status: BugStatus; assignee: string | null }[] };
+  runs: { num: number; title: string; build: string; state: "open" | "closed"; created: number; counts: Partial<Record<ResultValue, number>> }[];
+  plans: { num: number; title: string; mode: "static" | "dynamic"; locked: boolean }[];
+  ready: boolean; blockers: string[];
 }
 
 export interface Step {
@@ -162,7 +185,14 @@ export interface Result {
   assignee: string | null; // кому назначен кейс в прогоне
   caseVersion: number | null; // какая версия кейса проверялась
   steps: Record<string, StepResult>; // результаты шагов тест-кейса: {номер шага с 0: …}
+  iterations?: ParamRow[]; // кейс с параметрами: снимок наборов на момент добавления в прогон
+  iterResults?: Record<string, { result: ResultValue; steps: Record<string, StepResult> }>; // результаты по наборам {"0": …}
 }
+
+// Параметры кейса: в шагах {{имя}} заменяется значением из набора
+export interface ParamRow { name: string; values: Record<string, string> }
+export interface ParamTable { columns: string[]; rows: ParamRow[] }
+export interface Dataset extends ParamTable { id: number; num: number; name: string; usedIn?: number; updatedBy?: string | null; updated?: number }
 
 export interface Bug {
   id: string;
@@ -187,6 +217,7 @@ export interface Bug {
   external: { key: string; url: string; status: string } | null; // задача во внешнем трекере
   tags: string[];
   fields: FieldValues;
+  release?: number | null; // релиз (или спринт), к которому относится баг
 }
 
 export interface Attachment {
@@ -279,6 +310,7 @@ export interface PlanSummary {
   title: string;
   mode: "static" | "dynamic";
   locked: boolean;
+  release?: number | null;
 }
 
 // GET /api/state — общее: проекты, пользователи, планы
@@ -286,7 +318,7 @@ export interface MetaState {
   projects: Project[];
   plans: PlanSummary[];
   users: Record<string, { name: string; role: Role }>;
-  roles?: Record<string, { name: string; seat: "full" | "view" }>;
+  roles?: Record<string, { name: string; seat: "full" | "view"; permissions?: Permission[] }>;
   myPermissions?: Permission[]; // по глобальной роли (вне проекта: создание проектов)
 }
 
@@ -383,6 +415,7 @@ export interface Plan {
   updated: number;
   caseCount: number;
   runs: number;
+  release?: number | null;
 }
 
 export interface PlanCase {

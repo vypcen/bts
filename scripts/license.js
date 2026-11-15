@@ -6,9 +6,12 @@
 //       его нужно вставить в PUBLIC_KEY в server/license.js. Старые ключи после замены перестанут приниматься.
 //
 //   node scripts/license.js issue --private private.pem --customer "ООО Ромашка" --full 50 --view 200 \
-//       --expires 2027-12-31 [--updates-until 2027-12-31] [--host testball.romashka.ru] [--edition enterprise] [--id R-2026-001]
-//       выпустить ключ. --full/--view: число мест, «0» или пропуск у --view — без ограничений.
-//       --expires: последний день действия, без него — бессрочная лицензия.
+//       [--host testball.romashka.ru] [--edition enterprise] [--id R-2026-001]
+//       выпустить постоянный ключ: разовая оплата — бессрочная лицензия, обновления без ограничений.
+//       --full/--view: число мест, «0» или пропуск у --view — без ограничений. Докупили места — выпускается новый ключ.
+//
+//   node scripts/license.js issue --private private.pem --customer "ООО Ромашка" --full 20 --edition trial --expires 2027-01-31
+//       пилотный ключ: единственный вид ключа со сроком (--expires обязателен).
 //
 //   node scripts/license.js inspect TB1.…
 //       показать условия ключа и проверить подпись (на этой машине, с ключом из server/license.js)
@@ -49,8 +52,11 @@ if (cmd === "keygen") {
 } else if (cmd === "issue") {
   if (!a.private) fail("--private: файл закрытого ключа");
   if (!a.customer) fail("--customer: название заказчика");
+  const trial = a.edition === "trial";
+  if (trial && !a.expires) fail("--expires: у пилотного ключа нужен последний день пилота (ГГГГ-ММ-ДД)");
+  if (!trial && a.expires) fail("--expires: постоянная лицензия бессрочная — срок задаётся только у пилота (--edition trial)");
+  if (a["updates-until"]) fail("--updates-until больше не используется: обновления входят в лицензию без ограничений");
   if (a.expires && !isDate(a.expires)) fail("--expires: дата ГГГГ-ММ-ДД");
-  if (a["updates-until"] && !isDate(a["updates-until"])) fail("--updates-until: дата ГГГГ-ММ-ДД");
   const full = seats(a.full, "full");
   if (full === null) fail("--full: число полных мест обязательно");
   const today = new Date().toISOString().slice(0, 10);
@@ -61,8 +67,7 @@ if (cmd === "keygen") {
     full,
     view: seats(a.view, "view"),
     issued: today,
-    expires: a.expires || null,
-    updatesUntil: a["updates-until"] || a.expires || null,
+    expires: trial ? a.expires : null,
     ...(a.host ? { host: String(a.host).toLowerCase() } : {}),
   };
   const key = license.sign(terms, fs.readFileSync(a.private, "utf8"));

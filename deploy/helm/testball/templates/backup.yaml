@@ -1,0 +1,81 @@
+{{- /*
+M-04: резервные копии.
+- storage.type=s3 → CronJob по расписанию backup.schedule: делает копию (pg_dump + проверка) и кладёт её в тот же бакет
+  под префиксом backup.s3Prefix. Копии видны и скачиваются в интерфейсе: «Пользователи → Резервные копии».
+- storage.type=local → копии делает само приложение (backup.everyHours) на отдельный том <релиз>-backups:
+  том вложений обычно ReadWriteOnce, и CronJob не смог бы его подключить.
+*/ -}}
+{{- if .Values.backup.enabled }}
+{{- if eq .Values.storage.type "s3" }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "testball.name" . }}-backup
+  labels: {{- include "testball.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  {{- with .Values.backup.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: {{ .Values.backup.timeoutSeconds }}
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: testball-backup
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          restartPolicy: Never
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+          containers:
+            - name: backup
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["node", "scripts/backup.js", "create"]
+              envFrom:
+                - configMapRef: { name: {{ include "testball.name" . }} }
+                - secretRef: { name: {{ include "testball.dbSecretName" . }} }
+                - secretRef: { name: {{ include "testball.secretName" . }} }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              resources: {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            # дамп собирается во временной папке перед отправкой в S3: размер — с запасом под базу
+            - name: tmp
+              emptyDir: { sizeLimit: {{ .Values.backup.tmpSize }} }
+          {{- with .Values.nodeSelector }}
+          nodeSelector: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations: {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- else }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "testball.name" . }}-backups
+  labels: {{- include "testball.labels" . | nindent 4 }}
+spec:
+  accessModes: {{- toYaml .Values.storage.local.accessModes | nindent 4 }}
+  {{- with .Values.backup.local.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests: { storage: {{ .Values.backup.local.size }} }
+{{- end }}
+{{- end }}

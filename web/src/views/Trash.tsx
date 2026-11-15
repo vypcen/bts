@@ -34,7 +34,7 @@ export function TrashTab({ project }: { project: Project }) {
                 <tr key={t.id}>
                   <td className="small">{KIND[t.kind]}</td>
                   <td className="mono small">{t.ref}</td>
-                  <td>{t.title}</td>
+                  <td className="title">{t.title}</td>
                   <td className="small"><Who login={t.deletedBy} /></td>
                   <td className="small muted">{fmt(t.deleted)}</td>
                   <td className="small muted">{fmt(t.purgeAt)}</td>

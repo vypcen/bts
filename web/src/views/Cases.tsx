@@ -11,6 +11,8 @@ import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } fr
 import { CaseRequirements } from "./Requirements";
 import { SaveAsTemplate, TemplatePicker } from "./Templates";
 import { SharedStepsModal } from "./SharedSteps";
+import { WatchButton } from "./Notifications";
+import { DatasetsModal, ParamsEditor, paramsBody, paramsForm, paramsOf, ParamsView } from "./Params";
 import { ReviewBlock, statusOptions, useMyReviews, useReviewGate } from "./Review";
 import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, Modal, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
@@ -46,6 +48,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const [moveTo, setMoveTo] = useState("");
   const [bulk, setBulk] = useState<"edit" | "delete" | null>(null);
   const [sharedOpen, setSharedOpen] = useState(false);
+  const [dataOpen, setDataOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const { write, toast } = useStore();
   const canEdit = useCan("cases.edit");
@@ -106,10 +109,12 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
             title={sel === "all" ? "Все кейсы проекта в CSV" : "Кейсы выбранной папки в CSV"}>Экспорт</a>
         )}
         <button className="btn" onClick={() => setSharedOpen(true)} title="Блоки шагов, которые повторяются в разных кейсах">Общие шаги</button>
+        <button className="btn" onClick={() => setDataOpen(true)} title="Таблицы значений для кейсов с параметрами">Наборы данных</button>
         {canEdit && <button className="btn" onClick={() => setImporting(true)}>Импорт</button>}
         {canEdit && <button className="btn primary" onClick={() => setEditing("case")}>+ Тест-кейс</button>}
       </div>
       {sharedOpen && <SharedStepsModal pid={p} onClose={() => setSharedOpen(false)} />}
+      {dataOpen && <DatasetsModal pid={p} onClose={() => setDataOpen(false)} />}
       {bulk === "edit" && <BulkEditModal pid={p} nums={shown.map((c) => c.num)} tags={projectTags} onClose={(done) => { setBulk(null); if (done) setPicked(new Set()); }} />}
       {bulk === "delete" && (
         <Confirm
@@ -403,6 +408,13 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
         <>
           <TextBlock label="Предусловия" text={c.pre} empty="Не указаны" />
           <div className="view-block"><span className="label">Шаги</span><StepsView steps={stepsOf(c)} /></div>
+          {paramsOf(c) && (
+            <div className="view-block">
+              <span className="label">Параметры{c.dataset ? ` · набор «${c.dataset.name}»` : ""} · {paramsOf(c)!.rows.length} наб.</span>
+              <ParamsView table={paramsOf(c)!} />
+              <span className="muted small">В прогоне кейс проверяется по разу на каждый набор</span>
+            </div>
+          )}
           <TextBlock label="Ожидаемый результат" text={c.expected} empty="Не указан" />
         </>
       )}
@@ -455,6 +467,7 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
         <div className="view-block"><span className="label">Изменил</span><Who login={c.updatedBy} /><span className="muted">{fmt(c.updated)}</span></div>
       </div>
       <Versions c={c} />
+      <div><WatchButton pid={p} kind="cases" num={c.num} /></div>
       <Comments list={comments} postUrl={`${paths.testCase(p, c.num)}/comments`} />
       {resetting && (
         <Confirm title="Снять все отметки?" text={`Все ${done} отмеченных пунктов станут невыполненными — у всех участников.`} action="Снять"
@@ -477,6 +490,7 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
     pre: c?.pre || "", steps: c?.steps || "", expected: c?.expected || "", folder: String((c ? c.folder : folder) ?? ""),
     stepList: c ? c.stepSource || stepsOf(c) : [emptyStep()], tags: c?.tags || [], fields: c?.fields || {},
   });
+  const [prm, setPrm] = useState(() => paramsForm(c));
   const fieldDefs = useFields("case");
   const tagSuggestions = useProjectTags("cases");
   const sharedSteps = useSharedSteps(pid);
@@ -505,7 +519,10 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
     if (missing) return setErr(missing);
     // у тест-кейса шаги уходят структурой, у чек-листа — пункты текстом
     const { stepList, ...rest } = f;
-    const body = { ...rest, ...(list ? {} : { stepList: stepList.filter((s) => isRef(s) || s.action.trim() || s.expected.trim()).map((s) => (isRef(s) ? { shared: s.shared } : s)) }), folder: f.folder ? Number(f.folder) : null };
+    if (!list && prm.mode === "dataset" && !prm.dataset) return setErr("Выберите набор данных или отключите параметры");
+    if (!list && prm.mode === "own" && (!prm.table.columns.length || !prm.table.rows.length)) return setErr("Параметры: добавьте хотя бы один параметр и один набор или выберите «Без параметров»");
+    const body = { ...rest, ...(list ? {} : { stepList: stepList.filter((s) => isRef(s) || s.action.trim() || s.expected.trim()).map((s) => (isRef(s) ? { shared: s.shared } : s)) }), folder: f.folder ? Number(f.folder) : null,
+      ...(list ? { params: null, dataset: null } : paramsBody(prm)) };
     if (c) {
       // baseVersion: если кейс успели поменять, сервер не даст затереть чужую правку
       let reset = false;
@@ -569,6 +586,7 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
               <StepsEditor value={f.stepList} onChange={(stepList) => setF({ ...f, stepList })} shared={sharedSteps} />
               <span className="muted" style={{ fontSize: 12 }}>Enter в последнем шаге добавляет следующий. В прогоне каждый шаг отмечается отдельно</span></div>
             <div className="field"><label htmlFor="c-exp">Итоговый ожидаемый результат</label><textarea className="input" id="c-exp" rows={2} value={f.expected} onChange={set("expected")} /></div>
+            <ParamsEditor pid={pid} value={prm} onChange={setPrm} />
           </>
         )}
         <div className="field"><label htmlFor="c-tags">Теги</label><TagInput id="c-tags" value={f.tags} onChange={(tags) => setF({ ...f, tags })} suggestions={tagSuggestions} /></div>

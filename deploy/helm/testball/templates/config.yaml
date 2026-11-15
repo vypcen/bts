@@ -16,6 +16,21 @@ data:
   {{- else }}
   UPLOAD_DIR: /app/data/uploads
   {{- end }}
+  {{- if .Values.backup.enabled }}
+  BACKUP_KEEP: {{ .Values.backup.keep | quote }}
+  {{- if eq .Values.storage.type "s3" }}
+  BACKUP_TARGET: "s3"
+  S3_BACKUP_PREFIX: {{ .Values.backup.s3Prefix | quote }}
+  # копии делает CronJob — у приложения расписание выключено
+  BACKUP_EVERY_HOURS: "0"
+  {{- else }}
+  BACKUP_TARGET: "local"
+  BACKUP_DIR: /app/data/backups
+  BACKUP_EVERY_HOURS: {{ .Values.backup.everyHours | quote }}
+  {{- end }}
+  {{- else }}
+  BACKUP_EVERY_HOURS: "0"
+  {{- end }}
   {{- range $k, $v := .Values.env }}
   {{ $k }}: {{ $v | quote }}
   {{- end }}
@@ -60,6 +75,9 @@ stringData:
   {{- end }}
   {{- with .Values.secrets.s3AccessKey }}
   S3_ACCESS_KEY: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.secrets.backupVerifyDatabaseUrl }}
+  BACKUP_VERIFY_DATABASE_URL: {{ . | quote }}
   {{- end }}
   {{- with .Values.secrets.s3SecretKey }}
   S3_SECRET_KEY: {{ . | quote }}

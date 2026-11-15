@@ -7,6 +7,7 @@ import type { Priority, Project, ResultValue } from "../types";
 import { find, PRIORITIES, BUG_STATUSES, type Tone } from "../labels";
 import { Confirm, Drawer, Empty, fmt, Modal, Pill, Prio, ResultPill } from "../ui";
 import { TagInput, Tags } from "../casekit";
+import { CoverageMatrix } from "./Coverage";
 
 export type ReqStatus = "draft" | "approved" | "implemented" | "obsolete";
 export type Coverage = "none" | "untested" | "failed" | "partial" | "passed";
@@ -44,6 +45,7 @@ export function RequirementsTab({ project, openNum }: { project: Project; openNu
   const [status, setStatus] = useState<ReqStatus | "">("");
   const [editing, setEditing] = useState<Requirement | "new" | null>(null);
   const [importing, setImporting] = useState(false);
+  const [view, setView] = useState<"list" | "matrix">("list");
   const canEdit = useCan("requirements.edit");
   const { value, error } = useLoad<{ items: Requirement[]; summary: Partial<Record<Coverage, number>> }>(base);
   const items = useMemo(() => {
@@ -61,8 +63,25 @@ export function RequirementsTab({ project, openNum }: { project: Project; openNu
   const active = value.items.filter((r) => r.status !== "obsolete").length;
   const covered = active - (value.summary.none || 0);
 
+  const switcher = (
+    <div className="seg" role="group" aria-label="Вид" style={{ display: "inline-flex", gap: 4, marginBottom: 12 }}>
+      <button className={`btn sm${view === "list" ? " primary" : " ghost"}`} aria-pressed={view === "list"} onClick={() => setView("list")}>Список</button>
+      <button className={`btn sm${view === "matrix" ? " primary" : " ghost"}`} aria-pressed={view === "matrix"} onClick={() => setView("matrix")}>Матрица покрытия</button>
+    </div>
+  );
+  if (view === "matrix")
+    return (
+      <section>
+        {switcher}
+        <CoverageMatrix pid={p} />
+        {open && <RequirementDrawer project={project} base={base} req={open} onEdit={() => setEditing(open)} onClose={() => go("p", p, "reqs")} />}
+        {editing && <RequirementEditor project={project} base={base} req={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
+      </section>
+    );
+
   return (
     <section>
+      {switcher}
       <div className="toolbar" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <input className="input" style={{ width: 240 }} placeholder="Поиск: название, ключ, номер" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Поиск требований" />
         <select className="input" style={{ width: "auto" }} value={status} onChange={(e) => setStatus(e.target.value as ReqStatus | "")} aria-label="Статус">
@@ -70,7 +89,6 @@ export function RequirementsTab({ project, openNum }: { project: Project; openNu
           {REQ_STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
         </select>
         <div className="spacer" style={{ flex: 1 }} />
-        <a className="btn" href={`${base}/matrix.csv`} download>Матрица трассировки (CSV)</a>
         {canEdit && <button className="btn" onClick={() => setImporting(true)}>Импорт</button>}
         {canEdit && <button className="btn primary" onClick={() => setEditing("new")}>+ Требование</button>}
       </div>
@@ -158,7 +176,7 @@ function RequirementDrawer({ project, base, req, onEdit, onClose }: { project: P
               {value.caseList.map((c) => (
                 <tr key={c.num}>
                   <td className="mono small"><a href={href("p", p, "cases", String(c.num))}>{p}-{c.num}</a></td>
-                  <td>{c.title}</td>
+                  <td className="wrap">{c.title}</td>
                   <td><ResultPill r={c.lastResult} sm /></td>
                   <td className="small muted">{c.runNum ? <a href={href("p", p, "runs", String(c.runNum))}>прогон #{c.runNum}</a> : ""}{c.executed ? ` · ${fmt(c.executed)}` : ""}</td>
                 </tr>
@@ -175,7 +193,7 @@ function RequirementDrawer({ project, base, req, onEdit, onClose }: { project: P
               {value.bugs.map((b) => (
                 <tr key={b.num}>
                   <td className="mono small"><a href={href("p", p, "bugs", String(b.num))}>{p}-B{b.num}</a></td>
-                  <td>{b.title}</td>
+                  <td className="wrap">{b.title}</td>
                   <td className="small">{find(BUG_STATUSES, b.status as never)?.label || b.status}</td>
                   <td className="mono small muted">{p}-{b.caseNum}</td>
                 </tr>

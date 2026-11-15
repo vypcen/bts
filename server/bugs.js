@@ -4,7 +4,9 @@ const casemodel = require("./casemodel");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const events = require("./events");
-const { wrap, str, num } = require("./util");
+const releases = require("./releases");
+const notify = require("./notify");
+const { wrap, str, tooLong, num } = require("./util");
 
 const SEVERITIES = ["blocker", "critical", "major", "minor"];
 // Допустимые переходы жизненного цикла. Тот же список есть в web/src/labels.ts
@@ -43,6 +45,7 @@ function readBug(body) {
     expected: str(body.expected),
   };
   if (!b.title) return { error: "Укажите заголовок бага" };
+  if (tooLong(body.title, 500, "Заголовок")) return { error: tooLong(body.title, 500, "Заголовок") };
   if (!SEVERITIES.includes(b.severity)) return { error: "Неизвестная серьёзность" };
   return { b };
 }
@@ -54,6 +57,8 @@ router.post("/bugs", wrap(async (req, res) => {
   const tags = casemodel.normalizeTags(req.body.tags) || [];
   const cf = await casemodel.readFields(pool, key, "bug", req.body.fields, {});
   if (cf.error) return res.status(400).json({ error: cf.error });
+  const rel = await releases.releaseId(pool, key, req.body.release);
+  if (rel.error) return res.status(400).json({ error: rel.error });
   const out = await tx(async (db) => {
     const assignee = await userId(db, key, b.assignee);
     if (assignee === undefined) return { status: 400, error: "Исполнитель не найден среди участников проекта" };
@@ -77,19 +82,21 @@ router.post("/bugs", wrap(async (req, res) => {
     const n = seq.rows[0].bug_seq;
     await db.query(
       `INSERT INTO bugs(project_key, num, title, severity, assignee_id, environment, steps, actual, expected,
-         case_id, run_result_id, created_by, updated_by, tags, fields)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13,$14)`,
-      [key, n, b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, caseId, resultId, req.user.id, tags, cf.fields]
+         case_id, run_result_id, created_by, updated_by, tags, fields, release_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12,$13,$14,$15)`,
+      [key, n, b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, caseId, resultId, req.user.id, tags, cf.fields, rel.id]
     );
     await db.query(
       "INSERT INTO bug_status_log(bug_id, from_status, to_status, changed_by) SELECT id, NULL, 'new', $3 FROM bugs WHERE project_key=$1 AND num=$2",
       [key, n, req.user.id]
     );
-    return { n };
+    const bugId = (await db.query("SELECT id FROM bugs WHERE project_key=$1 AND num=$2", [key, n])).rows[0].id;
+    return { n, bugId, assignee };
   });
   if (out.error) return res.status(out.status).json({ error: out.error });
   broadcast("bugs");
   events.emit(key, "bug.created", { bug: await events.snap.bug(key, out.n) }, req.user);
+  await notify.onBugCreated(req, { bugId: out.bugId, num: out.n, title: b.title, assigneeId: out.assignee }).catch((e) => console.error("[notify]", e.message));
   res.status(201).json({ num: out.n });
 }));
 
@@ -113,6 +120,8 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
   const cf = await casemodel.readFields(pool, key, "bug", req.body.fields, cur.fields);
   if (cf.error) return res.status(400).json({ error: cf.error });
 
+  const rel = req.body.release === undefined ? null : await releases.releaseId(pool, key, req.body.release);
+  if (rel?.error) return res.status(400).json({ error: rel.error });
   const status = req.body.status === undefined ? cur.status : str(req.body.status, 20);
   if (status !== cur.status && !(FLOW[cur.status] || []).includes(status)) {
     return res.status(409).json({ error: `Нельзя перевести баг из «${LABELS[cur.status]}» в «${LABELS[status] || status}»` });
@@ -133,12 +142,16 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
          status=$8, duplicate_of=$9, updated_by=$10, updated_at=now(), tags=$12, fields=$13 WHERE id=$11`,
       [b.title, b.severity, assignee, b.env, b.steps, b.actual, b.expected, status, dup, req.user.id, cur.id, tags, cf.fields]
     );
+    if (rel) await db.query("UPDATE bugs SET release_id=$2 WHERE id=$1", [cur.id, rel.id]);
     if (status !== cur.status) {
       await db.query("INSERT INTO bug_status_log(bug_id, from_status, to_status, changed_by) VALUES ($1,$2,$3,$4)", [cur.id, cur.status, status, req.user.id]);
     }
   });
   broadcast("bugs");
   const bug = await events.snap.bug(key, n);
+  const nf = (p) => p.catch((e) => console.error("[notify]", e.message));
+  if (assignee && assignee !== cur.assignee_id) await nf(notify.onBugAssigned(req, { bugId: cur.id, num: n, title: b.title, assigneeId: assignee }));
+  if (status !== cur.status) await nf(notify.onBugStatus(req, { bugId: cur.id, num: n, title: b.title, from: cur.status, to: status }));
   if (status !== cur.status) events.emit(key, "bug.status", { bug, from: cur.status, to: status }, req.user);
   else events.emit(key, "bug.updated", { bug }, req.user);
   res.json({ ok: true });

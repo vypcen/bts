@@ -16,6 +16,7 @@ const caseSql = `SELECT c.project_key, c.num, c.kind, c.checked, c.folder_id, c.
   expand_steps(c.step_list) AS step_list, c.step_list AS step_source, c.tags, c.fields,
   EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id) AS automated,
   cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at,
+  c.params, c.dataset_id, (SELECT json_build_object('id', ds.id, 'num', ds.num, 'name', ds.name, 'columns', ds.columns, 'rows', ds.rows) FROM datasets ds WHERE ds.id=c.dataset_id) AS dataset,
   CASE WHEN c.status='review' THEN (SELECT json_agg(json_build_object('reviewer', ru.login, 'by', qu.login) ORDER BY r.id) FROM case_reviews r
     LEFT JOIN users ru ON ru.id=r.reviewer_id LEFT JOIN users qu ON qu.id=r.requested_by WHERE r.case_id=c.id AND r.status='pending') END AS review
   FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by`;
@@ -27,16 +28,20 @@ const toCase = (r) => ({
   createdBy: r.created_by, updatedBy: r.updated_by, version: r.version, automated: r.automated,
   // ожидающие решения рецензенты (reviewer null — любой с правом ревью)
   review: r.review || undefined,
+  // параметры: своя таблица или набор данных проекта ({id, num, name, columns, rows})
+  params: r.params || undefined, dataset: r.dataset || undefined,
   created: r.created_at.getTime(), updated: r.updated_at.getTime(),
 });
 
 const resultSql = `SELECT rr.id, t.project_key, t.num AS run_num, c.num AS case_num, rr.result, rr.comment, rr.items, rr.step_results, u.login AS executed_by, rr.executed_at,
-    au.login AS assignee, rr.case_version
+    au.login AS assignee, rr.case_version, rr.iterations, rr.iter_results
   FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
   LEFT JOIN users u ON u.id=rr.executed_by LEFT JOIN users au ON au.id=rr.assignee_id`;
 const toResult = (r) => ({
   id: r.id, pid: r.project_key, runNum: r.run_num, caseNum: r.case_num, result: r.result, comment: r.comment, items: r.items, steps: r.step_results,
   executedBy: r.executed_by, executed: ms(r.executed_at), assignee: r.assignee, caseVersion: r.case_version,
+  // итерации кейса с параметрами: снимок наборов [{name, values}] и результаты {"0": {result, steps}}
+  iterations: r.iterations || undefined, iterResults: r.iterations ? r.iter_results : undefined,
 });
 
 const attachmentSql = `SELECT a.id, COALESCE(b.project_key, t.project_key) AS project_key, b.num AS bug_num, a.run_result_id, a.step_index,
@@ -98,8 +103,8 @@ async function meta(user) {
     }),
     plans: plans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked })),
     users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name, role: u.role }])),
-    // названия ролей (встроенных и пользовательских) и мои глобальные разрешения
-    roles: Object.fromEntries([...Object.entries(roles.BUILTIN), ...[...roles.load.cache().entries()]].map(([k, d]) => [k, { name: d.name, seat: roles.seatOf(k) }])),
+    // роли (встроенные и пользовательские): название, место в лицензии, разрешения — интерфейс по ним решает, кого можно назначить
+    roles: Object.fromEntries([...Object.entries(roles.BUILTIN), ...[...roles.load.cache().entries()]].map(([k, d]) => [k, { name: d.name, seat: roles.seatOf(k), permissions: [...roles.permsOf(k)] }])),
     myPermissions: user.role === "admin" ? roles.ALL : [...roles.permsOf(user.role)],
   };
 }
@@ -110,7 +115,7 @@ async function project(key) {
   const [cases, runs, last, bugs, files, autoruns, comments, caseFolders, testPlans, customFields] = await Promise.all([
     pool.query(`${caseSql} WHERE c.project_key=$1 ORDER BY c.num`, k),
     pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at, r.fields,
-                  p.num AS plan_num, COALESCE(p.locked, false) AS plan_locked, (SELECT o.num FROM test_runs o WHERE o.id=r.rerun_of) AS rerun_of,
+                  p.num AS plan_num, COALESCE(p.locked, false) AS plan_locked, (SELECT o.num FROM test_runs o WHERE o.id=r.rerun_of) AS rerun_of, (SELECT v.num FROM releases v WHERE v.id=r.release_id) AS release_num, r.config, r.config_batch,
                   (SELECT json_object_agg(result, n) FROM (SELECT result, count(*)::int AS n FROM run_results WHERE run_id=r.id GROUP BY result) x) AS counts
                 FROM test_runs r LEFT JOIN users u ON u.id=r.created_by LEFT JOIN test_plans p ON p.id=r.plan_id
                 WHERE r.project_key=$1 ORDER BY r.num`, k),
@@ -120,7 +125,8 @@ async function project(key) {
                                 UNION SELECT run_result_id FROM bugs WHERE project_key=$1 AND run_result_id IS NOT NULL)`, k),
     pool.query(`SELECT b.project_key, b.num, b.title, b.status, b.severity, au.login AS assignee, b.environment, b.steps, b.actual, b.expected,
                   c.num AS case_num, t.num AS run_num, b.run_result_id, d.num AS dup_num, b.external_key, b.external_url, b.external_status,
-                  cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at, b.tags, b.fields
+                  cu.login AS created_by, uu.login AS updated_by, b.created_at, b.updated_at, b.tags, b.fields,
+                  (SELECT v.num FROM releases v WHERE v.id=b.release_id) AS release_num
                 FROM bugs b LEFT JOIN users au ON au.id=b.assignee_id LEFT JOIN test_cases c ON c.id=b.case_id
                 LEFT JOIN run_results rr ON rr.id=b.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
                 LEFT JOIN bugs d ON d.id=b.duplicate_of
@@ -145,14 +151,14 @@ async function project(key) {
                 LEFT JOIN users u ON u.id=cm.author_id
                 WHERE COALESCE(b.project_key, c.project_key)=$1 ORDER BY cm.created_at, cm.id`, k),
     pool.query(`SELECT id, project_key, parent_id, name FROM case_folders WHERE project_key=$1 ORDER BY name`, k),
-    pool.query(`SELECT project_key, num, title, mode, locked FROM test_plans WHERE project_key=$1 ORDER BY num`, k),
+    pool.query(`SELECT project_key, num, title, mode, locked, (SELECT v.num FROM releases v WHERE v.id=test_plans.release_id) AS release_num FROM test_plans WHERE project_key=$1 ORDER BY num`, k),
     pool.query(`SELECT id, entity, name, type, options, required, position FROM custom_fields WHERE project_key=$1 ORDER BY entity, position, id`, k),
   ]);
   const empty = { untested: 0, passed: 0, failed: 0, blocked: 0, skipped: 0 };
   return {
     pid: key,
     customFields: customFields.rows,
-    plans: testPlans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked })),
+    plans: testPlans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked, release: p.release_num ?? null })),
     // Тексты тест-кейсов (предусловия, шаги, ожидаемый результат) — бо́льшая часть объёма. В состоянии их нет,
     // карточка и редактор берут кейс целиком из GET /cases/:num. У чек-листа пункты нужны для счётчиков — остаются
     cases: cases.rows.map((r) => {
@@ -164,7 +170,8 @@ async function project(key) {
     runs: runs.rows.map((r) => ({
       id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
       state: r.state, createdBy: r.created_by, created: ms(r.created_at), closed: ms(r.closed_at), planNum: r.plan_num, planLocked: r.plan_locked,
-      counts: { ...empty, ...(r.counts || {}) }, fields: r.fields, rerunOf: r.rerun_of,
+      counts: { ...empty, ...(r.counts || {}) }, fields: r.fields, rerunOf: r.rerun_of, release: r.release_num ?? null,
+      config: r.config || null, batch: r.config_batch || null,
     })),
     results: last.rows.map(toResult),
     bugs: bugs.rows.map((b) => ({
@@ -173,7 +180,7 @@ async function project(key) {
       caseNum: b.case_num, runNum: b.run_num, resultId: b.run_result_id, duplicateOf: b.dup_num,
       createdBy: b.created_by, updatedBy: b.updated_by, created: ms(b.created_at), updated: ms(b.updated_at),
       external: b.external_key ? { key: b.external_key, url: b.external_url, status: b.external_status || "" } : null,
-      tags: b.tags, fields: b.fields,
+      tags: b.tags, fields: b.fields, release: b.release_num ?? null,
     })),
     attachments: files.rows.map(toAttachment),
     autoruns: autoruns.rows.map((r) => ({

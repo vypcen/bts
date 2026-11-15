@@ -188,8 +188,10 @@ async function startRun(opts, call) {
   };
   let run;
   if (/^\d+$/.test(String(opts.run || ""))) {
-    // запуск уже создан в TestBall (задача CI запущена из интерфейса) — дописываем в него
-    await call("PATCH", `/autoruns/${opts.run}`, { ...fields, state: "running" });
+    // запуск уже создан (кнопкой «Запустить в CI» или testbolctl run start) — дописываем в него; ветку, сборку и окружение
+    // меняем, только если их задали явно или их дал CI: догадки по git не должны затирать то, что указали при создании
+    const given = Object.fromEntries(["build", "env", "branch"].filter((k) => opts[k] !== undefined).map((k) => [k, opts[k]]));
+    await call("PATCH", `/autoruns/${opts.run}`, { ...given, state: "running" });
     run = { num: Number(opts.run), id: `${opts.project}-A${opts.run}` };
   } else {
     run = await call("POST", "/autoruns", { title: opts.title || `Локальный запуск${branch ? ` ${branch}` : ""}`, ...fields });
@@ -311,8 +313,22 @@ function collectSources(r) {
   return out;
 }
 
-async function main() {
-  const opts = parseArgs(process.argv.slice(2));
+// Значения по умолчанию из CI: GitLab, GitHub Actions, Jenkins, TeamCity, Bitbucket, Azure DevOps
+function ciDefaults(env = process.env) {
+  const branch = env.CI_COMMIT_REF_NAME || env.GITHUB_HEAD_REF || env.GITHUB_REF_NAME || env.BRANCH_NAME || env.GIT_BRANCH?.replace(/^origin\//, "")
+    || env.BITBUCKET_BRANCH || env.BUILD_SOURCEBRANCHNAME || env.TEAMCITY_BUILD_BRANCH || undefined;
+  const sha = env.CI_COMMIT_SHORT_SHA || env.GITHUB_SHA?.slice(0, 8) || env.GIT_COMMIT?.slice(0, 8) || env.BITBUCKET_COMMIT?.slice(0, 8) || env.BUILD_SOURCEVERSION?.slice(0, 8) || undefined;
+  const pipeline = env.CI_PIPELINE_ID ? `GitLab #${env.CI_PIPELINE_ID}` : env.GITHUB_RUN_NUMBER ? `GitHub Actions #${env.GITHUB_RUN_NUMBER}`
+    : env.BUILD_NUMBER && env.JENKINS_URL ? `Jenkins #${env.BUILD_NUMBER}` : env.BUILD_NUMBER ? `Сборка #${env.BUILD_NUMBER}` : env.BITBUCKET_BUILD_NUMBER ? `Bitbucket #${env.BITBUCKET_BUILD_NUMBER}` : undefined;
+  const ci = Boolean(env.CI || env.JENKINS_URL || env.TEAMCITY_VERSION || env.TF_BUILD);
+  return { branch, build: sha, title: pipeline ? `${pipeline}${branch ? ` · ${branch}` : ""}` : undefined, env: ci ? env.CI_ENVIRONMENT_NAME || env.CI_JOB_NAME || env.GITHUB_JOB || undefined : undefined };
+}
+
+async function main(argv = process.argv.slice(2)) {
+  const opts = parseArgs(argv);
+  // в CI — ветка, коммит и номер сборки из переменных окружения, если не заданы явно
+  const ci = ciDefaults();
+  for (const k of ["branch", "build", "title", "env"]) if (opts[k] === undefined && ci[k]) opts[k] = ci[k];
   if (opts.help) return console.log(HELP), 0;
   opts.url ??= process.env.TESTBALL_URL;
   opts.token ??= process.env.TESTBALL_TOKEN;
@@ -376,10 +392,14 @@ async function main() {
   return code;
 }
 
-main().then(
-  (code) => process.exit(code),
-  (e) => {
-    console.error(`[testball] ${e.message}`);
-    process.exit(1);
-  }
-);
+// Файл можно запускать напрямую или подключать (так его использует утилита testbolctl: testbolctl upload …)
+module.exports = { main, parseArgs, ciDefaults, HELP };
+if (require.main === module) {
+  main().then(
+    (code) => process.exit(code),
+    (e) => {
+      console.error(`[testball] ${e.message}`);
+      process.exit(1);
+    }
+  );
+}

@@ -31,13 +31,14 @@ const lists = require("./lists");
 const casemodel = require("./casemodel");
 const audit = require("./audit");
 const trash = require("./trash");
-const { wrap, str, num, HttpError } = require("./util");
+const { wrap, str, tooLong, num, HttpError } = require("./util");
 const { Limiter, MIN } = require("./limits");
 const version = require("./version");
 const license = require("./license");
 const security = require("./security");
 const shared = require("./shared");
 const review = require("./review");
+const datasets = require("./datasets");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
@@ -60,6 +61,7 @@ const TOKEN_ROUTES = [
   ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/allure$/],
   ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/results\/\d+\/attachments$/],
   ["PATCH", /^\/projects\/[^/]+\/autoruns\/\d+$/],
+  ["GET", /^\/projects\/[^/]+\/autoruns\/\d+\/summary$/],
 ];
 const { broadcast } = live;
 
@@ -109,7 +111,8 @@ app.use((req, res, next) => {
 const bigJson = express.json({ limit: "10mb" });
 app.use("/api/projects/:key/autoruns", (req, res, next) => (req.user ? bigJson(req, res, next) : next()));
 // импорт тест-кейсов — CSV на тысячи строк
-const importJson = express.json({ limit: "5mb" });
+// импорт из Excel присылает файл в base64 — до 15 МБ файла
+const importJson = express.json({ limit: "25mb" });
 app.use("/api/projects/:key/cases/import", (req, res, next) => (req.user ? importJson(req, res, next) : next()));
 // импорт проекта целиком (с вложениями в base64) и миграция из других TMS
 const projectJson = express.json({ limit: `${Number(process.env.IMPORT_MAX_MB || 200)}mb` });
@@ -390,6 +393,7 @@ function readCase(body, prevSteps = [], stepListSent = body.stepList !== undefin
   }
   if (!checklist.KINDS.includes(c.kind)) return { error: "Неизвестный вид: case или checklist" };
   if (!c.title) return { error: c.kind === "checklist" ? "Укажите название чек-листа" : "Укажите название тест-кейса" };
+  if (tooLong(body.title, 500)) return { error: tooLong(body.title, 500) };
   if (!PRIORITIES.includes(c.priority)) return { error: "Неизвестный приоритет" };
   if (!STATUSES.includes(c.status)) return { error: "Неизвестный статус" };
   // у чек-листа вместо шагов — пункты, предусловий и ожидаемого результата нет
@@ -408,6 +412,8 @@ app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => 
   if (badRef) return res.status(400).json({ error: badRef });
   const gate = await review.gateStatus(req, null, c);
   if (gate.error) return res.status(409).json({ error: gate.error });
+  const prm = await datasets.readCaseParams(req.params.key, req.body, c.kind);
+  if (prm.error) return res.status(400).json({ error: prm.error });
   const cf = await casemodel.readFields(pool, req.params.key, "case", req.body.fields, {}, { members: await memberLogins(req.params.key) });
   if (cf.error) return res.status(400).json({ error: cf.error });
   const folder = await folders.folderId(pool, req.params.key, req.body.folder);
@@ -419,10 +425,10 @@ app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => 
     const next = r.rows[0].seq;
     await db.query(
       `INSERT INTO test_cases(project_key, num, kind, folder_id, title, priority, status, preconditions, steps, expected, created_by, updated_by,
-         step_list, tags, fields)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,$14)`,
+         step_list, tags, fields, params, dataset_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,$14,$15,$16)`,
       [req.params.key, next, c.kind, folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id,
-        JSON.stringify(c.stepList), c.tags, cf.fields]
+        JSON.stringify(c.stepList), c.tags, cf.fields, prm.params ? JSON.stringify(prm.params) : null, prm.datasetId ?? null]
     );
     return next;
   });
@@ -449,6 +455,10 @@ app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, re
   const gate = await review.gateStatus(req, rows[0], c);
   if (gate.error) return res.status(409).json({ error: gate.error });
   c.status = gate.status;
+  // параметры: не прислали — как были; у чек-листа параметров нет
+  const prm = await datasets.readCaseParams(req.params.key, req.body, c.kind);
+  if (prm.error) return res.status(400).json({ error: prm.error });
+  const keepParams = prm.params === undefined && c.kind !== "checklist";
   const cf = await casemodel.readFields(pool, req.params.key, "case", req.body.fields, rows[0].fields, { members: await memberLogins(req.params.key) });
   if (cf.error) return res.status(400).json({ error: cf.error });
   // folder: null — в корень проекта; не прислали — остаётся где был
@@ -460,10 +470,12 @@ app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, re
   }
   const upd = await pool.query(
     `UPDATE test_cases SET folder_id=$1, title=$2, priority=$3, status=$4, preconditions=$5, steps=$6, expected=$7, updated_by=$8, updated_at=now(), kind=$11,
-       step_list=$12, tags=$13, fields=$14
+       step_list=$12, tags=$13, fields=$14,
+       params = CASE WHEN $15 THEN params ELSE $16::jsonb END, dataset_id = CASE WHEN $15 THEN dataset_id ELSE $17::int END
      WHERE project_key=$9 AND num=$10 RETURNING version`,
     [folder, c.title, c.priority, c.status, c.pre, c.steps, c.expected, req.user.id, req.params.key, n, c.kind,
-      JSON.stringify(c.stepList), req.body.tags === undefined ? rows[0].tags : c.tags, cf.fields]
+      JSON.stringify(c.stepList), req.body.tags === undefined ? rows[0].tags : c.tags, cf.fields,
+      keepParams, prm.params ? JSON.stringify(prm.params) : null, prm.datasetId ?? null]
   );
   broadcast("cases");
   const version = upd.rows[0].version;
@@ -618,11 +630,12 @@ app.post("/api/projects/:key/cases/:num/versions/:v/restore", auth.requireUser, 
 
 // подсказки языковой модели в формах; запись (черновики бага и кейса) — только тестировщикам, как и сами формы
 app.use("/api/projects/:key/ai", auth.requireUser, require("./assist"));
-app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, autotests.projectRouter, attachments.projectRouter);
-app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, review.router, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
+app.use("/api/notifications", auth.requireUser, require("./notify").router);
+app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, require("./caseimport").router, autotests.projectRouter, attachments.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./coverage").router, require("./templates").router, shared.router, review.router, datasets.router, require("./releases").router, require("./configs").router, require("./notify").projectRouter, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
-app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"), require("./personal").router, audit.router, trash.adminRouter);
+app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./backup").router, require("./users"), require("./personal").router, audit.router, trash.adminRouter);
 app.use("/api/llm", auth.requireUser, llm.router);
 // подключения к языковым моделям (облачные сервисы и свои модели) — только администратор
 app.use("/api/admin/llm", auth.requireUser, access.requireAdmin, llm.adminRouter);
@@ -730,6 +743,7 @@ app.use((err, req, res, _next) => {
   // уборка раз в час: корзина, журнал аудита, журнал вебхуков, выполненные фоновые задачи
   jobs.define("housekeeping", () => Promise.all([trash.purgeExpired(), audit.purge(), require("./personal").purgeIps(), webhooks.trimDeliveries(), jobs.cleanup()]), { maxAttempts: 1, title: "Уборка устаревших данных" });
   jobs.every("housekeeping", 60 * 60 * 1000);
+  require("./backup").startSchedule();
   trackers.startSync();
   jobs.start();
   const server = app.listen(PORT, "0.0.0.0", () => {

@@ -6,7 +6,10 @@ const { broadcast } = require("./live");
 const checklist = require("./checklist");
 const events = require("./events");
 const { distribute, executors } = require("./distribute");
-const { wrap, str, num } = require("./util");
+const releases = require("./releases");
+const configs = require("./configs");
+const notify = require("./notify");
+const { wrap, str, tooLong, num } = require("./util");
 
 const RESULTS = ["untested", "passed", "failed", "blocked", "skipped"];
 const router = express.Router({ mergeParams: true });
@@ -38,6 +41,7 @@ async function unapproved(db, key, ids) {
 function readRun(body) {
   const r = { title: str(body.title, 300), build: str(body.build, 200), env: str(body.env, 500) };
   if (!r.title) return { error: "Укажите название прогона" };
+  if (tooLong(body.title, 300)) return { error: tooLong(body.title, 300) };
   return { r };
 }
 
@@ -46,6 +50,10 @@ router.post("/runs", wrap(async (req, res) => {
   if (error) return res.status(400).json({ error });
   const cf = await casemodel.readFields(pool, req.params.key, "run", req.body.fields, {});
   if (cf.error) return res.status(400).json({ error: cf.error });
+  const rel = await releases.releaseId(pool, req.params.key, req.body.release);
+  if (rel.error) return res.status(400).json({ error: rel.error });
+  const cfg = await configs.readConfig(pool, req.params.key, req.body.config);
+  if (cfg.error) return res.status(400).json({ error: cfg.error });
   const out = await tx(async (db) => {
     const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [req.params.key]);
     if (!seq.rows[0]) return { status: 404, error: "Проект не найден" };
@@ -55,17 +63,18 @@ router.post("/runs", wrap(async (req, res) => {
     if (notReady) return { status: 409, error: notReady };
     const n = seq.rows[0].run_seq;
     const run = await db.query(
-      "INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-      [req.params.key, n, r.title, r.build, r.env, req.user.id, cf.fields]
+      "INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, release_id, config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
+      [req.params.key, n, r.title, r.build, r.env, req.user.id, cf.fields, rel.id, cfg.config ? JSON.stringify(cfg.config) : null]
     );
     await db.query("INSERT INTO run_results(run_id, case_id) SELECT $1, unnest($2::int[])", [run.rows[0].id, ids]);
     // {"assign": {"users": [...], "strategy": "balanced"}} — сразу распределить кейсы
     const dist = req.body.assign?.users?.length ? await distribute(db, req.params.key, run.rows[0].id, req.body.assign.users, req.body.assign.strategy) : null;
-    return { n, dist };
+    return { n, dist, runId: run.rows[0].id };
   });
   if (out.error) return res.status(out.status).json({ error: out.error });
   broadcast("runs");
   events.emit(req.params.key, "run.created", { run: await events.snap.run(req.params.key, out.n) }, req.user);
+  if (out.dist) await notify.onRunAssigned(req, { runId: out.runId, logins: req.body.assign.users }).catch((e) => console.error("[notify]", e.message));
   res.status(201).json({ num: out.n, distribution: out.dist });
 }));
 
@@ -77,7 +86,7 @@ router.post("/runs/:num/rerun", wrap(async (req, res) => {
   const results = Array.isArray(req.body.results) && req.body.results.length ? req.body.results.filter((r) => RERUN_RESULTS.includes(r)) : ["failed", "blocked"];
   if (!results.length) return res.status(400).json({ error: `results: ${RERUN_RESULTS.join(", ")}` });
   const out = await tx(async (db) => {
-    const { rows } = await db.query("SELECT id, title, build, environment, fields, plan_id FROM test_runs WHERE project_key=$1 AND num=$2", [key, num(req.params.num)]);
+    const { rows } = await db.query("SELECT id, title, build, environment, fields, plan_id, config FROM test_runs WHERE project_key=$1 AND num=$2", [key, num(req.params.num)]);
     const old = rows[0];
     if (!old) return { status: 404, error: "Прогон не найден" };
     const picked = await db.query(
@@ -90,10 +99,11 @@ router.post("/runs/:num/rerun", wrap(async (req, res) => {
     const n = seq.rows[0].run_seq;
     const title = str(req.body.title, 300) || `${old.title.replace(/ — перезапуск( \d+)?$/, "")} — перезапуск`;
     const run = await db.query(
-      `INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, plan_id, rerun_of)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      // конфигурация переносится: перезапуск проверяет то же окружение
+      `INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, plan_id, rerun_of, config)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
       [key, n, title, req.body.build !== undefined ? str(req.body.build, 200) : old.build, req.body.env !== undefined ? str(req.body.env, 500) : old.environment,
-        req.user.id, old.fields, old.plan_id, old.id]
+        req.user.id, old.fields, old.plan_id, old.id, old.config ? JSON.stringify(old.config) : null]
     );
     await db.query(
       "INSERT INTO run_results(run_id, case_id, assignee_id) SELECT $1, * FROM unnest($2::int[], $3::int[])",
@@ -117,6 +127,16 @@ router.patch("/runs/:num", wrap(async (req, res) => {
   if (cf.error) return res.status(400).json({ error: cf.error });
   const state = req.body.state === undefined ? rows[0].state : req.body.state;
   if (!["open", "closed"].includes(state)) return res.status(400).json({ error: "Неизвестное состояние прогона" });
+  if (req.body.config !== undefined) {
+    const cfg = await configs.readConfig(pool, req.params.key, req.body.config);
+    if (cfg.error) return res.status(400).json({ error: cfg.error });
+    await pool.query("UPDATE test_runs SET config=$3 WHERE project_key=$1 AND num=$2", [req.params.key, n, cfg.config ? JSON.stringify(cfg.config) : null]);
+  }
+  if (req.body.release !== undefined) {
+    const rel = await releases.releaseId(pool, req.params.key, req.body.release);
+    if (rel.error) return res.status(400).json({ error: rel.error });
+    await pool.query("UPDATE test_runs SET release_id=$3 WHERE project_key=$1 AND num=$2", [req.params.key, n, rel.id]);
+  }
   await pool.query(
     `UPDATE test_runs SET title=$1, build=$2, environment=$3, state=$4, fields=$7,
        closed_at = CASE WHEN $4='closed' THEN COALESCE(closed_at, now()) ELSE NULL END
@@ -161,7 +181,7 @@ router.patch("/runs/:num/results/:case", wrap(async (req, res) => {
   if (!run) return res.status(404).json({ error: "Прогон не найден" });
   if (run.state !== "open") return res.status(409).json({ error: "Прогон закрыт. Откройте его, чтобы менять результаты" });
   const { rows } = await pool.query(
-    `SELECT rr.id, rr.result, rr.comment, rr.items, rr.step_results, rr.assignee_id, c.kind, c.steps,
+    `SELECT rr.id, rr.result, rr.comment, rr.items, rr.step_results, rr.assignee_id, rr.iterations, rr.iter_results, c.kind, c.steps,
        expand_steps(COALESCE(v.step_list, c.step_list)) AS step_list
      FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
      LEFT JOIN test_case_versions v ON v.case_id=c.id AND v.version=rr.case_version
@@ -190,10 +210,43 @@ router.patch("/runs/:num/results/:case", wrap(async (req, res) => {
   } else if (cur.kind === "checklist" && req.body.result !== undefined) {
     return res.status(400).json({ error: "У чек-листа отмечаются пункты, итог считается сам" });
   }
+  // кейс с параметрами: результат и шаги отмечаются по итерации {"iteration": 1, ...}, итог кейса считается по итерациям
+  const iters = Array.isArray(cur.iterations) ? cur.iterations : null;
+  let iterResults = cur.iter_results || {};
+  let it = null;
+  if (req.body.iteration !== undefined) {
+    if (!iters) return res.status(400).json({ error: "У кейса в этом прогоне нет наборов данных" });
+    it = Number(req.body.iteration);
+    if (!Number.isInteger(it) || it < 0 || it >= iters.length) return res.status(404).json({ error: "Такого набора данных нет" });
+  } else if (iters && (req.body.result !== undefined || req.body.step !== undefined)) {
+    return res.status(400).json({ error: "Кейс проверяется по наборам данных: укажите iteration (с 0)" });
+  }
+  if (it !== null) {
+    const cell = iterResults[it] || { result: "untested", steps: {} };
+    let r = req.body.result === undefined ? cell.result : result;
+    let steps = cell.steps || {};
+    if (req.body.step !== undefined) {
+      if (cur.kind !== "case") return res.status(400).json({ error: "Шаги есть только у тест-кейса" });
+      const i = Number(req.body.step);
+      if (!Number.isInteger(i) || i < 0 || i >= cur.step_list.length) return res.status(404).json({ error: "Такого шага нет: возможно, кейс изменили" });
+      steps = { ...steps };
+      const prev = steps[i] || {};
+      const actual = req.body.actual === undefined ? prev.actual || "" : str(req.body.actual, 5000);
+      if (r === "untested" && !actual) delete steps[i];
+      else steps[i] = { result: r, actual };
+      const marks = Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, v.result]).filter(([, x]) => x !== "untested"));
+      r = checklist.verdict(cur.step_list.map((_, k) => String(k)), marks);
+    }
+    iterResults = { ...iterResults };
+    if (r === "untested" && !Object.keys(steps).length) delete iterResults[it];
+    else iterResults[it] = { result: r, steps };
+    const marks = Object.fromEntries(Object.entries(iterResults).map(([k, v]) => [k, v.result]).filter(([, x]) => x !== "untested"));
+    result = checklist.verdict(iters.map((_, k) => String(k)), marks);
+  }
   // результат шага тест-кейса: {"step": 2, "result": "failed", "actual": "что произошло"} (шаги с 0, по проверяемой версии).
   // Итог кейса считается по шагам, как у чек-листа; отметить итог целиком без шагов тоже можно
   let stepResults = cur.step_results;
-  if (req.body.step !== undefined) {
+  if (req.body.step !== undefined && it === null) {
     if (cur.kind !== "case") return res.status(400).json({ error: "Шаги есть только у тест-кейса" });
     const i = Number(req.body.step);
     if (!Number.isInteger(i) || i < 0 || i >= cur.step_list.length) return res.status(404).json({ error: "Такого шага нет: возможно, кейс изменили" });
@@ -208,11 +261,11 @@ router.patch("/runs/:num/results/:case", wrap(async (req, res) => {
   const changed = result !== cur.result;
   // исполнитель и время фиксируются, когда меняется сам результат, а не комментарий
   await pool.query(
-    `UPDATE run_results SET result=$1, comment=$2, items=$6, assignee_id=$7, step_results=$8,
+    `UPDATE run_results SET result=$1, comment=$2, items=$6, assignee_id=$7, step_results=$8, iter_results=$9,
        executed_by = CASE WHEN $3 THEN (CASE WHEN $1='untested' THEN NULL ELSE $4::int END) ELSE executed_by END,
        executed_at = CASE WHEN $3 THEN (CASE WHEN $1='untested' THEN NULL ELSE now() END) ELSE executed_at END
      WHERE id=$5`,
-    [result, comment, changed, req.user.id, cur.id, JSON.stringify(items), assignee, JSON.stringify(stepResults)]
+    [result, comment, changed, req.user.id, cur.id, JSON.stringify(items), assignee, JSON.stringify(stepResults), JSON.stringify(iterResults)]
   );
   broadcast("runs");
   if (changed) {
@@ -232,6 +285,7 @@ router.post("/runs/:num/distribute", wrap(async (req, res) => {
   if (run.state !== "open") return res.status(409).json({ error: "Прогон закрыт" });
   const out = await tx((db) => distribute(db, req.params.key, run.id, req.body.users, req.body.strategy || "balanced", req.body.onlyUnassigned !== false));
   broadcast("runs");
+  await notify.onRunAssigned(req, { runId: run.id, logins: Array.isArray(req.body.users) ? req.body.users : [] }).catch((e) => console.error("[notify]", e.message));
   res.json(out);
 }));
 

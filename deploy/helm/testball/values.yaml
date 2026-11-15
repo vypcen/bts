@@ -20,7 +20,7 @@ database:
   poolSize: 10
 
 # Секреты приложения. existingSecret — свой Secret с теми же ключами (APP_SECRET, SETUP_CODE, OIDC_CLIENT_SECRET,
-# LDAP_BIND_PASSWORD, KERBEROS_PROXY_SECRET, S3_ACCESS_KEY, S3_SECRET_KEY, LICENSE_KEY); иначе Secret создаётся из значений ниже.
+# LDAP_BIND_PASSWORD, KERBEROS_PROXY_SECRET, S3_ACCESS_KEY, S3_SECRET_KEY, LICENSE_KEY, BACKUP_VERIFY_DATABASE_URL); иначе Secret создаётся из значений ниже.
 secrets:
   existingSecret: ""
   # длинная случайная строка: шифрует токены интеграций в базе. Одинаковая на всех репликах, менять нельзя
@@ -32,6 +32,8 @@ secrets:
   kerberosProxySecret: ""
   s3AccessKey: ""
   s3SecretKey: ""
+  # пустая служебная база для автопроверки восстановления каждой копии (её содержимое перезаписывается!)
+  backupVerifyDatabaseUrl: ""
   # лицензионный ключ TB1.… (можно не задавать и ввести в интерфейсе: «Пользователи → Лицензия и система»)
   licenseKey: ""
   # токен для /metrics (Prometheus). Пусто — метрики выключены
@@ -69,6 +71,26 @@ storage:
     size: 20Gi
     storageClassName: ""
     accessModes: ["ReadWriteOnce"]
+
+# Резервные копии (база + проверка вложений). Список, «Создать сейчас», скачивание — «Пользователи → Резервные копии».
+# storage.type=s3: CronJob по расписанию кладёт копии в тот же бакет (префикс s3Prefix); вложения в S3 защищайте
+#   версионированием/репликацией бакета — копия проверяет, что все файлы на месте.
+# storage.type=local: копии делает приложение раз в everyHours часов на отдельный том (вместе с архивом вложений).
+backup:
+  enabled: true
+  schedule: "30 2 * * *"
+  timeZone: ""            # например, Europe/Moscow (Kubernetes 1.27+)
+  keep: 14
+  s3Prefix: "backups/"
+  everyHours: 24
+  timeoutSeconds: 21600
+  tmpSize: 20Gi
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+  local:
+    size: 50Gi
+    storageClassName: ""
 
 service:
   type: ClusterIP

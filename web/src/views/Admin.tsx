@@ -146,13 +146,13 @@ interface System {
 interface LicenseState {
   edition: string; status: "none" | "active" | "grace" | "expired" | "invalid" | "wrong-host"; notice: string | null;
   full: number | null; view: number | null; source: "db" | "env" | null;
-  license: { id: string; customer: string; issued: string | null; expires: string | null; updatesUntil: string | null; host: string | null; test: boolean } | null;
+  license: { id: string; customer: string; issued: string | null; expires: string | null; perpetual?: boolean; host: string | null; test: boolean } | null;
   seats: { full: { used: number; limit: number | null }; view: { used: number; limit: number | null } };
 }
 
-const EDITIONS: Record<string, string> = { community: "Бесплатная", team: "Команда", enterprise: "Корпоративная" };
+const EDITIONS: Record<string, string> = { community: "Бесплатная", team: "Команда", enterprise: "Корпоративная", trial: "Пилот" };
 const STATUS: Record<LicenseState["status"], string> = {
-  none: "ключ не введён", active: "действует", grace: "истекла, льготный период", expired: "истекла", invalid: "ключ не принят", "wrong-host": "ключ для другого адреса",
+  none: "ключ не введён", active: "действует", grace: "пилот закончился, льготный период", expired: "пилот закончился", invalid: "ключ не принят", "wrong-host": "ключ для другого адреса",
 };
 
 // Лицензия: условия ключа, занятые места, ввод нового ключа
@@ -177,7 +177,7 @@ function LicenseCard() {
   const rows: [string, string][] = [
     ["Редакция", `${EDITIONS[state.edition] || state.edition}${l?.test ? " (тестовый ключ)" : ""}`],
     ["Статус", STATUS[state.status]],
-    ...(l ? ([["Владелец", l.customer], ["Номер", l.id], ["Действует до", l.expires || "бессрочно"], ["Обновления до", l.updatesUntil || "—"], ...(l.host ? [["Адрес", l.host]] : [])] as [string, string][]) : []),
+    ...(l ? ([["Владелец", l.customer], ["Номер", l.id], ["Срок", l.expires ? `пилот до ${l.expires}` : "бессрочно, обновления включены"], ...(l.host ? [["Адрес", l.host]] : [])] as [string, string][]) : []),
     ["Полные места (админы, тестировщики)", seat(state.seats.full)],
     ["Просмотровые места (разработчики, наблюдатели)", seat(state.seats.view)],
   ];
@@ -302,7 +302,7 @@ function JobsCard() {
               <tbody>
                 {v.failed.map((j) => (
                   <tr key={j.id}>
-                    <td>{j.title}<div className="small muted">{what(j)}</div></td>
+                    <td className="wrap">{j.title}<div className="small muted">{what(j)}</div></td>
                     <td className="small" style={{ maxWidth: 420, wordBreak: "break-word" }}>{j.error}</td>
                     <td className="small">{j.attempts}</td>
                     <td className="small muted">{fmt(j.finished)}</td>

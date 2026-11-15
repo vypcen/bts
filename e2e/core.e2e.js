@@ -77,6 +77,14 @@ test("глобальный поиск по Ctrl+K находит кейс и о�
   await expect(page).toHaveURL(new RegExp(`#/p/LK/cases/${k.num}$`));
 });
 
+test("поиск открывается и при русской раскладке (⌘/Ctrl + клавиша K = «л»)", async ({ page }) => {
+  await login(page);
+  await expect(page.getByRole("heading", { name: "Проекты" })).toBeVisible();
+  // код выполняется в браузере
+  await page.evaluate(() => globalThis.dispatchEvent(new globalThis.KeyboardEvent("keydown", { key: "л", code: "KeyK", ctrlKey: true, bubbles: true })));
+  await expect(page.getByRole("combobox")).toBeVisible();
+});
+
 test("карточка и редактор кейса догружают шаги; правка названия не стирает шаги", async ({ page }) => {
   await login(page);
   const api = page.request;
@@ -115,7 +123,7 @@ test("модель кейса: поле в настройках, кейс со �
   await page.goto("/#/p/LK/integrations");
   await page.getByRole("button", { name: "+ Поле" }).click();
   await page.getByLabel("Название *").fill("Компонент");
-  await page.getByLabel("Варианты").fill("Оплата\nВход");
+  await page.locator(".modal").getByLabel("Варианты").fill("Оплата\nВход");
   await page.locator(".modal").getByRole("button", { name: "Добавить" }).click();
   await expect(page.getByText("Оплата, Вход")).toBeVisible();
 
@@ -358,4 +366,195 @@ test("ревью: автор отправляет кейс на ревью, ре
   await rp.locator(".modal").getByRole("button", { name: "Утвердить" }).click();
   await expect(rd.getByLabel("Статус кейса")).toHaveValue("ready");
   await ctx.close();
+});
+
+test("параметры кейса: таблица в редакторе, итерации по наборам в прогоне с подстановкой значений", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const n = (await (await api.post("/api/projects/LK/cases", { data: { title: "Вход ролью", priority: "high", status: "ready", stepList: [{ action: "Войти как {{login}}", expected: "Кабинет открыт" }] } })).json()).num;
+  // параметры через редактор
+  await page.goto(`/#/p/LK/cases/${n}`);
+  await page.locator("aside.drawer").getByRole("button", { name: "Редактировать" }).click();
+  const form = page.locator("aside.drawer");
+  await form.getByLabel("Своя таблица").check();
+  await form.getByLabel("Новый параметр").fill("login");
+  await form.getByRole("button", { name: "+ Параметр" }).click();
+  await form.getByRole("button", { name: "+ Набор" }).click();
+  await form.getByRole("button", { name: "+ Набор" }).click();
+  await form.getByLabel("login, Набор 1").fill("admin");
+  await form.getByLabel("login, Набор 2").fill("guest");
+  await form.getByRole("button", { name: "Сохранить", exact: true }).click();
+  await expect(page.locator("aside.drawer").getByText("Параметры · 2 наб.")).toBeVisible();
+
+  const run = (await (await api.post("/api/projects/LK/runs", { data: { title: "Роли", caseNums: [n] } })).json()).num;
+  await page.goto(`/#/p/LK/runs/${run}`);
+  await page.getByText("Вход ролью").click();
+  const d = page.locator("aside.drawer");
+  await expect(d.getByText("Войти как admin")).toBeVisible();
+  await d.getByRole("group", { name: "Результат набора Набор 1" }).getByRole("button", { name: "Пройден" }).click();
+  await d.getByRole("tab", { name: /Набор 2/ }).click();
+  await expect(d.getByText("Войти как guest")).toBeVisible();
+  await d.getByRole("group", { name: "Результат шага 1" }).getByRole("button", { name: "Упал" }).click();
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results[0].result).toBe("failed");
+  const res = (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results[0];
+  expect(res.iterResults["0"].result).toBe("passed");
+  expect(res.iterResults["1"].steps["0"].result).toBe("failed");
+});
+
+test("релизы: создать релиз, прогон в релизе, страница готовности", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  await page.goto("/#/p/LK/releases");
+  await page.getByRole("button", { name: "+ Релиз" }).click();
+  await page.getByLabel("Название *").fill("E2E релиз 3.0");
+  await page.getByLabel("Срок").fill("2030-01-31");
+  await page.getByRole("button", { name: "Создать" }).click();
+  await expect(page.getByRole("heading", { name: "E2E релиз 3.0" })).toBeVisible();
+  await expect(page.getByText("Не готов к выпуску")).toBeVisible();
+  await expect(page.getByText("В релизе нет прогонов с кейсами")).toBeVisible();
+  const rel = Number(page.url().match(/releases\/(\d+)/)[1]);
+  const c = (await (await api.post("/api/projects/LK/cases", { data: { title: "Релизный кейс", priority: "high", status: "ready", steps: "a" } })).json()).num;
+  const run = (await (await api.post("/api/projects/LK/runs", { data: { title: "Релизный прогон", caseNums: [c], release: rel } })).json()).num;
+  await api.patch(`/api/projects/LK/runs/${run}/results/${c}`, { data: { result: "passed" } });
+  await page.reload();
+  await expect(page.getByText("✓ Готов к выпуску")).toBeVisible();
+  await expect(page.getByText("Релизный прогон")).toBeVisible();
+  // в форме прогона есть выбор релиза
+  await page.goto("/#/p/LK/runs");
+  await page.getByRole("button", { name: "+ Новый прогон" }).click();
+  await expect(page.getByLabel("Релиз", { exact: true })).toBeVisible();
+});
+
+test("режим выполнения прогона: список и кейс рядом, отметки клавишами", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const a = (await (await api.post("/api/projects/LK/cases", { data: { title: "Клавиши: первый", priority: "low", status: "ready", steps: "a" } })).json()).num;
+  const b = (await (await api.post("/api/projects/LK/cases", { data: { title: "Клавиши: второй", priority: "low", status: "ready", steps: "b" } })).json()).num;
+  const run = (await (await api.post("/api/projects/LK/runs", { data: { title: "Горячие клавиши", caseNums: [a, b] } })).json()).num;
+  await page.goto(`/#/p/LK/runs/${run}`);
+  await page.getByRole("button", { name: "Режим выполнения" }).click();
+  const panel = page.getByRole("region", { name: "Результат кейса" });
+  await expect(panel.getByRole("heading", { name: "Клавиши: первый" })).toBeVisible();
+  await page.keyboard.press("p");
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results.find((x) => x.caseNum === a).result).toBe("passed");
+  await page.keyboard.press("n");
+  await expect(panel.getByRole("heading", { name: "Клавиши: второй" })).toBeVisible();
+  await page.keyboard.press("f");
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results.find((x) => x.caseNum === b).result).toBe("failed");
+  // в поле комментария клавиши не срабатывают
+  await panel.getByLabel("Комментарий / фактический результат").fill("pfbs");
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results.find((x) => x.caseNum === b).result).toBe("failed");
+  await page.getByRole("button", { name: "Обычный вид" }).click();
+  await expect(page.getByRole("table")).toBeVisible();
+});
+
+test("конфигурации: справочник в настройках, прогон по плану на две конфигурации, матрица", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  await page.goto("/#/p/LK/integrations");
+  await page.getByLabel("Группа", { exact: true }).fill("Браузер E2E");
+  await page.getByLabel("Варианты через запятую").fill("Chrome, Firefox");
+  await page.getByRole("button", { name: "+ Группа" }).click();
+  await expect(page.getByLabel("Варианты: Браузер E2E")).toHaveValue("Chrome, Firefox");
+  const c = (await (await api.post("/api/projects/LK/cases", { data: { title: "Кросс-браузерный вход", priority: "high", status: "ready", steps: "a" } })).json()).num;
+  const plan = (await (await api.post("/api/projects/LK/plans", { data: { title: "Кросс-браузер E2E", mode: "static", caseNums: [c] } })).json()).num;
+  await page.goto(`/#/p/LK/plans/${plan}`);
+  await page.getByRole("button", { name: "Создать прогон", exact: true }).click();
+  const modal = page.locator(".modal");
+  await modal.getByLabel("Chrome").check();
+  await modal.getByLabel("Firefox").check();
+  await expect(modal.getByText("Будет создано прогонов: 2")).toBeVisible();
+  await modal.getByRole("button", { name: "Создать 2 прогонов (по 1 кейсов)" }).click();
+  await expect(page.getByRole("heading", { name: /Кросс-браузер E2E — Chrome/ })).toBeVisible();
+  await page.getByRole("button", { name: "Матрица конфигураций" }).click();
+  await expect(page.locator(".modal").getByRole("link", { name: "Firefox" })).toBeVisible();
+  await expect(page.locator(".modal").getByText("Кросс-браузерный вход")).toBeVisible();
+});
+
+test("уведомления: упоминание через подсказку, колокольчик у упомянутого, переход по уведомлению", async ({ page, browser }) => {
+  await login(page);
+  const api = page.request;
+  const n = (await (await api.post("/api/projects/LK/bugs", { data: { title: "Колокольчик E2E", severity: "minor" } })).json()).num;
+  await page.goto(`/#/p/LK/bugs/${n}`);
+  const d = page.locator("aside.drawer");
+  await expect(d.getByRole("button", { name: /Слежу/ })).toBeVisible();
+  const box = d.getByLabel("Новый комментарий");
+  await box.fill("Посмотри, @adm");
+  await d.getByRole("option", { name: /@admin/ }).click();
+  await expect(box).toHaveValue("Посмотри, @admin ");
+  await box.press("Control+Enter");
+  await expect(d.locator(".mention", { hasText: "@admin" })).toBeVisible();
+
+  const ctx = await browser.newContext();
+  const ap = await ctx.newPage();
+  await login(ap, "admin");
+  await ap.goto("/#/");
+  await ap.getByRole("button", { name: /Уведомления: непрочитанных/ }).click();
+  await ap.getByRole("dialog", { name: "Уведомления" }).getByText(/упомянул\(а\) вас в LK-B/).first().click();
+  await expect(ap).toHaveURL(new RegExp(`#/p/LK/bugs/${n}$`));
+  await ctx.close();
+});
+
+test("импорт из Excel: мастер сопоставляет колонки, шаги по строкам, проверка и импорт", async ({ page }) => {
+  const ExcelJS = require("exceljs");
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Тесты");
+  ws.addRow(["Summary", "Action", "Expected Result", "Labels"]);
+  ws.addRow(["E2E Excel: оформление заказа", "Добавить товар", "В корзине 1", "e2e"]);
+  ws.addRow(["", "Оформить заказ", "Заказ создан", ""]);
+  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  await login(page);
+  await page.goto("/#/p/LK/cases");
+  await page.getByRole("button", { name: "Импорт", exact: true }).click();
+  const modal = page.locator(".modal");
+  await modal.getByLabel("Файл").setInputFiles({ name: "xray.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: buf });
+  await expect(modal.getByLabel("Куда: Summary")).toHaveValue("t:title");
+  await expect(modal.getByLabel("Куда: Action")).toHaveValue("t:steps");
+  // Expected Result в выгрузке Xray — у шага, а не у кейса
+  await modal.getByLabel("Куда: Expected Result").selectOption("t:stepExpected");
+  await modal.getByRole("button", { name: "Проверить" }).click();
+  await expect(modal.getByText("создать 1")).toBeVisible();
+  await expect(modal.getByText(/шагов 2/)).toBeVisible();
+  await modal.getByRole("button", { name: "Импортировать (1)" }).click();
+  await page.locator("td.title", { hasText: "E2E Excel: оформление заказа" }).first().click();
+  await expect(page.locator("aside.drawer").getByText("Ожидается: Заказ создан")).toBeVisible();
+});
+
+test("резервные копии: создать сейчас, проверка пройдена, подробности и скачивание", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/#/users/backups");
+  await page.getByRole("button", { name: "Создать сейчас" }).click();
+  await expect(page.getByText("✓ пройдена").first()).toBeVisible({ timeout: 30000 });
+  await page.getByRole("link", { name: /^testball-.*\.tar$/ }).first().click();
+  await expect(page.locator(".modal").getByText("Чтение дампа")).toBeVisible();
+  await expect(page.locator(".modal").getByText("Файлы вложений")).toBeVisible();
+  await page.locator(".modal").getByRole("button", { name: "Закрыть" }).click();
+  const dl = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Скачать" }).first().click();
+  expect((await dl).suggestedFilename()).toMatch(/^testball-.*\.tar$/);
+});
+
+test("матрица покрытия: сетка требований и кейсов, срез по прогону, выгрузка в Excel", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const k1 = await (await api.post("/api/projects/LK/cases", { data: { title: "E2E матрица: оплата картой", priority: "high", status: "ready" } })).json();
+  const k2 = await (await api.post("/api/projects/LK/cases", { data: { title: "E2E матрица: возврат", priority: "high", status: "ready" } })).json();
+  await api.post("/api/projects/LK/requirements", { data: { title: "E2E матрица: оплата", cases: [k1.num, k2.num] } });
+  const run = await (await api.post("/api/projects/LK/runs", { data: { title: "E2E матрица", caseNums: [k1.num] } })).json();
+  await api.patch(`/api/projects/LK/runs/${run.num}/results/${k1.num}`, { data: { result: "passed" } });
+  await page.goto("/#/p/LK/reqs");
+  await page.getByRole("button", { name: "Матрица покрытия" }).click();
+  const matrix = page.getByRole("table", { name: "Матрица покрытия" });
+  const row = matrix.getByRole("row", { name: /E2E матрица: оплата/ });
+  await expect(row.getByLabel(`LK-${k1.num}: Пройден`)).toBeVisible();
+  await expect(row.getByLabel(`LK-${k2.num}: Не проверен`)).toBeVisible();
+  await expect(row.getByText("Частично")).toBeVisible();
+  // срез по прогону: второго кейса в прогоне нет
+  await page.getByLabel("Срез результатов").selectOption("run");
+  await page.getByLabel("Номер прогона").fill(String(run.num));
+  await expect(row.getByLabel(`LK-${k2.num}: вне среза`)).toBeVisible();
+  await expect(page.getByText(`Прогон LK-R${run.num}`)).toBeVisible();
+  const dl = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Excel" }).click();
+  expect((await dl).suggestedFilename()).toBe(`LK-coverage-matrix-R${run.num}.xlsx`);
 });

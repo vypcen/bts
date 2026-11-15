@@ -232,7 +232,7 @@ data: {"type":"bugs","pid":"LK","at":1761040000000}
 | Поле | Тип | Обяз. | Описание |
 |---|---|---|---|
 | `kind` | string | нет | `case` — тест-кейс (по умолчанию), `checklist` — чек-лист |
-| `title` | string | да | До 500 символов |
+| `title` | string | да | До 500 символов, длиннее — `400` |
 | `priority` | string | да | `critical`, `high`, `medium`, `low` |
 | `status` | string | да | `draft`, `ready`, `deprecated` |
 | `pre` | string | нет | Предусловия |
@@ -279,6 +279,38 @@ data: {"type":"bugs","pid":"LK","at":1761040000000}
 - `DELETE /:num` — если блок используется, нужно `{"inline": true}`: в кейсах ссылка заменится копией шагов (иначе `409` с `inUse`).
 
 Нужно разрешение `cases.edit`. Ссылка на блок другого проекта при сохранении кейса — `400`. Блоки переносятся при экспорте и импорте проекта.
+
+### Уведомления
+
+- `GET /api/notifications?unread=1` — `{"items": [{"id", "project", "kind": "assigned|mention|status|comment|review|run", "title", "body", "link": "p/LK/bugs/3", "actor", "created", "read"}], "unread": 3}` (последние 50).
+- `POST /api/notifications/read` — `{"ids": [1, 2]}` или `{"all": true}`.
+- `GET / PUT /api/notifications/settings` — `{"email", "emailOn", "off": ["comment"]}`; в ответе `GET` ещё `kinds` (названия видов) и `smtp` (настроена ли почта).
+- Подписка: `GET /api/projects/:key/watch?kind=bugs|cases&num=3` → `{watching, watchers}`; `POST` `{"kind", "num", "watching": false}` — отписаться (автоподписка больше не вернёт).
+- `@логин` в комментарии уведомляет участника проекта (или админа).
+
+### Конфигурации: `/api/projects/:key/configs`
+
+- `GET` — `{"groups": [{"id", "name": "Браузер", "options": ["Chrome", "Firefox"], "position"}]}`; `POST` `{name, options}`, `PATCH /:id`, `DELETE /:id` (прогоны сохраняют свою конфигурацию). Нужно `settings` или `plans.edit`.
+- Прогон: `POST /runs` и `PATCH /runs/:num` принимают `config: {"Браузер": "Chrome", "ОС": "Windows"}` (`null` — без конфигурации); группы и варианты — из справочника, иначе `400`. В состоянии у прогона `config` и `batch`.
+- `POST /plans/:num/runs` с `configs: [{...}, {...}]` (до 50) создаёт по прогону на каждую конфигурацию с общим `batch`; ответ `{num, runs: [12, 13], batch}`. Повторы отбрасываются.
+- `GET /runs/matrix/:batch` — `{runs: [{num, title, label, counts}], cases: [{num, title, results: {"12": "passed"}}]}`.
+
+### Релизы: `/api/projects/:key/releases`
+
+- `GET` — `{"items": [{"num", "ref": "LK-V1", "name", "status": "planned|active|released|cancelled", "parent": null, "starts": "2026-11-01", "due": "2026-12-31", "released", "runs", "openBugs", "cases": {"total", "done", "passed"}}]}`. `parent` — номер релиза у спринта.
+- `GET /:num` — то же плюс `sprints`, `cases: {total, done, counts, progress, passRate}` (последний результат каждого кейса в прогонах релиза и спринтов), `bugs: {open, severe, list}`, `runs`, `plans`, `ready`, `blockers` (что мешает выпуску).
+- `POST` — `{"name", "description", "status", "starts", "due", "parent": номер релиза}` → `{num, ref}`; `PATCH /:num` — те же поля; `DELETE /:num` — релиз и его спринты удаляются, прогоны, планы и баги отвязываются.
+- `POST /:num/link` — `{"runs": [3], "plans": [1], "bugs": [7]}` привязать, с `"linked": false` — отвязать.
+
+У `POST /runs`, `POST`/`PATCH /plans`, `POST /plans/:num/runs`, `POST`/`PATCH /bugs`, `PATCH /runs/:num` есть поле `release` (номер, `null` — отвязать). Прогон по плану и перезапуск наследуют релиз, баг из прогона — релиз прогона. В состоянии у прогонов, планов и багов — `release`. Нужно `plans.edit` (у багов — `bugs.edit`).
+
+### Параметры и наборы данных
+
+У тест-кейса (не чек-листа) в `POST`/`PATCH …/cases` можно прислать `params: {"columns": ["login", "role"], "rows": [{"name": "Админ", "values": {"login": "admin", "role": "администратор"}}]}` — своя таблица, или `dataset: <id набора>` — набор данных проекта; `params: null, dataset: null` — убрать параметры. До 20 параметров и 100 наборов, имя параметра — буквы, цифры, пробел, `.`, `-`, `_`. В ответе кейса — `params` или `dataset: {id, num, name, columns, rows}`. Параметры не входят в версии кейса.
+
+Наборы данных: `GET /api/projects/:key/datasets` (`items` с `usedIn`), `GET …/datasets/:num` (и `cases`), `POST` `{name, columns, rows}` → `{id, num}`, `PATCH …/:num`, `DELETE …/:num` → `{copiedTo}` — кейсы получают копию таблицы. Нужно `cases.edit`, название набора уникально в проекте (`409`).
+
+**В прогоне.** При добавлении кейса в прогон (любым способом) наборы копируются в результат: `iterations: [{name, values}]`, результаты — `iterResults: {"0": {"result", "steps": {...}}}`. Отметка — с номером набора (с 0): `PATCH …/runs/:num/results/:case` `{"iteration": 1, "result": "passed"}` или `{"iteration": 1, "step": 0, "result": "failed", "actual": "…"}`. Без `iteration` у такого кейса результат и шаги — `400`; комментарий и исполнитель — без него. Итог кейса считается по наборам так же, как по шагам. Подстановка `{{имя}}` в текст шагов — на стороне клиента.
 
 ### Ревью кейсов
 
@@ -333,6 +365,13 @@ CSV-файл с кейсами проекта: UTF-8 с BOM, разделите�
 ```
 
 `line` — номер строки в файле с учётом многострочных ячеек. Без `dryRun` файл применяется одной транзакцией: при любой ошибке ничего не импортируется, ответ `400` с теми же `errors`. Удачный импорт отвечает `{"summary": {…}}`.
+
+### Импорт из Excel с сопоставлением колонок
+
+1. `POST /api/projects/:key/cases/import/table` — `{"file": "<base64>", "name": "cases.xlsx"}` (xlsx или CSV, до 15 МБ) → `{"targets": [{key, label}], "fields": [{id, name, type}], "sheets": [{"name", "headerRow", "header": [...], "sample": [[...]], "total", "suggest": {"map": {"title": 0, "steps": 4}, "fields": {"7": 9}}}]}`. Строка заголовков — первая непустая.
+2. `POST /api/projects/:key/cases/import/mapped` — тот же файл и `{"sheet": 1, "headerRow": 1, "map": {"title": 0, "steps": 4, "stepExpected": 6, "stepData": 5, "folder": 1}, "fields": {"7": 9}, "dryRun": true}`. Ответ — как у CSV-импорта, плюс `preview` (первые кейсы). Без `dryRun` — импорт одной транзакцией.
+
+Ключи `map`: `id`, `folder`, `title`, `priority`, `status`, `pre`, `steps`, `expected`, `kind`, `stepExpected`, `tags`, `stepData`. Строка без названия, но с шагом, дописывается к кейсу выше — так шаги лежат в выгрузках Zephyr Scale и Xray. Значение пользовательского поля-списка должно совпадать с вариантом (без учёта регистра), мультисписок — через запятую.
 
 ## Папки тест-кейсов
 
@@ -657,6 +696,10 @@ curl -X POST "$URL/api/projects/LK/bugs/7/attachments" \
 
 Удаляет тест из реестра вместе с его результатами во всех запусках. Если тест снова придёт в отчёте, он заведётся заново. Нужна сессия. Ответ: `{"ok": true}`.
 
+### `GET /api/projects/:key/autoruns/:num/summary`
+
+Сводка запуска для CI, доступна и токену результатов: `{"num", "id", "title", "state", "build", "branch", "counts": {"total", "passed", "failed", "broken", "skipped", "flaky"}, "failedBlocking"}`. `failedBlocking` — упавшие и сломанные тесты не в карантине: по нему `testbolctl run status --fail-on failed` решает, ронять ли сборку. Утилита для CI — [cli/README.md](../cli/README.md).
+
 ### Пример: отправка через curl
 
 ```sh
@@ -702,12 +745,13 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 ```json
 {
   "edition": "enterprise", "status": "active", "notice": null, "full": 50, "view": null, "source": "db",
-  "license": { "id": "TB-20261115-3F2A1C", "customer": "ООО Ромашка", "issued": "2026-11-15", "expires": "2027-12-31", "updatesUntil": "2027-12-31", "host": null, "test": false },
+  "license": { "id": "TB-20261115-3F2A1C", "customer": "ООО Ромашка", "issued": "2026-11-15", "expires": null, "perpetual": true, "host": null, "test": false },
   "seats": { "full": { "used": 12, "limit": 50 }, "view": { "used": 40, "limit": null } }
 }
 ```
 
-`status`: `none` — ключа нет (бесплатная редакция), `active`, `grace` — истёк, идёт льготный период 14 дней, `expired`, `invalid` — подпись не сходится, `wrong-host` — ключ выдан для другого `PUBLIC_URL`. `notice` — предупреждение для администратора (оно же приходит в `GET /api/auth/me` как `user.licenseNotice`). `full`/`view` — лимиты мест, `null` — без ограничений. `source`: `db` — ключ введён в интерфейсе, `env` — из `LICENSE_KEY`.
+Лицензия бессрочная: у постоянного ключа `expires: null`, `perpetual: true`. Срок есть только у пилотного ключа (`edition: "trial"`).
+`status`: `none` — ключа нет (бесплатная редакция), `active`, `grace` — пилот закончился, идёт льготный период 14 дней, `expired` — пилот закончился, `invalid` — подпись не сходится, `wrong-host` — ключ выдан для другого `PUBLIC_URL`. `notice` — предупреждение для администратора (оно же приходит в `GET /api/auth/me` как `user.licenseNotice`). `full`/`view` — лимиты мест, `null` — без ограничений. `source`: `db` — ключ введён в интерфейсе, `env` — из `LICENSE_KEY`.
 
 ### `PUT /api/admin/license`
 
@@ -909,6 +953,25 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 ### `GET /api/projects/:key/cases/:num/requirements`
 
 Требования, с которыми связан кейс: `{"items": [{"num": 1, "title": "…", "status": "approved", "extRef": "AUTH-1"}]}`.
+
+### `GET /api/projects/:key/requirements/matrix`
+
+Матрица покрытия (H-04). Параметры: `release` — номер релиза (результаты его прогонов и спринтов), `run` — номер прогона, `obsolete=1` — включить устаревшие требования. Без параметров — последние результаты кейсов.
+
+```json
+{
+  "scope": { "kind": "release", "num": 1, "label": "Релиз 2.0" },
+  "requirements": [{ "num": 1, "title": "Вход", "extRef": "AUTH-1", "status": "approved", "coverage": "failed", "cases": [1, 2], "openBugs": 1 }],
+  "cases": [{ "num": 2, "title": "Восстановление пароля", "inScope": true, "result": "failed", "run": 3, "executed": 1763200000000, "executor": "Тестировщик", "bugs": [{ "num": 4, "title": "…", "severity": "major" }] }],
+  "summary": { "passed": 0, "partial": 0, "failed": 1, "untested": 0, "none": 0, "total": 1, "coveredPct": 100, "passedPct": 0, "casesLinked": 2, "casesUnlinked": 5 }
+}
+```
+
+`inScope: false` — кейс не попал в выбранный релиз или прогон (для покрытия считается непроверенным).
+
+### `GET /api/projects/:key/requirements/matrix/export?format=xlsx|pdf|csv`
+
+Та же матрица файлом, с теми же параметрами среза. Excel — листы «Сводка», «Матрица» (цветная сетка), «Детально»; PDF — альбомный отчёт; CSV — строка на пару «требование — кейс».
 
 ### `GET /api/projects/:key/requirements/matrix.csv`
 

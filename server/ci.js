@@ -8,7 +8,7 @@ const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const secrets = require("./secrets");
 const events = require("./events");
-const { wrap, str, num, HttpError } = require("./util");
+const { wrap, str, num, netError, HttpError } = require("./util");
 
 const KINDS = ["gitlab", "github", "jenkins", "generic"];
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
@@ -58,7 +58,7 @@ async function request(url, init) {
   try {
     res = await fetch(url, { ...init, signal: AbortSignal.timeout(20000) });
   } catch (e) {
-    throw new HttpError(502, `CI недоступен: ${e.name === "TimeoutError" ? "нет ответа" : e.message}`);
+    throw new HttpError(502, `CI недоступен: ${netError(e)}`);
   }
   const text = await res.text();
   let json = null;

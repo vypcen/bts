@@ -8,7 +8,7 @@ const access = require("./access");
 const events = require("./events");
 const flaky = require("./flaky");
 const allure = require("./allure");
-const { wrap, str, num } = require("./util");
+const { wrap, str, tooLong, num } = require("./util");
 
 const STATUSES = ["passed", "failed", "broken", "skipped"];
 const STEP_STATUSES = ["passed", "failed", "skipped"];
@@ -26,6 +26,7 @@ function readRun(body) {
     scope: str(body.scope, 500), url: str(body.url, 500),
   };
   if (!r.title) return { error: "Укажите название запуска" };
+  if (tooLong(body.title, 300)) return { error: tooLong(body.title, 300) };
   return { r };
 }
 
@@ -247,6 +248,26 @@ router.delete("/autoruns/:num", wrap(async (req, res) => {
 
 // Содержимое «папки»: результаты, вложения и что было с каждым тестом в предыдущем запуске.
 // Результатов бывает тысячи, поэтому они не входят в /api/state и загружаются отдельно
+// Сводка запуска для CI (testbolctl run status / --fail-on): состояние и счётчики, доступна токену результатов.
+// Карантинные тесты в failedBlocking не считаются — их падение не должно ронять сборку
+router.get("/autoruns/:num(\\d+)/summary", wrap(async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT r.num, r.title, r.state, r.build, r.branch,
+       count(ar.id)::int AS total,
+       count(*) FILTER (WHERE ar.status='passed')::int AS passed, count(*) FILTER (WHERE ar.status='failed')::int AS failed,
+       count(*) FILTER (WHERE ar.status='broken')::int AS broken, count(*) FILTER (WHERE ar.status='skipped')::int AS skipped,
+       count(*) FILTER (WHERE ar.flaky)::int AS flaky,
+       count(*) FILTER (WHERE ar.status IN ('failed','broken') AND NOT COALESCE(t.quarantined, false))::int AS failed_blocking
+     FROM auto_runs r LEFT JOIN auto_results ar ON ar.run_id=r.id LEFT JOIN auto_tests t ON t.id=ar.test_id
+     WHERE r.project_key=$1 AND r.num=$2 GROUP BY r.id`, [req.params.key, num(req.params.num)]);
+  const r = rows[0];
+  if (!r) return res.status(404).json({ error: "Запуск не найден" });
+  res.json({
+    num: r.num, id: `${req.params.key}-A${r.num}`, title: r.title, state: r.state, build: r.build, branch: r.branch,
+    counts: { total: r.total, passed: r.passed, failed: r.failed, broken: r.broken, skipped: r.skipped, flaky: r.flaky }, failedBlocking: r.failed_blocking,
+  });
+}));
+
 router.get("/autoruns/:num", wrap(async (req, res) => {
   const run = await findRun(pool, req.params.key, num(req.params.num));
   if (!run) return res.status(404).json({ error: "Запуск не найден" });

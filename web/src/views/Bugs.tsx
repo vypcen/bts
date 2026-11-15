@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from "react";
+import { ReleaseSelect } from "./Releases";
+import { WatchButton } from "./Notifications";
 import { FieldsEditor, FieldsView, missingRequired, TagInput, Tags, useFields, useProjectTags } from "../casekit";
 import { AI_NOTE, AiBar, useAi, useAiReady } from "../ai";
 import { api, paths } from "../api";
@@ -261,6 +263,7 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
         <div className="view-block"><span className="label">Создал</span><Who login={bug.createdBy} /><span className="muted">{fmt(bug.created)}</span></div>
         <div className="view-block"><span className="label">Изменил</span><Who login={bug.updatedBy} /><span className="muted">{fmt(bug.updated)}</span></div>
       </div>
+      <div><WatchButton pid={p} kind="bugs" num={bug.num} /></div>
       <Comments list={comments} postUrl={`${paths.bug(p, bug.num)}/comments`} />
 
       {dupOpen && <DuplicateModal bug={bug} onClose={() => setDupOpen(false)} />}
@@ -310,6 +313,8 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
   const { write, toast } = useStore();
   const nameOf = useNames();
   const [f, setF] = useState(draft);
+  // релиз: у нового бага из прогона без выбора возьмётся релиз прогона
+  const [rel, setRel] = useState(String(bug?.release ?? ""));
   const [err, setErr] = useState("");
   const fieldDefs = useFields("bug");
   const bugTags = useProjectTags("bugs");
@@ -333,11 +338,11 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
     const missing = missingRequired(fieldDefs, f.fields || {});
     if (missing) return setErr(missing);
     if (bug) {
-      if (await write(() => api("PATCH", paths.bug(pid, bug.num), f), "Изменения сохранены")) onClose();
+      if (await write(() => api("PATCH", paths.bug(pid, bug.num), { ...f, release: rel ? Number(rel) : null }), "Изменения сохранены")) onClose();
       return;
     }
     let num = 0;
-    if (await write(async () => { num = (await api<{ num: number }>("POST", paths.bugs(pid), f)).num; })) {
+    if (await write(async () => { num = (await api<{ num: number }>("POST", paths.bugs(pid), { ...f, ...(rel ? { release: Number(rel) } : {}) })).num; })) {
       toast(`Создан ${pid}-B${num}. Можно приложить скриншоты`);
       onClose();
       go("p", pid, "bugs", num);
@@ -378,6 +383,7 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
         <div className="field"><label htmlFor="b-act">Фактический результат</label><textarea className="input" id="b-act" rows={3} value={f.actual} onChange={set("actual")} placeholder="Что произошло на самом деле" /></div>
         <div className="field"><label htmlFor="b-exp">Ожидаемый результат</label><textarea className="input" id="b-exp" rows={3} value={f.expected} onChange={set("expected")} /></div>
         <div className="field"><label htmlFor="b-tags">Теги</label><TagInput id="b-tags" value={f.tags || []} onChange={(tags) => setF({ ...f, tags })} suggestions={bugTags} /></div>
+        <ReleaseSelect pid={pid} value={rel} onChange={setRel} id="b-release" />
         <FieldsEditor entity="bug" values={f.fields || {}} onChange={(fields) => setF({ ...f, fields })} />
         <div className="err">{err}</div>
       </form>

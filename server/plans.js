@@ -11,7 +11,10 @@ const caseio = require("./caseio");
 const events = require("./events");
 const { distribute } = require("./distribute");
 const { isAdmin } = require("./access");
-const { wrap, str, num, HttpError } = require("./util");
+const releases = require("./releases");
+const configs = require("./configs");
+const notify = require("./notify");
+const { wrap, str, tooLong, num, HttpError } = require("./util");
 
 const PRIORITIES = ["critical", "high", "medium", "low"];
 const STATUSES = ["draft", "review", "ready", "deprecated"];
@@ -97,6 +100,7 @@ function readPlan(body) {
     filter: readFilter(body.filter || {}),
   };
   if (!p.title) return { error: "Укажите название тест-плана" };
+  if (tooLong(body.title, 300)) return { error: tooLong(body.title, 300) };
   return { p };
 }
 
@@ -105,7 +109,8 @@ router.get("/plans", wrap(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT p.*, cu.login AS created_by_login, lu.login AS locked_by_login,
        (SELECT count(*)::int FROM plan_cases pc WHERE pc.plan_id=p.id) AS static_count,
-       (SELECT count(*)::int FROM test_runs r WHERE r.plan_id=p.id) AS runs
+       (SELECT count(*)::int FROM test_runs r WHERE r.plan_id=p.id) AS runs,
+       (SELECT v.num FROM releases v WHERE v.id=p.release_id) AS release_num
      FROM test_plans p LEFT JOIN users cu ON cu.id=p.created_by LEFT JOIN users lu ON lu.id=p.locked_by
      WHERE p.project_key=$1 ORDER BY p.num DESC`,
     [req.params.key]
@@ -116,7 +121,7 @@ router.get("/plans", wrap(async (req, res) => {
     plans.push({
       num: p.num, id: `${p.project_key}-P${p.num}`, title: p.title, description: p.description, mode: p.mode, filter: readFilter(p.filter),
       locked: p.locked, lockedBy: p.locked_by_login, lockedAt: p.locked_at?.getTime() || null, createdBy: p.created_by_login,
-      created: p.created_at.getTime(), updated: p.updated_at.getTime(), caseCount: count, runs: p.runs,
+      created: p.created_at.getTime(), updated: p.updated_at.getTime(), caseCount: count, runs: p.runs, release: p.release_num ?? null,
     });
   }
   res.json({ plans });
@@ -146,12 +151,14 @@ router.post("/plans", wrap(async (req, res) => {
   const { p, error } = readPlan(req.body);
   if (error) return res.status(400).json({ error });
   const key = req.params.key;
+  const rel = await releases.releaseId(pool, key, req.body.release);
+  if (rel.error) return res.status(400).json({ error: rel.error });
   const n = await tx(async (db) => {
     const seq = await db.query("UPDATE projects SET plan_seq=plan_seq+1 WHERE key=$1 RETURNING plan_seq", [key]);
     const next = seq.rows[0].plan_seq;
     const { rows } = await db.query(
-      "INSERT INTO test_plans(project_key, num, title, description, mode, filter, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
-      [key, next, p.title, p.description, p.mode, p.filter, req.user.id]
+      "INSERT INTO test_plans(project_key, num, title, description, mode, filter, created_by, release_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
+      [key, next, p.title, p.description, p.mode, p.filter, req.user.id, rel.id]
     );
     if (p.mode === "static") {
       const ids = await caseIds(db, key, req.body.caseNums);
@@ -167,7 +174,13 @@ router.patch("/plans/:num", wrap(async (req, res) => {
   const plan = await mustPlan(pool, req, { editable: true });
   const { p, error } = readPlan({ ...plan, ...req.body });
   if (error) return res.status(400).json({ error });
+  // релиз: {"release": номер} или null — отвязать; не прислали — как был (меняется и у заблокированного плана — см. ниже)
   await pool.query("UPDATE test_plans SET title=$1, description=$2, mode=$3, filter=$4, updated_at=now() WHERE id=$5", [p.title, p.description, p.mode, p.filter, plan.id]);
+  if (req.body.release !== undefined) {
+    const rel = await releases.releaseId(pool, req.params.key, req.body.release);
+    if (rel.error) return res.status(400).json({ error: rel.error });
+    await pool.query("UPDATE test_plans SET release_id=$2 WHERE id=$1", [plan.id, rel.id]);
+  }
   // из статического в динамический: ручной список больше не нужен
   if (p.mode === "dynamic" && plan.mode === "static") await pool.query("DELETE FROM plan_cases WHERE plan_id=$1", [plan.id]);
   broadcast("plans");
@@ -256,36 +269,62 @@ router.get("/plans/:num/export", wrap(async (req, res) => {
   caseio.sendCsv(res, rows.map((c) => caseio.csvRow(key, c, pathOf)), `${base} ${plan.title}.csv`.replace(/[\\/:*?"<>|]/g, "_"), `${base}.csv`);
 }));
 
-// Прогон из плана: {"title", "build", "env", "assign": {"users": ["anna"], "strategy": "balanced"}}
+// Прогон из плана: {"title", "build", "env", "assign": {"users": ["anna"], "strategy": "balanced"}}.
+// {"configs": [{"Браузер": "Chrome"}, {"Браузер": "Firefox"}]} — по прогону на каждую конфигурацию (пачка с общей матрицей)
 router.post("/plans/:num/runs", wrap(async (req, res) => {
   const title = str(req.body.title, 300);
   if (!title) return res.status(400).json({ error: "Укажите название прогона" });
   const cf = await require("./casemodel").readFields(pool, req.params.key, "run", req.body.fields, {});
   if (cf.error) return res.status(400).json({ error: cf.error });
   const fields = cf.fields;
+  const rel = await releases.releaseId(pool, req.params.key, req.body.release);
+  if (rel.error) return res.status(400).json({ error: rel.error });
+  // конфигурации: без них — один прогон; с ними — пачка, по прогону на каждую
+  let configsList = [null];
+  if (Array.isArray(req.body.configs) && req.body.configs.length) {
+    if (req.body.configs.length > configs.MAX_COMBOS) return res.status(400).json({ error: `Не больше ${configs.MAX_COMBOS} конфигураций за раз` });
+    configsList = [];
+    for (const c of req.body.configs) {
+      const r = await configs.readConfig(pool, req.params.key, c);
+      if (r.error) return res.status(400).json({ error: r.error });
+      if (r.config && !configsList.some((x) => JSON.stringify(x) === JSON.stringify(r.config))) configsList.push(r.config);
+    }
+    if (!configsList.length) configsList = [null];
+  }
+  const batch = configsList.length > 1 ? require("crypto").randomUUID() : null;
   const out = await tx(async (db) => {
     const plan = await mustPlan(db, req);
     const key = plan.project_key;
     const list = await planCases(db, plan);
     if (!list.length) throw new HttpError(400, "В плане нет кейсов");
-    const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [key]);
-    const n = seq.rows[0].run_seq;
-    const run = await db.query(
-      "INSERT INTO test_runs(project_key, num, title, build, environment, plan_id, created_by, fields) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
-      [key, n, title, str(req.body.build, 200), str(req.body.env, 500), plan.id, req.user.id, fields]
-    );
-    // у заблокированного плана в прогон идут зафиксированные версии, иначе триггер возьмёт текущие
-    await db.query(
-      "INSERT INTO run_results(run_id, case_id, case_version) SELECT $1, * FROM unnest($2::int[], $3::int[])",
-      [run.rows[0].id, list.map((c) => c.id), list.map((c) => (plan.locked ? c.version : null))]
-    );
-    const assign = req.body.assign;
-    const dist = assign?.users?.length ? await distribute(db, key, run.rows[0].id, assign.users, assign.strategy || "balanced") : null;
-    return { n, dist };
+    const made = [];
+    for (const cfg of configsList) {
+      const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [key]);
+      const n = seq.rows[0].run_seq;
+      const run = await db.query(
+        // релиз: прислали — его, иначе триггер возьмёт релиз плана
+        `INSERT INTO test_runs(project_key, num, title, build, environment, plan_id, created_by, fields, release_id, config, config_batch)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+        [key, n, cfg && batch ? `${title} — ${configs.label(cfg)}`.slice(0, 300) : title, str(req.body.build, 200), str(req.body.env, 500), plan.id, req.user.id, fields, rel.id,
+          cfg ? JSON.stringify(cfg) : null, batch]
+      );
+      // у заблокированного плана в прогон идут зафиксированные версии, иначе триггер возьмёт текущие
+      await db.query(
+        "INSERT INTO run_results(run_id, case_id, case_version) SELECT $1, * FROM unnest($2::int[], $3::int[])",
+        [run.rows[0].id, list.map((c) => c.id), list.map((c) => (plan.locked ? c.version : null))]
+      );
+      const assign = req.body.assign;
+      const dist = assign?.users?.length ? await distribute(db, key, run.rows[0].id, assign.users, assign.strategy || "balanced") : null;
+      made.push({ n, dist, runId: run.rows[0].id });
+    }
+    return made;
   });
   broadcast("runs");
-  events.emit(req.params.key, "run.created", { run: await events.snap.run(req.params.key, out.n) }, req.user);
-  res.status(201).json({ num: out.n, distribution: out.dist });
+  for (const m of out) {
+    events.emit(req.params.key, "run.created", { run: await events.snap.run(req.params.key, m.n) }, req.user);
+    if (m.dist) await notify.onRunAssigned(req, { runId: m.runId, logins: req.body.assign.users }).catch((e) => console.error("[notify]", e.message));
+  }
+  res.status(201).json({ num: out[0].n, distribution: out[0].dist, runs: out.map((m) => m.n), batch });
 }));
 
 module.exports = { router, byFilter, readFilter, planCases };

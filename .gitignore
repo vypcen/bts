@@ -16,3 +16,7 @@ playwright-report/
 *.pem
 !test/fixtures/license-test-private.pem
 demo-accounts.md
+
+# testbolctl: собранные файлы
+cli/lib/
+cli/dist/

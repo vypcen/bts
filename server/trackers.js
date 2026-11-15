@@ -8,7 +8,7 @@ const { broadcast } = require("./live");
 const secrets = require("./secrets");
 const events = require("./events");
 const jobs = require("./jobs");
-const { wrap, str, num, HttpError } = require("./util");
+const { wrap, str, num, netError, HttpError } = require("./util");
 
 const KINDS = ["jira", "youtrack", "gitlab", "github", "redmine"];
 const SYNC_EVERY = 10 * 60 * 1000;
@@ -27,7 +27,7 @@ async function call(t, method, path, body, extraHeaders = {}) {
   try {
     res = await fetch(base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000) });
   } catch (e) {
-    throw new HttpError(502, `Трекер недоступен: ${e.name === "TimeoutError" ? "нет ответа" : e.message}`);
+    throw new HttpError(502, `Трекер недоступен: ${netError(e)}`);
   }
   const text = await res.text();
   let json = null;

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, paths } from "../api";
 import { FieldsView, stepsOf, StepsView } from "../casekit";
 import { checkedCount, checklistItems, itemMark } from "../checklist";
@@ -9,6 +9,8 @@ import { useCan, useData, useLoad, useStore } from "../store";
 import type { Attachment, CaseVersion, Project, Result, ResultValue, Run, RunResults, TestCase } from "../types";
 import { Confirm, Drawer, fmt, FullCase, fullCase, Modal, PagedRows, Pill, Prio, ResultBar, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { AssignPicker, executorsOf, type Assign } from "./Plans";
+import { substSteps } from "./Params";
+import { ConfigChips, MatrixModal, useConfigs } from "./Configs";
 import { Attachments } from "./Attachments";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { CasePicker, RunModal } from "./Runs";
@@ -38,6 +40,11 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const [who, setWho] = useState("");
   const nameOf = useNames();
   const [bugDraft, setBugDraft] = useState<BugDraft | null>(null);
+  const [matrix, setMatrix] = useState(false);
+  const cfgGroups = useConfigs(p);
+  // режим выполнения: список кейсов слева, карточка кейса справа, горячие клавиши; выбор запоминается в браузере
+  const [exec, setExecState] = useState(() => { try { return localStorage.getItem("tb.runExec") === "1"; } catch { return false; } });
+  const setExec = (v: boolean) => { setExecState(v); try { localStorage.setItem("tb.runExec", v ? "1" : "0"); } catch { /* приватный режим */ } };
   // результаты прогона грузятся отдельно и перечитываются вместе с данными проекта
   const loaded = useLoad<RunResults>(run ? paths.runResults(p, num) : null);
 
@@ -71,7 +78,15 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const bugsOf = (r: Result) => data.bugs.filter((b) => b.pid === p && (b.resultId === r.id || (b.caseNum === r.caseNum && b.runNum === num)));
   const mark = (r: Result, result: ResultValue) =>
     write(() => api("PATCH", paths.result(p, num, r.caseNum), { result: r.result === result ? "untested" : result }), undefined, { queue: true });
-  const sel = selected !== null ? results.find((r) => r.caseNum === selected) : undefined;
+  // в режиме выполнения без выбора открыт первый непроверенный кейс
+  const autoPick = exec && selected === null ? (rows.find(({ r }) => r.result === "untested") || rows[0])?.r.caseNum ?? null : null;
+  const selNum = selected ?? autoPick;
+  const sel = selNum !== null ? results.find((r) => r.caseNum === selNum) : undefined;
+  const move = (d: number) => {
+    const i = rows.findIndex(({ r }) => r.caseNum === selNum);
+    const next = rows[Math.min(rows.length - 1, Math.max(0, i + d))];
+    if (next) setSelected(next.r.caseNum);
+  };
   const done = results.length - counts.untested;
 
   const chip = (k: "all" | ResultValue, label: string, n: number) => (
@@ -94,11 +109,21 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
             {run.env && <> · {run.env}</>} · создал <Who login={run.createdBy} /> {fmt(run.created)}
             {run.rerunOf && <> · перезапуск <a href={href("p", p, "runs", run.rerunOf)}>{p}-R{run.rerunOf}</a></>}
           </p>
+          {(run.config || run.batch) && (
+            <p style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "4px 0" }}>
+              <ConfigChips cfg={run.config} groups={cfgGroups} />
+              {run.batch && <button className="btn sm" onClick={() => setMatrix(true)}>Матрица конфигураций</button>}
+            </p>
+          )}
           <FieldsView entity="run" values={run.fields} />
         </div>
         <div className="spacer" />
         <div className="acts">
           {open ? <Pill tone="info" label="Идёт" /> : <Pill tone="neutral" label={`Закрыт ${fmt(run.closed)}`} />}
+          <button className={`btn${exec ? " primary" : ""}`} onClick={() => setExec(!exec)} aria-pressed={exec}
+            title="Список кейсов слева, кейс справа; отметки клавишами P, F, B, S, переход — N и стрелками">
+            {exec ? "Обычный вид" : "Режим выполнения"}
+          </button>
           <a className="btn" href={`${paths.run(p, num)}/report?format=pdf`} download style={{ textDecoration: "none" }} title="Отчёт для руководителя: сводка, упавшие кейсы, баги">Отчёт PDF</a>
           <a className="btn" href={`${paths.run(p, num)}/report?format=xlsx`} download style={{ textDecoration: "none" }}>Excel</a>
           {canEdit && (
@@ -145,6 +170,32 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
           ))}
         </select>
       </div>
+      {exec ? (
+        <div className="exec-layout">
+          <ul className="exec-list" aria-label="Кейсы прогона">
+            {rows.map(({ r, c }) => (
+              <li key={r.id}>
+                <button type="button" aria-current={selNum === r.caseNum ? "true" : undefined} onClick={() => setSelected(r.caseNum)}>
+                  <ResultPill r={r.result} sm />
+                  <span className="mono small muted">{c.id}</span>
+                  <span className="t">{c.kind === "checklist" ? "☑ " : ""}{c.title}</span>
+                </button>
+              </li>
+            ))}
+            {!rows.length && <li className="muted small" style={{ padding: 10 }}>Ничего не найдено.</li>}
+          </ul>
+          {sel && !bugDraft ? (
+            <FullCase c={caseOf(sel)}>{(full) => (
+              <ResultDrawer key={sel.id} docked run={run} r={sel} c={full} prev={prev.get(sel.caseNum)} files={runFiles}
+                onClose={() => setExec(false)} onBug={setBugDraft} onMove={move}
+                onNext={() => {
+                  const next = rows.find(({ r }) => r.result === "untested" && r.caseNum !== sel.caseNum);
+                  if (next) setSelected(next.r.caseNum);
+                }} />
+            )}</FullCase>
+          ) : !bugDraft && <div className="exec-empty muted">Выберите кейс в списке слева.</div>}
+        </div>
+      ) : (
       <div className="tbl-wrap">
         <table>
           <thead>
@@ -192,13 +243,15 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
           </tbody>
         </table>
       </div>
+      )}
 
       {bugDraft ? (
         <BugEditor pid={p} draft={bugDraft} onClose={() => setBugDraft(null)} />
-      ) : sel ? (
+      ) : sel && !exec ? (
         <FullCase c={caseOf(sel)}>{(full) => (
         <ResultDrawer
           key={sel.id}
+          onMove={move}
           run={run}
           r={sel}
           c={full}
@@ -214,6 +267,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
         )}</FullCase>
       ) : null}
       {modal === "edit" && <RunModal pid={p} run={run} onClose={() => setModal(null)} />}
+      {matrix && run.batch && <MatrixModal pid={p} batch={run.batch} onClose={() => setMatrix(false)} />}
       {modal === "add" && <AddCasesModal run={run} inRunNums={results.map((r) => r.caseNum)} onClose={() => setModal(null)} />}
       {modal === "distribute" && <DistributeModal run={run} onClose={() => setModal(null)} />}
       {modal === "rerun" && <RerunModal run={run} onClose={() => setModal(null)} />}
@@ -244,8 +298,20 @@ function ResultButtons({ value, onPick, lg, label = "Результат" }: { va
   );
 }
 
-function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; files: Attachment[]; onClose: () => void; onBug: (d: BugDraft) => void; onNext: () => void }) {
-  const { run, r, c, prev } = props;
+function ResultDrawer(props: {
+  run: Run; r: Result; c: TestCase; prev?: Result; files: Attachment[]; onClose: () => void; onBug: (d: BugDraft) => void; onNext: () => void;
+  onMove?: (d: number) => void; docked?: boolean;
+}) {
+  const { run, c, prev } = props;
+  // кейс с параметрами: результат и шаги — по выбранному набору данных, итог кейса считается по всем наборам
+  const iters = props.r.iterations;
+  const [iterSel, setIter] = useState(0);
+  const iter = iters && iterSel < iters.length ? iterSel : 0;
+  const cell = iters ? props.r.iterResults?.[iter] || { result: "untested" as ResultValue, steps: {} } : null;
+  const r: Result = cell ? { ...props.r, result: cell.result, steps: cell.steps } : props.r;
+  const it = iters ? { iteration: iter } : {};
+  const values = iters?.[iter]?.values;
+  const iterNote = iters ? `Набор данных «${iters[iter].name}»: ${Object.entries(values || {}).map(([k, v]) => `${k} = ${v}`).join(", ")}` : "";
   const data = useData();
   const { write } = useStore();
   const canEdit = useCan("runs.execute");
@@ -267,7 +333,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   };
   const pick = async (v: ResultValue) => {
     const result = r.result === v ? "untested" : v;
-    await write(() => api("PATCH", paths.result(p, run.num, c.num), dirty ? { result, comment } : { result }), undefined, { queue: true });
+    await write(() => api("PATCH", paths.result(p, run.num, c.num), dirty ? { result, comment, ...it } : { result, ...it }), undefined, { queue: true });
   };
   // пункт чек-листа: повторное нажатие на ту же отметку снимает её
   const items = checklistItems(c);
@@ -280,20 +346,46 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   const shown = outdated && ver.value
     ? { ...c, pre: ver.value.pre, steps: ver.value.steps, expected: ver.value.expected, kind: ver.value.kind, stepList: ver.value.stepList }
     : c;
-  const stepList = stepsOf(shown);
+  const stepList = substSteps(stepsOf(shown), values);
+  const shownSub = { ...shown, stepList };
+  const withIter = (text: string) => [text, iterNote].filter(Boolean).join("\n");
   // результат шага; повторное нажатие на ту же отметку снимает её
   const pickStep = (i: number, v: ResultValue) =>
-    write(() => api("PATCH", paths.result(p, run.num, c.num), { step: i, result: r.steps?.[i]?.result === v ? "untested" : v }), undefined, { queue: true });
+    write(() => api("PATCH", paths.result(p, run.num, c.num), { step: i, result: r.steps?.[i]?.result === v ? "untested" : v, ...it }), undefined, { queue: true });
   const [actuals, setActuals] = useState<Record<number, string>>({});
   const saveActual = (i: number) => {
     const text = actuals[i];
     if (text === undefined || text === (r.steps?.[i]?.actual || "")) return;
-    write(() => api("PATCH", paths.result(p, run.num, c.num), { step: i, result: r.steps?.[i]?.result || "failed", actual: text }), "Сохранено", { queue: true });
+    write(() => api("PATCH", paths.result(p, run.num, c.num), { step: i, result: r.steps?.[i]?.result || "failed", actual: text, ...it }), "Сохранено", { queue: true });
   };
   const people = executorsOf(data, p);
 
+  // горячие клавиши: P — пройден, F — упал, B — заблокирован, S — пропущен, N — следующий непроверенный, ↑/↓ (J/K) — соседний кейс.
+  // По физической клавише (e.code) — работают и в русской раскладке; не мешают вводу текста и окнам поверх
+  const keyRef = useRef({ pick, next: props.onNext, move: props.onMove, canMark: open && c.kind !== "checklist", result: r.result });
+  keyRef.current = { pick, next: props.onNext, move: props.onMove, canMark: open && c.kind !== "checklist", result: r.result };
+  useEffect(() => {
+    const MARK: Record<string, ResultValue> = { KeyP: "passed", KeyF: "failed", KeyB: "blocked", KeyS: "skipped" };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable=true]") || t.isContentEditable)) return;
+      if (document.querySelector(".modal")) return;
+      const k = keyRef.current;
+      if (MARK[e.code] && k.canMark) {
+        e.preventDefault();
+        if (k.result !== MARK[e.code]) k.pick(MARK[e.code]);
+      } else if (e.code === "KeyN") { e.preventDefault(); k.next(); }
+      else if ((e.code === "ArrowDown" || e.code === "KeyJ") && k.move) { e.preventDefault(); k.move(1); }
+      else if ((e.code === "ArrowUp" || e.code === "KeyK") && k.move) { e.preventDefault(); k.move(-1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <Drawer
+      docked={props.docked}
       label="Результат кейса"
       idTag={c.id}
       title={c.title}
@@ -301,10 +393,11 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
       footer={
         <>
           {canBug && c.kind !== "checklist" && (r.result === "failed" || r.result === "blocked") && (
-            <button className="btn" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(c, run, { ...r, comment: comment.trim() })); }}>Завести баг</button>
+            <button className="btn" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(shownSub, run, { ...r, comment: withIter(comment.trim()) })); }}>Завести баг</button>
           )}
           <a className="btn ghost" href={href("p", p, "cases", c.num)} style={{ textDecoration: "none" }}>Открыть кейс</a>
           <div className="spacer" />
+          {open && <span className="muted small kbd-hint" title="Горячие клавиши работают в любой раскладке">P F B S — отметить · N — следующий · ↑↓ — соседний</span>}
           <button className="btn primary" onClick={async () => { if (await saveComment()) props.onNext(); }}>Следующий непроверенный →</button>
         </>
       }
@@ -314,6 +407,11 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
         {c.kind === "checklist" ? (
           <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <ResultPill r={r.result} /><span className="muted small">Отмечено {checkedCount(items, r)} из {items.length}. Итог считается по пунктам</span>
+          </span>
+        ) : iters ? (
+          <span style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <ResultPill r={props.r.result} />
+            <span className="muted small">Итог по {iters.length} наборам данных: проверено {Object.values(props.r.iterResults || {}).filter((x) => x.result !== "untested").length}</span>
           </span>
         ) : open ? <ResultButtons value={r.result} onPick={pick} lg /> : <ResultPill r={r.result} />}
         {r.executed && <span className="muted small">Отметил <Who login={r.executedBy} /> · {fmt(r.executed)}</span>}
@@ -328,6 +426,22 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
           </select>
         ) : <Who login={r.assignee} />}
       </div>
+      {iters && (
+        <div className="view-block">
+          <span className="label">Набор данных</span>
+          <div className="iter-tabs" role="tablist" aria-label="Наборы данных">
+            {iters.map((x, i) => (
+              <button key={i} type="button" role="tab" aria-selected={i === iter} className={`iter-tab${i === iter ? " on" : ""}`} onClick={() => { setIter(i); setActuals({}); }}>
+                <span>{x.name}</span> <ResultPill r={props.r.iterResults?.[i]?.result || "untested"} sm />
+              </button>
+            ))}
+          </div>
+          <div className="small mono muted">{Object.entries(values || {}).map(([k, v]) => `${k} = ${v}`).join(" · ")}</div>
+          {shown.kind !== "checklist" && (
+            <div style={{ marginTop: 6 }}>{open ? <ResultButtons value={r.result} onPick={pick} label={`Результат набора ${iters[iter].name}`} /> : <ResultPill r={r.result} />}</div>
+          )}
+        </div>
+      )}
       {outdated && (
         <div className="banner small">
           Кейс изменён после {r.result === "untested" ? "добавления в прогон" : "проверки"}: ниже версия v{r.caseVersion}, текущая — v{c.version}.
@@ -371,7 +485,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
                 <div className="step-mark">
                   {open ? <ResultButtons value={m} onPick={(v) => pickStep(i, v)} label={`Результат шага ${i + 1}`} /> : <ResultPill r={m} sm />}
                   {canBug && bad && (
-                    <button className="btn sm" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(shown, run, { ...r, comment: comment.trim(), steps: withActual(r.steps, i, actuals[i]) }, undefined, i)); }}>+ Баг</button>
+                    <button className="btn sm" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(shownSub, run, { ...r, comment: withIter(comment.trim()), steps: withActual(r.steps, i, actuals[i]) }, undefined, i)); }}>+ Баг</button>
                   )}
                   {(bad || sr?.actual) && (
                     <input className="input" aria-label={`Фактический результат шага ${i + 1}`} placeholder="Что произошло на этом шаге" disabled={!open}

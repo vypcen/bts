@@ -115,10 +115,20 @@ test("сравнение версий", () => {
   assert.equal(compare("2.0.0", "10.0.0"), -1);
 });
 
-test("лицензия: подпись, срок, льготный период, адрес", () => {
+test("лицензия: постоянный ключ бессрочный, срок только у пилота", () => {
   const license = require("../server/license");
   const pem = require("node:fs").readFileSync(require("node:path").join(__dirname, "fixtures", "license-test-private.pem"), "utf8");
-  const terms = { id: "T-1", customer: "ООО Тест", edition: "enterprise", full: 20, view: null, issued: "2026-01-01", expires: "2026-12-31" };
+  // разовая оплата — бессрочная лицензия: даже если в ключе ранней версии записан срок, он не действует
+  const perpetual = license.sign({ id: "T-0", customer: "ООО Тест", edition: "enterprise", full: 20, view: null, issued: "2026-01-01", expires: "2026-12-31", updatesUntil: "2026-12-31" }, pem);
+  for (const d of ["2026-06-01", "2027-06-01", "2040-01-01"]) {
+    const e = license.evaluate(perpetual, Date.parse(d));
+    assert.equal(e.status, "active");
+    assert.equal(e.full, 20);
+    assert.equal(e.license.expires, null);
+    assert.equal(e.license.perpetual, true);
+    assert.ok(!e.notice || !/продл|подписк|истек|заканчива/i.test(e.notice), e.notice);
+  }
+  const terms = { id: "T-1", customer: "ООО Тест", edition: "trial", full: 20, view: null, issued: "2026-01-01", expires: "2026-12-31" };
   const key = license.sign(terms, pem);
   assert.equal(license.verify(key).terms.full, 20);
   assert.equal(license.verify(key).test, true);
@@ -130,7 +140,7 @@ test("лицензия: подпись, срок, льготный период,
   const at = (d) => license.evaluate(key, Date.parse(d));
   assert.equal(at("2026-06-01").status, "active");
   assert.equal(at("2026-06-01").full, 20);
-  assert.match(at("2026-12-15").notice, /заканчивается 2026-12-31/);
+  assert.match(at("2026-12-15").notice, /Пилотная лицензия заканчивается 2026-12-31/);
   assert.equal(at("2027-01-05").status, "grace");
   assert.equal(at("2027-01-05").full, 20);
   const expired = at("2027-02-01");

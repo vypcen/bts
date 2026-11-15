@@ -30,7 +30,8 @@ function score(history) {
     byBuild.set(r.build, s);
   }
   const mixedBuilds = [...byBuild.values()].filter((s) => s.size > 1).length;
-  const flipRate = h.length > 1 ? flips / (h.length - 1) : 0;
+  // доля смен результата учитывается, только когда истории достаточно: по двум запускам одна смена — это 100%, что ничего не значит
+  const flipRate = h.length >= MIN_RUNS ? flips / (h.length - 1) : 0;
   const value = Math.min(1, flipRate + retried / h.length + (mixedBuilds ? 0.3 : 0));
   const reasons = [];
   if (retried) reasons.push(`прошёл с повторной попытки: ${retried} раз из ${h.length}`);
