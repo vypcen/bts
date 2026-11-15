@@ -61,6 +61,7 @@ const TOKEN_ROUTES = [
   ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/allure$/],
   ["POST", /^\/projects\/[^/]+\/autoruns\/\d+\/results\/\d+\/attachments$/],
   ["PATCH", /^\/projects\/[^/]+\/autoruns\/\d+$/],
+  ["GET", /^\/projects\/[^/]+\/autoruns\/\d+\/summary$/],
 ];
 const { broadcast } = live;
 

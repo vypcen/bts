@@ -15,3 +15,7 @@ playwright-report/
 # закрытые ключи (лицензии и т. п.) — никогда не в репозиторий; тестовый ключ — исключение
 *.pem
 !test/fixtures/license-test-private.pem
+
+# testbolctl: собранные файлы
+cli/lib/
+cli/dist/

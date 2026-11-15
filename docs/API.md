@@ -681,6 +681,10 @@ curl -X POST "$URL/api/projects/LK/bugs/7/attachments" \
 
 Удаляет тест из реестра вместе с его результатами во всех запусках. Если тест снова придёт в отчёте, он заведётся заново. Нужна сессия. Ответ: `{"ok": true}`.
 
+### `GET /api/projects/:key/autoruns/:num/summary`
+
+Сводка запуска для CI, доступна и токену результатов: `{"num", "id", "title", "state", "build", "branch", "counts": {"total", "passed", "failed", "broken", "skipped", "flaky"}, "failedBlocking"}`. `failedBlocking` — упавшие и сломанные тесты не в карантине: по нему `testbolctl run status --fail-on failed` решает, ронять ли сборку. Утилита для CI — [cli/README.md](../cli/README.md).
+
 ### Пример: отправка через curl
 
 ```sh
