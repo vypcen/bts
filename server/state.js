@@ -100,7 +100,7 @@ async function project(key) {
   const [cases, runs, last, bugs, files, autoruns, comments, caseFolders, testPlans, customFields] = await Promise.all([
     pool.query(`${caseSql} WHERE c.project_key=$1 ORDER BY c.num`, k),
     pool.query(`SELECT r.project_key, r.num, r.title, r.build, r.environment, r.state, u.login AS created_by, r.created_at, r.closed_at, r.fields,
-                  p.num AS plan_num, COALESCE(p.locked, false) AS plan_locked,
+                  p.num AS plan_num, COALESCE(p.locked, false) AS plan_locked, (SELECT o.num FROM test_runs o WHERE o.id=r.rerun_of) AS rerun_of,
                   (SELECT json_object_agg(result, n) FROM (SELECT result, count(*)::int AS n FROM run_results WHERE run_id=r.id GROUP BY result) x) AS counts
                 FROM test_runs r LEFT JOIN users u ON u.id=r.created_by LEFT JOIN test_plans p ON p.id=r.plan_id
                 WHERE r.project_key=$1 ORDER BY r.num`, k),
@@ -154,7 +154,7 @@ async function project(key) {
     runs: runs.rows.map((r) => ({
       id: `${r.project_key}-R${r.num}`, pid: r.project_key, num: r.num, title: r.title, build: r.build, env: r.environment,
       state: r.state, createdBy: r.created_by, created: ms(r.created_at), closed: ms(r.closed_at), planNum: r.plan_num, planLocked: r.plan_locked,
-      counts: { ...empty, ...(r.counts || {}) }, fields: r.fields,
+      counts: { ...empty, ...(r.counts || {}) }, fields: r.fields, rerunOf: r.rerun_of,
     })),
     results: last.rows.map(toResult),
     bugs: bugs.rows.map((b) => ({

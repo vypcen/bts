@@ -59,6 +59,44 @@ router.post("/runs", wrap(async (req, res) => {
   res.status(201).json({ num: out.n, distribution: out.dist });
 }));
 
+// Перезапуск: новый прогон из кейсов с выбранными результатами (по умолчанию «упал» и «заблокирован»).
+// Сборка и окружение — новые или прежние; исполнители и пользовательские поля переносятся
+const RERUN_RESULTS = ["failed", "blocked", "skipped", "untested", "passed"];
+router.post("/runs/:num/rerun", wrap(async (req, res) => {
+  const key = req.params.key;
+  const results = Array.isArray(req.body.results) && req.body.results.length ? req.body.results.filter((r) => RERUN_RESULTS.includes(r)) : ["failed", "blocked"];
+  if (!results.length) return res.status(400).json({ error: `results: ${RERUN_RESULTS.join(", ")}` });
+  const out = await tx(async (db) => {
+    const { rows } = await db.query("SELECT id, title, build, environment, fields, plan_id FROM test_runs WHERE project_key=$1 AND num=$2", [key, num(req.params.num)]);
+    const old = rows[0];
+    if (!old) return { status: 404, error: "Прогон не найден" };
+    const picked = await db.query(
+      `SELECT rr.case_id, rr.assignee_id FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
+       WHERE rr.run_id=$1 AND rr.result = ANY($2::text[]) AND c.status <> 'deprecated' ORDER BY c.num`,
+      [old.id, results]
+    );
+    if (!picked.rows.length) return { status: 409, error: "В прогоне нет кейсов с такими результатами — перезапускать нечего" };
+    const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [key]);
+    const n = seq.rows[0].run_seq;
+    const title = str(req.body.title, 300) || `${old.title.replace(/ — перезапуск( \d+)?$/, "")} — перезапуск`;
+    const run = await db.query(
+      `INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, plan_id, rerun_of)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [key, n, title, req.body.build !== undefined ? str(req.body.build, 200) : old.build, req.body.env !== undefined ? str(req.body.env, 500) : old.environment,
+        req.user.id, old.fields, old.plan_id, old.id]
+    );
+    await db.query(
+      "INSERT INTO run_results(run_id, case_id, assignee_id) SELECT $1, * FROM unnest($2::int[], $3::int[])",
+      [run.rows[0].id, picked.rows.map((r) => r.case_id), picked.rows.map((r) => r.assignee_id)]
+    );
+    return { n, count: picked.rows.length };
+  });
+  if (out.error) return res.status(out.status).json({ error: out.error });
+  broadcast("runs");
+  events.emit(key, "run.created", { run: await events.snap.run(key, out.n) }, req.user);
+  res.status(201).json({ num: out.n, cases: out.count });
+}));
+
 router.patch("/runs/:num", wrap(async (req, res) => {
   const n = num(req.params.num);
   const { rows } = await pool.query("SELECT title, build, environment AS env, state, fields FROM test_runs WHERE project_key=$1 AND num=$2", [req.params.key, n]);

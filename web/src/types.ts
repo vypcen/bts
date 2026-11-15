@@ -108,6 +108,7 @@ export interface Run {
   planLocked: boolean; // план заблокирован: состав зафиксирован, удалить прогон нельзя
   counts: Record<ResultValue, number>; // сколько кейсов прогона в каждом результате
   fields: FieldValues;
+  rerunOf?: number | null; // номер прогона, из упавших кейсов которого создан этот
 }
 
 export interface Step {

@@ -327,6 +327,36 @@ test("аналитика: предрасчёт, ответ из кэша, пер
   assert.ok(fresh.data.computedAt >= first.data.computedAt);
 });
 
+test("перезапуск упавших: новый прогон из упавших и заблокированных, исполнители и ссылка на исходный", async () => {
+  const mk = async (title) => (await u.tester.post("/api/projects/LK/cases", { title, priority: "medium", status: "ready" })).data.num;
+  const [a, b, c, d] = [await mk("Перезапуск А"), await mk("Перезапуск Б"), await mk("Перезапуск В"), await mk("Перезапуск Г")];
+  const run = (await u.tester.post("/api/projects/LK/runs", { title: "Регресс 5.1", build: "5.1.0", env: "stage", caseNums: [a, b, c, d] })).data.num;
+  await u.tester.patch(`/api/projects/LK/runs/${run}/results/${a}`, { result: "passed" });
+  await u.tester.patch(`/api/projects/LK/runs/${run}/results/${b}`, { result: "failed", assignee: "tester" });
+  await u.tester.patch(`/api/projects/LK/runs/${run}/results/${c}`, { result: "blocked" });
+  assert.equal((await u.viewer.post(`/api/projects/LK/runs/${run}/rerun`, {})).status, 403);
+  let r = await u.tester.post(`/api/projects/LK/runs/${run}/rerun`, { build: "5.1.1" });
+  assert.equal(r.status, 201);
+  assert.equal(r.data.cases, 2);
+  const rerun = r.data.num;
+  const st = (await u.tester.get("/api/projects/LK/state")).data;
+  const nr = st.runs.find((x) => x.num === rerun);
+  assert.equal(nr.title, "Регресс 5.1 — перезапуск");
+  assert.equal(nr.build, "5.1.1");
+  assert.equal(nr.env, "stage");
+  assert.equal(nr.rerunOf, run);
+  assert.equal(nr.counts.untested, 2);
+  const results = (await u.tester.get(`/api/projects/LK/runs/${rerun}/results`)).data;
+  const items = results.results || results.items || results;
+  const byCase = Object.fromEntries(items.map((x) => [x.caseNum ?? x.case, x]));
+  assert.equal(byCase[b].assignee, "tester", "исполнитель перенесён");
+  assert.ok(!byCase[a] && !byCase[d], "пройденный и непроверенный не попали");
+  // выбор результатов: только непроверенные
+  r = await u.tester.post(`/api/projects/LK/runs/${run}/rerun`, { results: ["untested"] });
+  assert.equal(r.data.cases, 1);
+  assert.equal((await u.tester.post(`/api/projects/LK/runs/${rerun}/rerun`, { results: ["passed"] })).status, 409);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);

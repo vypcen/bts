@@ -31,7 +31,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const [filter, setFilter] = useState<"all" | ResultValue>("all");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
-  const [modal, setModal] = useState<"edit" | "add" | "delete" | "distribute" | null>(null);
+  const [modal, setModal] = useState<"edit" | "add" | "delete" | "distribute" | "rerun" | null>(null);
   // "" — все, "me" — мои, "none" — без исполнителя, иначе логин
   const [who, setWho] = useState("");
   const nameOf = useNames();
@@ -90,6 +90,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
           <p className="muted">
             {run.build ? <>Сборка <span className="mono">{run.build}</span></> : "Сборка не указана"}
             {run.env && <> · {run.env}</>} · создал <Who login={run.createdBy} /> {fmt(run.created)}
+            {run.rerunOf && <> · перезапуск <a href={href("p", p, "runs", run.rerunOf)}>{p}-R{run.rerunOf}</a></>}
           </p>
           <FieldsView entity="run" values={run.fields} />
         </div>
@@ -103,6 +104,11 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
               <button className="btn" onClick={() => setModal("edit")}>Параметры</button>
               {open && !run.planLocked && <button className="btn" onClick={() => setModal("add")}>Добавить кейсы</button>}
               {open && <button className="btn" onClick={() => setModal("distribute")}>Распределить</button>}
+              {(run.counts.failed > 0 || run.counts.blocked > 0) && (
+                <button className="btn" onClick={() => setModal("rerun")} title="Новый прогон из упавших и заблокированных кейсов — например, на сборке с исправлениями">
+                  Перезапустить упавшие
+                </button>
+              )}
               <button className={`btn${open ? " primary" : ""}`} onClick={() => write(() => api("PATCH", paths.run(p, num), { state: open ? "closed" : "open" }), open ? "Прогон закрыт" : "Прогон снова открыт")}>
                 {open ? "Закрыть прогон" : "Открыть снова"}
               </button>
@@ -208,6 +214,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
       {modal === "edit" && <RunModal pid={p} run={run} onClose={() => setModal(null)} />}
       {modal === "add" && <AddCasesModal run={run} inRunNums={results.map((r) => r.caseNum)} onClose={() => setModal(null)} />}
       {modal === "distribute" && <DistributeModal run={run} onClose={() => setModal(null)} />}
+      {modal === "rerun" && <RerunModal run={run} onClose={() => setModal(null)} />}
       {modal === "delete" && (
         <Confirm
           title={`Удалить прогон ${run.id}?`}
@@ -447,6 +454,57 @@ function DistributeModal({ run, onClose }: { run: Run; onClose: () => void }) {
       <div className="acts">
         <button className="btn" onClick={onClose}>Отмена</button>
         <button className="btn primary" disabled={!assign.users.length} onClick={go}>Распределить</button>
+      </div>
+    </Modal>
+  );
+}
+
+// Перезапуск: новый прогон из кейсов с выбранными результатами. Исполнители и поля переносятся
+const RERUN_CHOICES: { key: ResultValue; label: string }[] = [
+  { key: "failed", label: "Упал" },
+  { key: "blocked", label: "Заблокирован" },
+  { key: "skipped", label: "Пропущен" },
+  { key: "untested", label: "Не проверен" },
+];
+function RerunModal({ run, onClose }: { run: Run; onClose: () => void }) {
+  const { write, toast } = useStore();
+  const [picked, setPicked] = useState<ResultValue[]>(["failed", "blocked"]);
+  const [build, setBuild] = useState(run.build);
+  const [env, setEnv] = useState(run.env);
+  const count = picked.reduce((s, r) => s + (run.counts[r] || 0), 0);
+  async function submit() {
+    let created: { num: number; cases: number } | null = null;
+    const ok = await write(async () => {
+      created = await api("POST", `${paths.run(run.pid, run.num)}/rerun`, { results: picked, build, env });
+    });
+    if (ok && created) {
+      const c = created as { num: number; cases: number };
+      toast(`Создан прогон ${run.pid}-R${c.num}: ${c.cases} кейсов`);
+      onClose();
+      go("p", run.pid, "runs", c.num);
+    }
+  }
+  return (
+    <Modal onClose={onClose}>
+      <h2>Перезапустить {run.id}</h2>
+      <p className="muted small" style={{ marginTop: 0 }}>Будет создан новый прогон из кейсов с выбранными результатами. Исполнители останутся прежними.</p>
+      <div className="field">
+        <span className="label">Какие кейсы</span>
+        {RERUN_CHOICES.map((c) => (
+          <label key={c.key} className="small" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={picked.includes(c.key)} onChange={(e) => setPicked(e.target.checked ? [...picked, c.key] : picked.filter((x) => x !== c.key))} />
+            {c.label} <span className="muted">({run.counts[c.key] || 0})</span>
+          </label>
+        ))}
+      </div>
+      <div className="field"><label htmlFor="rr-build">Сборка</label>
+        <input id="rr-build" className="input mono" value={build} onChange={(e) => setBuild(e.target.value)} />
+        <span className="muted" style={{ fontSize: 12 }}>Обычно — новая сборка с исправлениями</span></div>
+      <div className="field"><label htmlFor="rr-env">Окружение</label>
+        <input id="rr-env" className="input" value={env} onChange={(e) => setEnv(e.target.value)} /></div>
+      <div className="acts">
+        <button className="btn" onClick={onClose}>Отмена</button>
+        <button className="btn primary" disabled={!count} onClick={submit}>Создать прогон ({count})</button>
       </div>
     </Modal>
   );
