@@ -283,4 +283,4 @@ router.get("/plans/:num/report", wrap(async (req, res) => {
   await send(req, res, d, `${req.params.key}-P${num(req.params.num)}-отчёт`);
 }));
 
-module.exports = { router, runData, planData, summarize };
+module.exports = { router, runData, planData, summarize, FONT, FONT_BOLD, COMPANY, RESULT, RESULT_COLOR, ascii, fmtDate };

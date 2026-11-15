@@ -533,3 +533,28 @@ test("резервные копии: создать сейчас, проверк
   await page.getByRole("link", { name: "Скачать" }).first().click();
   expect((await dl).suggestedFilename()).toMatch(/^testball-.*\.tar$/);
 });
+
+test("матрица покрытия: сетка требований и кейсов, срез по прогону, выгрузка в Excel", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const k1 = await (await api.post("/api/projects/LK/cases", { data: { title: "E2E матрица: оплата картой", priority: "high", status: "ready" } })).json();
+  const k2 = await (await api.post("/api/projects/LK/cases", { data: { title: "E2E матрица: возврат", priority: "high", status: "ready" } })).json();
+  await api.post("/api/projects/LK/requirements", { data: { title: "E2E матрица: оплата", cases: [k1.num, k2.num] } });
+  const run = await (await api.post("/api/projects/LK/runs", { data: { title: "E2E матрица", caseNums: [k1.num] } })).json();
+  await api.patch(`/api/projects/LK/runs/${run.num}/results/${k1.num}`, { data: { result: "passed" } });
+  await page.goto("/#/p/LK/reqs");
+  await page.getByRole("button", { name: "Матрица покрытия" }).click();
+  const matrix = page.getByRole("table", { name: "Матрица покрытия" });
+  const row = matrix.getByRole("row", { name: /E2E матрица: оплата/ });
+  await expect(row.getByLabel(`LK-${k1.num}: Пройден`)).toBeVisible();
+  await expect(row.getByLabel(`LK-${k2.num}: Не проверен`)).toBeVisible();
+  await expect(row.getByText("Частично")).toBeVisible();
+  // срез по прогону: второго кейса в прогоне нет
+  await page.getByLabel("Срез результатов").selectOption("run");
+  await page.getByLabel("Номер прогона").fill(String(run.num));
+  await expect(row.getByLabel(`LK-${k2.num}: вне среза`)).toBeVisible();
+  await expect(page.getByText(`Прогон LK-R${run.num}`)).toBeVisible();
+  const dl = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Excel" }).click();
+  expect((await dl).suggestedFilename()).toBe(`LK-coverage-matrix-R${run.num}.xlsx`);
+});

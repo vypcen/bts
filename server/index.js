@@ -632,7 +632,7 @@ app.post("/api/projects/:key/cases/:num/versions/:v/restore", auth.requireUser, 
 app.use("/api/projects/:key/ai", auth.requireUser, require("./assist"));
 app.use("/api/notifications", auth.requireUser, require("./notify").router);
 app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, require("./caseimport").router, autotests.projectRouter, attachments.projectRouter);
-app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, review.router, datasets.router, require("./releases").router, require("./configs").router, require("./notify").projectRouter, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./coverage").router, require("./templates").router, shared.router, review.router, datasets.router, require("./releases").router, require("./configs").router, require("./notify").projectRouter, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./backup").router, require("./users"), require("./personal").router, audit.router, trash.adminRouter);

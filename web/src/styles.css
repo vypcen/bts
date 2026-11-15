@@ -436,3 +436,8 @@ section>h3{margin:18px 0 8px}
 .mention-list button{text-align:left;background:none;border:0;padding:6px 10px;font:inherit;color:inherit;cursor:pointer}
 .mention-list button:hover{background:var(--accent-soft)}
 .t-ok{color:var(--ok)} .t-crit{color:var(--crit)}
+/* H-04: матрица покрытия */
+.cov-matrix th.cov-col{writing-mode:vertical-rl;transform:rotate(180deg);padding:6px 2px;font-weight:500;font-size:11px;white-space:nowrap;min-width:26px}
+.cov-matrix td.cov-cell{text-align:center;padding:3px 2px;min-width:26px}
+.cov-matrix .cov-mark{display:inline-flex;width:20px;height:20px;align-items:center;justify-content:center;border-radius:4px;font-size:12px;font-weight:700;cursor:default}
+.cov-matrix .cov-sticky{position:sticky;left:0;background:var(--surface);z-index:1;min-width:260px;max-width:420px}

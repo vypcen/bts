@@ -954,6 +954,25 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 
 Требования, с которыми связан кейс: `{"items": [{"num": 1, "title": "…", "status": "approved", "extRef": "AUTH-1"}]}`.
 
+### `GET /api/projects/:key/requirements/matrix`
+
+Матрица покрытия (H-04). Параметры: `release` — номер релиза (результаты его прогонов и спринтов), `run` — номер прогона, `obsolete=1` — включить устаревшие требования. Без параметров — последние результаты кейсов.
+
+```json
+{
+  "scope": { "kind": "release", "num": 1, "label": "Релиз 2.0" },
+  "requirements": [{ "num": 1, "title": "Вход", "extRef": "AUTH-1", "status": "approved", "coverage": "failed", "cases": [1, 2], "openBugs": 1 }],
+  "cases": [{ "num": 2, "title": "Восстановление пароля", "inScope": true, "result": "failed", "run": 3, "executed": 1763200000000, "executor": "Тестировщик", "bugs": [{ "num": 4, "title": "…", "severity": "major" }] }],
+  "summary": { "passed": 0, "partial": 0, "failed": 1, "untested": 0, "none": 0, "total": 1, "coveredPct": 100, "passedPct": 0, "casesLinked": 2, "casesUnlinked": 5 }
+}
+```
+
+`inScope: false` — кейс не попал в выбранный релиз или прогон (для покрытия считается непроверенным).
+
+### `GET /api/projects/:key/requirements/matrix/export?format=xlsx|pdf|csv`
+
+Та же матрица файлом, с теми же параметрами среза. Excel — листы «Сводка», «Матрица» (цветная сетка), «Детально»; PDF — альбомный отчёт; CSV — строка на пару «требование — кейс».
+
 ### `GET /api/projects/:key/requirements/matrix.csv`
 
 Матрица трассировки для Excel (UTF-8 с BOM, разделитель `;`): строка на каждую пару «требование — кейс» с покрытием, последним результатом, прогоном и открытыми багами. Требования без кейсов — отдельной строкой.
