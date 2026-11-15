@@ -15,18 +15,18 @@ const SEP = " / "; // разделитель вложенных папок в к
 // Колонки файла: заголовок при экспорте и варианты, которые узнаются при импорте (без учёта регистра)
 const COLUMNS = [
   { key: "id", header: "ID", aliases: ["id", "ид", "номер"] },
-  { key: "folder", header: "Папка", aliases: ["папка", "раздел", "folder", "section", "suite"] },
-  { key: "title", header: "Название", aliases: ["название", "заголовок", "title", "name", "summary", "test case name", "test name"] },
+  { key: "folder", header: "Папка", aliases: ["папка", "раздел", "секция", "folder", "section", "suite", "feature"] },
+  { key: "title", header: "Название", aliases: ["название", "наименование", "заголовок", "title", "name", "summary", "test case name", "test name"] },
   { key: "priority", header: "Приоритет", aliases: ["приоритет", "priority"] },
-  { key: "status", header: "Статус", aliases: ["статус", "status", "state"] },
+  { key: "status", header: "Статус", aliases: ["статус", "состояние", "status", "state"] },
   { key: "pre", header: "Предусловия", aliases: ["предусловия", "preconditions", "precondition", "objective", "цель"] },
-  { key: "steps", header: "Шаги", aliases: ["шаги", "steps", "steps (text)", "шаг", "действие", "action", "step", "test script (step-by-step) - step"] },
-  { key: "expected", header: "Ожидаемый результат", aliases: ["ожидаемый результат", "expected", "expected result", "expected result(s)"] },
+  { key: "steps", header: "Шаги", aliases: ["шаги", "steps", "steps (text)", "шаг", "действие", "action", "step", "test script (step-by-step) - step", "scenario", "сценарий"] },
+  { key: "expected", header: "Ожидаемый результат", aliases: ["ожидаемый результат", "expected", "expected result", "expected result(s)", "expected_result"] },
   // в конце, чтобы файлы, выгруженные до появления чек-листов, читались так же
   { key: "kind", header: "Тип", aliases: ["тип", "вид", "type", "kind"] },
   // ожидаемый результат каждого шага — по строке на шаг, напротив строк «Шагов»
   { key: "stepExpected", header: "Ожидаемые результаты шагов", aliases: ["ожидаемые результаты шагов", "ожидаемый результат шагов", "expected results (steps)", "steps (expected result)", "test script (step-by-step) - expected result", "ожидаемый результат шага"] },
-  { key: "tags", header: "Теги", aliases: ["теги", "метки", "tags", "labels", "references"] },
+  { key: "tags", header: "Теги", aliases: ["теги", "тэги", "метки", "tags", "tag", "labels", "references"] },
   // тестовые данные шагов — по строке на шаг (только импорт: есть в выгрузках Zephyr и Xray)
   { key: "stepData", header: "Тестовые данные шагов", aliases: ["тестовые данные шагов", "тестовые данные", "test data", "data", "test script (step-by-step) - test data"], importOnly: true },
 ];
@@ -40,7 +40,8 @@ const PRIORITY = {
 };
 const STATUS = {
   draft: "draft", "черновик": "draft",
-  ready: "ready", "готов": "ready", actual: "ready", active: "ready", approved: "ready",
+  ready: "ready", "готов": "ready", actual: "ready", active: "ready", approved: "ready", "актуальный": "ready",
+  notready: "draft", "not ready": "draft", "не готов": "draft", needswork: "draft", "needs work": "draft", "требует доработки": "draft",
   deprecated: "deprecated", "устарел": "deprecated", outdated: "deprecated",
 };
 const KIND = {
