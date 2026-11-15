@@ -34,6 +34,7 @@ const { wrap, str, num, HttpError } = require("./util");
 const { Limiter, MIN } = require("./limits");
 const version = require("./version");
 const license = require("./license");
+const security = require("./security");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
@@ -93,6 +94,14 @@ app.use((req, res, next) => {
 app.use(auth.loadUser);
 // журнал аудита для изменяющих запросов к пользователям, интеграциям, токенам, удалениям (server/audit.js)
 app.use(audit.middleware());
+// Пароль выдан админом или истёк, либо политика требует 2FA, а она не включена: пока пользователь этого не сделал,
+// доступны только вход/выход, смена пароля, настройка 2FA и справка. Токены CI не затрагиваются
+const PENDING_OK = /^\/api\/(auth\/(me|logout|password|2fa(\/.*)?|sessions(\/.*)?)|help(\/.*)?)$/;
+app.use((req, res, next) => {
+  const p = req.user?.pending;
+  if (!p || req.viaToken || !req.path.startsWith("/api/") || PENDING_OK.test(req.path)) return next();
+  res.status(403).json({ error: security.PENDING_TEXT[p], code: p === "password" ? "password_change_required" : "2fa_setup_required" });
+});
 // Результаты автотестов приходят пачками вместе со стектрейсами — им нужен лимит побольше
 const bigJson = express.json({ limit: "10mb" });
 app.use("/api/projects/:key/autoruns", (req, res, next) => (req.user ? bigJson(req, res, next) : next()));
@@ -143,29 +152,38 @@ app.use("/api", (req, res, next) => {
 app.get("/api/events", auth.requireUser, live.events);
 
 // ---------- авторизация ----------
-const me = (u) => ({ login: u.login, name: u.name, role: u.role, provider: u.auth_provider || "local", version: version.VERSION });
+const me = (u) => ({ login: u.login, name: u.name, role: u.role, provider: u.auth_provider || "local", version: version.VERSION, pending: u.pending || null, passwordPolicy: security.policyText() });
 // Администратор видит предупреждения о лицензии (истекает, истекла, ключ не принят) в шапке
 const { limits, TOO_MANY } = auth;
+
+// Что пользователь обязан сделать до начала работы (server/security.js)
+async function pendingOf(userId) {
+  const { rows } = await pool.query(
+    "SELECT role, auth_provider, must_change_password, password_changed_at, totp_secret IS NOT NULL AS totp_enabled FROM users WHERE id=$1", [userId]
+  );
+  return rows[0] ? security.pendingAction(rows[0]) : null;
+}
 
 // Без входа — ещё и что показывать на странице входа: нужен ли код установки, открыта ли регистрация
 app.get("/api/auth/me", wrap(async (req, res) => {
   if (req.user) {
     const { rows } = await pool.query("SELECT auth_provider FROM users WHERE id=$1", [req.user.id]);
     const user = me({ ...req.user, auth_provider: rows[0]?.auth_provider });
+    user.twoFactor = !!req.user.totpEnabled;
     if (req.user.role === "admin") {
       const l = await license.current();
       user.licenseNotice = l.notice;
     }
     return res.json({ user });
   }
-  res.json({ user: null, setup: await auth.needsSetup(), registration: sso.cfg.localLogin ? REGISTRATION : "closed", providers: sso.providers() });
+  res.json({ user: null, setup: await auth.needsSetup(), registration: sso.cfg.localLogin ? REGISTRATION : "closed", providers: sso.providers(), passwordPolicy: security.policyText() });
 }));
 
 app.post("/api/auth/register", wrap(async (req, res) => {
   const login = str(req.body.login, 64).toLowerCase();
   const name = str(req.body.name, 100);
   const password = typeof req.body.password === "string" ? req.body.password : "";
-  const bad = auth.checkLogin(login) || (!name && "Укажите имя") || auth.checkPassword(password);
+  const bad = auth.checkLogin(login) || (!name && "Укажите имя") || auth.checkPassword(password, { login, name });
   if (bad) return res.status(400).json({ error: bad });
   // лимит до проверки кода установки — иначе его можно подбирать
   if (!limits.registerIp.take(req.ip) || !limits.registerAll.take("all")) return res.status(429).json({ error: TOO_MANY });
@@ -193,9 +211,10 @@ app.post("/api/auth/register", wrap(async (req, res) => {
   if (!rows[0]) return res.status(409).json({ error: "Логин уже занят. Выберите другой или войдите" });
   if (rows[0].role === "admin") auth.setupDone();
   await auth.createSession(res, req, rows[0].id);
+  const pending = await pendingOf(rows[0].id);
   audit.log(req, "auth.register", { actor: { id: rows[0].id, login }, project: null, target: login, details: { role: rows[0].role } });
   broadcast("users");
-  res.status(201).json({ user: { login, name, role: rows[0].role } });
+  res.status(201).json({ user: { login, name, role: rows[0].role, pending } });
 }));
 
 app.post("/api/auth/login", wrap(async (req, res) => {
@@ -227,6 +246,20 @@ app.post("/api/auth/login", wrap(async (req, res) => {
   }
   limits.loginIpLogin.clear(key);
   if (u.blocked) return res.status(403).json({ error: "Учётная запись заблокирована. Обратитесь к администратору" });
+  // второй фактор: код из приложения-аутентификатора или резервный код. Без кода — просим его, попыткой это не считается
+  const totp = (await pool.query("SELECT totp_secret IS NOT NULL AS on FROM users WHERE id=$1", [u.id])).rows[0]?.on;
+  if (totp) {
+    if (!req.body.code) return res.status(401).json({ error: "Введите код из приложения-аутентификатора", twoFactor: true });
+    const second = await security.verifySecondFactor(u.id, req.body.code);
+    if (!second.ok) {
+      audit.log(req, "auth.2fa_failed", { actor: u, project: null, target: u.login });
+      limits.loginIpLogin.hit(key);
+      limits.loginIp.hit(req.ip);
+      limits.loginAny.hit(login);
+      return res.status(401).json({ error: "Код не подошёл. Введите новый код из приложения или резервный код", twoFactor: true });
+    }
+    if (second.method === "recovery") audit.log(req, "auth.recovery_used", { actor: u, project: null, target: u.login, details: { left: second.recoveryLeft } });
+  }
   if (check.legacy) {
     // пароль из прошлой версии — сразу перехэшируем в bcrypt
     await pool.query("UPDATE users SET password_hash=$1 WHERE id=$2", [await auth.hashPassword(password), u.id]);
@@ -234,11 +267,13 @@ app.post("/api/auth/login", wrap(async (req, res) => {
   await pool.query("UPDATE users SET last_login_at=now() WHERE id=$1", [u.id]);
   await auth.createSession(res, req, u.id);
   audit.log(req, "auth.login", { actor: u, project: null, target: u.login, details: { provider: u.auth_provider || "local" } });
-  res.json({ user: me(u) });
+  res.json({ user: me({ ...u, pending: await pendingOf(u.id), twoFactor: !!totp }) });
 }));
 
 // OpenID Connect и Kerberos (переходы браузера, GET)
 app.use("/api/auth", sso.router);
+// двухфакторная аутентификация и активные сессии (server/account.js)
+app.use("/api/auth", require("./account"));
 
 app.post("/api/auth/logout", wrap(async (req, res) => {
   if (req.user) audit.log(req, "auth.logout", { project: null, target: req.user.login });
@@ -249,13 +284,17 @@ app.post("/api/auth/logout", wrap(async (req, res) => {
 // Смена своего пароля. Остальные сессии закрываются: если пароль утёк, вошедший с ним теряет доступ
 app.post("/api/auth/password", auth.requireUser, wrap(async (req, res) => {
   const current = typeof req.body.current === "string" ? req.body.current : "";
-  const bad = auth.checkPassword(req.body.password);
+  const bad = auth.checkPassword(req.body.password, { login: req.user.login, name: req.user.name });
   if (bad) return res.status(400).json({ error: bad });
   if (!limits.password.take(String(req.user.id))) return res.status(429).json({ error: TOO_MANY });
   const { rows } = await pool.query("SELECT password_hash, auth_provider FROM users WHERE id=$1", [req.user.id]);
   if (rows[0].auth_provider !== "local") return res.status(409).json({ error: "Пароль хранится в корпоративном каталоге (LDAP/SSO) и меняется там" });
   if (!(await auth.verifyPassword(current, rows[0].password_hash)).ok) return res.status(403).json({ error: "Текущий пароль указан неверно" });
-  await pool.query("UPDATE users SET password_hash=$1 WHERE id=$2", [await auth.hashPassword(req.body.password), req.user.id]);
+  if (current === req.body.password) return res.status(400).json({ error: "Новый пароль должен отличаться от текущего" });
+  if (await security.reusedPassword(pool, req.user.id, req.body.password, auth.verifyPassword)) {
+    return res.status(400).json({ error: `Этот пароль уже использовался. Придумайте новый (нельзя повторять последние ${security.cfg.history})` });
+  }
+  await security.setPassword(pool, req.user.id, await auth.hashPassword(req.body.password));
   await auth.destroyOtherSessions(req, req.user.id);
   audit.log(req, "auth.password", { project: null, target: req.user.login });
   res.json({ ok: true });

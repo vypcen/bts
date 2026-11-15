@@ -14,7 +14,7 @@ test("метрики: закрыты токеном, отдают HTTP, базу
   assert.equal((await fetch(`${srv.base}/metrics`)).status, 401);
   assert.equal((await fetch(`${srv.base}/metrics`, { headers: { authorization: "Bearer wrong-token-xxx" } })).status, 401);
   const tester = client(srv.base);
-  await tester.post("/api/auth/login", { login: "tester", password: "password123" });
+  await tester.post("/api/auth/login", { login: "tester", password: "Tb-pass-2026" });
   await tester.get("/api/projects/LK/state");
   await tester.get("/api/projects/LK/cases/999999");
   const r = await fetch(`${srv.base}/metrics`, { headers: { authorization: "Bearer metrics-secret-123" } });

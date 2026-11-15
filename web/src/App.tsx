@@ -4,7 +4,7 @@ import { go, href, useRoute } from "./router";
 import { useStore } from "./store";
 import { Avatar } from "./ui";
 import { Login } from "./views/Login";
-import { PasswordModal } from "./views/Password";
+import { PendingScreen, SecurityModal } from "./views/Security";
 import { ProjectPage } from "./views/ProjectPage";
 import { Projects } from "./views/Projects";
 import { Settings } from "./views/Settings";
@@ -30,6 +30,8 @@ export function App() {
   }
   if (me === undefined) return <div className="wrap login"><div className="skel">Подключаемся к базе…</div></div>;
   if (!me) return <Login />;
+  // сменить пароль или включить 2FA — до этого сервер не отдаёт данные
+  if (me.pending) return <PendingScreen />;
 
   const [section, key, tab, id] = route;
   const project = section === "p" && data ? data.projects.find((p) => p.id === key) : undefined;
@@ -109,11 +111,10 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
             <span className="mono" style={{ fontSize: 12 }}>@{me.login} · {roleOf(me.role).label}</span>
           </span>
         )}
-        {/* пароль доменной / SSO-учётной записи меняется в каталоге, а не здесь */}
-        {me && (!me.provider || me.provider === "local") && <button className="btn ghost" onClick={() => setPassword(true)}>Пароль</button>}
+        {me && <button className="btn ghost" onClick={() => setPassword(true)} title="Пароль, двухфакторная аутентификация, активные сессии">Безопасность</button>}
         <button className="btn" onClick={logout}>Выйти</button>
       </div>
-      {password && <PasswordModal onClose={() => setPassword(false)} />}
+      {password && <SecurityModal onClose={() => setPassword(false)} />}
       {searching && <SearchPalette onClose={() => setSearching(false)} />}
     </div>
   );

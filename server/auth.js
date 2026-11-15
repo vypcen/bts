@@ -83,9 +83,8 @@ const LOGIN_RE = /^[a-z0-9._-]{3,32}$/;
 function checkLogin(login) {
   return LOGIN_RE.test(login) ? null : "Логин: 3–32 символа, латинские буквы, цифры, точка, дефис или подчёркивание";
 }
-function checkPassword(password) {
-  return typeof password === "string" && password.length >= 8 && password.length <= 200 ? null : "Пароль должен быть от 8 до 200 символов";
-}
+// Политика паролей — server/security.js. ctx: {login, name} — пароль не должен их содержать
+const checkPassword = (password, ctx) => require("./security").checkPassword(password, ctx);
 
 // ---------- сессии ----------
 // Битое значение cookie (например, подброшенное с соседнего поддомена) пропускаем, а не роняем запрос
@@ -106,7 +105,17 @@ const sessionToken = (req) => parseCookies(req.headers.cookie)[cookieName(req)];
 async function createSession(res, req, userId) {
   const token = crypto.randomBytes(32).toString("base64url");
   const expires = new Date(Date.now() + SESSION_DAYS * 864e5);
-  await pool.query("INSERT INTO sessions(token_hash, user_id, expires_at) VALUES ($1,$2,$3)", [sha256(token), userId, expires]);
+  await pool.query("INSERT INTO sessions(token_hash, user_id, expires_at, ip, user_agent) VALUES ($1,$2,$3,$4,$5)", [
+    sha256(token), userId, expires, String(req.ip || "").slice(0, 100), String(req.get("user-agent") || "").slice(0, 300),
+  ]);
+  // MAX_SESSIONS: самые старые сессии сверх лимита закрываются
+  const max = require("./security").cfg.maxSessions;
+  if (max > 0) {
+    await pool.query(
+      "DELETE FROM sessions WHERE user_id=$1 AND token_hash NOT IN (SELECT token_hash FROM sessions WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2)",
+      [userId, max]
+    );
+  }
   res.cookie(cookieName(req), token, { httpOnly: true, sameSite: "lax", secure: req.secure, expires, path: "/" });
 }
 
@@ -150,12 +159,26 @@ async function loadUser(req, _res, next) {
     }
     const token = sessionToken(req);
     if (token) {
+      const security = require("./security");
+      const idle = security.cfg.idleMinutes;
+      const hash = sha256(token);
       const { rows } = await pool.query(
-        `SELECT u.id, u.login, u.name, u.role FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash=$1 AND s.expires_at > now() AND NOT u.blocked`,
-        [sha256(token)]
+        `SELECT u.id, u.login, u.name, u.role, u.auth_provider, u.must_change_password, u.password_changed_at,
+                (u.totp_secret IS NOT NULL) AS totp_enabled, s.last_seen_at
+         FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.token_hash=$1 AND s.expires_at > now() AND NOT u.blocked
+           AND ($2::int = 0 OR s.last_seen_at > now() - make_interval(mins => $2::int))`,
+        [hash, idle]
       );
-      if (rows[0]) req.user = rows[0];
+      const r = rows[0];
+      if (r) {
+        req.user = { id: r.id, login: r.login, name: r.name, role: r.role, pending: security.pendingAction(r), totpEnabled: r.totp_enabled };
+        req.sessionId = hash.slice(0, 16);
+        // отметка активности — не чаще раза в минуту
+        if (Date.now() - r.last_seen_at.getTime() > 60000) {
+          pool.query("UPDATE sessions SET last_seen_at=now() WHERE token_hash=$1", [hash]).catch(() => {});
+        }
+      }
     }
     next();
   } catch (e) {

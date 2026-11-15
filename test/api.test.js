@@ -16,13 +16,13 @@ test("установка: первый пользователь только с 
     const c = client(fresh.base);
     let r = await c.get("/api/auth/me");
     assert.equal(r.data.setup, true);
-    r = await c.post("/api/auth/register", { login: "first", name: "F", password: "password123", setupCode: "wrong" });
+    r = await c.post("/api/auth/register", { login: "first", name: "F", password: "Tb-pass-2026", setupCode: "wrong" });
     assert.equal(r.status, 403);
-    r = await c.post("/api/auth/register", { login: "first", name: "F", password: "password123", setupCode: SETUP_CODE });
+    r = await c.post("/api/auth/register", { login: "first", name: "F", password: "Tb-pass-2026", setupCode: SETUP_CODE });
     assert.equal(r.status, 201);
     assert.equal(r.data.user.role, "admin");
     const c2 = client(fresh.base);
-    r = await c2.post("/api/auth/register", { login: "second", name: "S", password: "password123" });
+    r = await c2.post("/api/auth/register", { login: "second", name: "S", password: "Tb-pass-2026" });
     assert.equal(r.data.user.role, "developer");
   } finally {
     await fresh.stop();
@@ -190,13 +190,13 @@ test("лицензия: бесплатная редакция ограничив
   // занимаем все бесплатные полные места
   const used = r.data.seats.full.used;
   for (let i = used; i < license.COMMUNITY.full; i++) {
-    assert.equal((await u.admin.post("/api/admin/users", { login: `lic${i}`, name: "L", password: "password123", role: "tester" })).status, 201);
+    assert.equal((await u.admin.post("/api/admin/users", { login: `lic${i}`, name: "L", password: "Tb-pass-2026", role: "tester" })).status, 201);
   }
-  r = await u.admin.post("/api/admin/users", { login: "licx", name: "L", password: "password123", role: "tester" });
+  r = await u.admin.post("/api/admin/users", { login: "licx", name: "L", password: "Tb-pass-2026", role: "tester" });
   assert.equal(r.status, 409);
   assert.match(r.data.error, /полные лицензии заняты/);
   // просмотровые места без ограничений
-  assert.equal((await u.admin.post("/api/admin/users", { login: "licv", name: "V", password: "password123", role: "viewer" })).status, 201);
+  assert.equal((await u.admin.post("/api/admin/users", { login: "licv", name: "V", password: "Tb-pass-2026", role: "viewer" })).status, 201);
   // поддельный ключ не принимается
   assert.equal((await u.admin.put("/api/admin/license", { key: "TB1.e30.AAAA" })).status, 400);
   const key = license.sign({ id: "T-2", customer: "ООО Тест", edition: "enterprise", full: 50, view: null, issued: "2026-01-01", expires: null }, pem);
@@ -205,7 +205,7 @@ test("лицензия: бесплатная редакция ограничив
   assert.equal(r.data.full, 50);
   assert.equal(r.data.license.customer, "ООО Тест");
   assert.match((await u.admin.get("/api/auth/me")).data.user.licenseNotice, /Тестовая лицензия/);
-  assert.equal((await u.admin.post("/api/admin/users", { login: "licx", name: "L", password: "password123", role: "tester" })).status, 201);
+  assert.equal((await u.admin.post("/api/admin/users", { login: "licx", name: "L", password: "Tb-pass-2026", role: "tester" })).status, 201);
   r = await u.admin.get("/api/admin/audit?action=settings.license");
   assert.ok(r.data.items.length >= 1);
   // вернуться к бесплатной: новых полных мест нет, но существующих не выкидывает
@@ -325,8 +325,8 @@ test("тест-планы: динамический фильтр, блокиро
 
 test("администрирование: блокировка выкидывает из сессий, свою роль не поменять", async () => {
   const c = client(srv.base);
-  await u.admin.post("/api/admin/users", { login: "temp", name: "T", password: "password123", role: "tester" });
-  await c.post("/api/auth/login", { login: "temp", password: "password123" });
+  await u.admin.post("/api/admin/users", { login: "temp", name: "T", password: "Tb-pass-2026", role: "tester" });
+  await c.post("/api/auth/login", { login: "temp", password: "Tb-pass-2026" });
   assert.equal((await c.get("/api/state")).status, 200);
   await u.admin.patch("/api/admin/users/temp", { blocked: true });
   assert.equal((await c.get("/api/state")).status, 401);

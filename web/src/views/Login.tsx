@@ -13,7 +13,10 @@ interface Providers {
 export function Login() {
   const { setMe, toast } = useStore();
   const [tab, setTab] = useState<"login" | "register">("login");
-  const [f, setF] = useState({ login: "", name: "", pass: "", pass2: "", code: "" });
+  const [f, setF] = useState({ login: "", name: "", pass: "", pass2: "", code: "", otp: "" });
+  // сервер попросил второй фактор: показываем поле кода
+  const [needOtp, setNeedOtp] = useState(false);
+  const [policy, setPolicy] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   // setup — пользователей ещё нет: регистрируется первый администратор с кодом из логов сервера
@@ -21,7 +24,8 @@ export function Login() {
     setup: false, registration: "open", providers: { local: true, ldap: false, oidc: null, kerberos: null },
   });
   useEffect(() => {
-    api<{ setup?: boolean; registration?: "open" | "closed"; providers?: Providers }>("GET", "/api/auth/me").then((r) => {
+    api<{ setup?: boolean; registration?: "open" | "closed"; providers?: Providers; passwordPolicy?: string }>("GET", "/api/auth/me").then((r) => {
+      setPolicy(r.passwordPolicy || "");
       setMode({ setup: !!r.setup, registration: r.registration || "open", providers: r.providers || { local: true, ldap: false, oidc: null, kerberos: null } });
       if (r.setup) setTab("register");
     }, () => {});
@@ -48,9 +52,9 @@ export function Login() {
     if (reg && !/^[a-z0-9._-]{3,32}$/.test(login)) return setErr("Логин: 3–32 символа, латинские буквы, цифры, точка, дефис или подчёркивание");
     if (!login) return setErr("Введите логин");
     if (!f.pass) return setErr("Введите пароль");
+    if (!reg && needOtp && !f.otp.trim()) return setErr("Введите код из приложения-аутентификатора");
     if (reg) {
       if (!f.name.trim()) return setErr("Укажите имя");
-      if (f.pass.length < 8) return setErr("Пароль должен быть не короче 8 символов");
       if (f.pass !== f.pass2) return setErr("Пароли не совпадают");
       if (mode.setup && !f.code.trim()) return setErr("Введите код установки из логов сервера");
     }
@@ -59,11 +63,15 @@ export function Login() {
     try {
       const r = reg
         ? await api<{ user: User }>("POST", "/api/auth/register", { login, name: f.name.trim(), password: f.pass, setupCode: f.code.trim() || undefined })
-        : await api<{ user: User }>("POST", "/api/auth/login", { login, password: f.pass });
+        : await api<{ user: User }>("POST", "/api/auth/login", { login, password: f.pass, code: needOtp ? f.otp.trim() : undefined });
       if (reg) toast("Аккаунт создан");
       setMe(r.user);
     } catch (x: any) {
-      setErr(x.message);
+      if (x.data?.twoFactor && !needOtp) {
+        // пароль верный, нужен код — просим его без сообщения об ошибке
+        setNeedOtp(true);
+        setErr("");
+      } else setErr(x.message);
       setBusy(false);
     }
   }
@@ -122,8 +130,15 @@ export function Login() {
         <div className="field">
           <label htmlFor="a-pass">Пароль</label>
           <input className="input" id="a-pass" type="password" autoComplete={reg ? "new-password" : "current-password"} value={f.pass} onChange={set("pass")} />
-          {reg && <span className="muted" style={{ fontSize: 12 }}>Минимум 8 символов</span>}
+          {reg && <span className="muted" style={{ fontSize: 12 }}>Пароль: {policy || "не короче 8 символов"}</span>}
         </div>
+        {!reg && needOtp && (
+          <div className="field">
+            <label htmlFor="a-otp">Код из приложения-аутентификатора</label>
+            <input className="input mono" id="a-otp" inputMode="numeric" autoComplete="one-time-code" placeholder="123 456" value={f.otp} onChange={set("otp")} autoFocus />
+            <span className="muted" style={{ fontSize: 12 }}>Нет телефона под рукой — введите один из резервных кодов</span>
+          </div>
+        )}
         {reg && (
           <div className="field">
             <label htmlFor="a-pass2">Повторите пароль</label>

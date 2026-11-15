@@ -29,6 +29,10 @@ export interface User {
   provider?: AuthProvider;
   version?: string;
   licenseNotice?: string | null;
+  // что нужно сделать до начала работы: сменить пароль или включить 2FA
+  pending?: "password" | "2fa" | null;
+  twoFactor?: boolean;
+  passwordPolicy?: string;
 }
 
 export interface Project {

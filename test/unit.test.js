@@ -183,3 +183,21 @@ test("журнал: метка [компонент] и ошибка разбир
   assert.equal(info.component, "server");
   assert.equal(info.msg, "просто строка { a: 1 }");
 });
+
+test("TOTP по RFC 6238 и политика паролей", () => {
+  const s = require("../server/security");
+  // эталон из RFC 6238: секрет «12345678901234567890», T=59 с → 94287082 (последние 6 цифр)
+  const secret = s.base32(Buffer.from("12345678901234567890"));
+  assert.equal(secret, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
+  assert.equal(s.totp(secret, Math.floor(59 / 30)), "287082");
+  assert.equal(s.totp(secret, Math.floor(1111111109 / 30)), "081804");
+  const now = 1111111109 * 1000;
+  assert.equal(s.matchTotp(secret, "081804", -1, now), Math.floor(1111111109 / 30));
+  assert.equal(s.matchTotp(secret, "081 804", -1, now), Math.floor(1111111109 / 30), "пробелы не мешают");
+  assert.equal(s.matchTotp(secret, "081804", Math.floor(1111111109 / 30), now), null, "повтор кода");
+  assert.equal(s.matchTotp(secret, "000000", -1, now), null);
+  assert.deepEqual(s.unbase32(secret), Buffer.from("12345678901234567890"));
+  assert.equal(s.checkPassword("Hoshi-2026", { login: "ivanova" }), null);
+  assert.match(s.checkPassword("12345678"), /не только буквы или не только цифры/);
+  assert.match(s.checkPassword("P@ssw0rd"), /распространённых/);
+});

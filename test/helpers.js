@@ -60,6 +60,8 @@ async function startServer(env = {}) {
       STORAGE: "local",
       UPLOAD_DIR: path.join(require("node:os").tmpdir(), db),
       NODE_ENV: "test",
+      // тестовые пользователи создаются админом — без принудительной смены пароля при первом входе
+      PASSWORD_CHANGE_ON_RESET: "false",
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -134,10 +136,10 @@ function client(base, { token } = {}) {
 // Типовой набор: админ, тестировщик, разработчик и проект LK
 async function seed(srv) {
   const admin = client(srv.base);
-  let r = await admin.post("/api/auth/register", { login: "admin", name: "Админ", password: "password123", setupCode: SETUP_CODE });
+  let r = await admin.post("/api/auth/register", { login: "admin", name: "Админ", password: "Tb-pass-2026", setupCode: SETUP_CODE });
   if (r.status !== 201) throw new Error(`register admin: ${r.status} ${JSON.stringify(r.data)}`);
   for (const [login, role] of [["tester", "tester"], ["dev", "developer"], ["viewer", "viewer"], ["outsider", "tester"]]) {
-    r = await admin.post("/api/admin/users", { login, name: login, password: "password123", role });
+    r = await admin.post("/api/admin/users", { login, name: login, password: "Tb-pass-2026", role });
     if (r.status !== 201) throw new Error(`create ${login}: ${r.status} ${JSON.stringify(r.data)}`);
   }
   r = await admin.post("/api/projects", { key: "LK", name: "Личный кабинет" });
@@ -145,7 +147,7 @@ async function seed(srv) {
   for (const login of ["tester", "dev", "viewer"]) await admin.put(`/api/admin/users/${login}/projects`, { projects: ["LK"] });
   const login = async (name) => {
     const c = client(srv.base);
-    const res = await c.post("/api/auth/login", { login: name, password: "password123" });
+    const res = await c.post("/api/auth/login", { login: name, password: "Tb-pass-2026" });
     if (res.status !== 200) throw new Error(`login ${name}: ${res.status}`);
     return c;
   };

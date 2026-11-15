@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, setUnauthorizedHandler } from "./api";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { api, setPendingHandler, setUnauthorizedHandler } from "./api";
 import { useRoute } from "./router";
 import type { MetaState, ProjectState, State, User } from "./types";
 
@@ -12,7 +12,7 @@ interface Store {
   data: State | null;
   projectLoading: boolean; // данные открытого проекта ещё не пришли
   liveError: string;
-  setMe: (u: User | null) => void;
+  setMe: Dispatch<SetStateAction<User | null | undefined>>;
   reload: () => Promise<void>;
   toast: (msg: string) => void;
   // Выполняет изменение, показывает ошибку тостом и перечитывает состояние. true — если удалось
@@ -134,13 +134,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setUnauthorizedHandler(() => setMe(null));
+    setPendingHandler((code) => setMe((m) => (m ? { ...m, pending: code === "password_change_required" ? "password" : "2fa" } : m)));
     api<{ user: User | null }>("GET", "/api/auth/me")
       .then((r) => setMe(r.user))
       .catch(() => setBootError(true));
   }, []);
 
   // Пока пользователь в системе: загружаем состояние и слушаем изменения других участников
-  const login = me?.login;
+  // пока не сменён пароль или не включена 2FA, данные не загружаются: сервер их всё равно не отдаст
+  const login = me?.pending ? undefined : me?.login;
   useEffect(() => {
     if (!login) {
       setMeta(null);

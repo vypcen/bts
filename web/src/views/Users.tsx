@@ -20,6 +20,9 @@ interface AdminUser {
   provider: string;
   email: string;
   lastLogin: number | null;
+  twoFactor?: boolean;
+  mustChangePassword?: boolean;
+  sessions?: number;
 }
 
 interface Seats {
@@ -149,7 +152,14 @@ function UsersList() {
                         </div>
                       )}
                     </td>
-                    <td>{u.blocked ? <Pill tone="crit" label="Заблокирован" sm /> : <Pill tone="ok" label="Активен" sm />}</td>
+                    <td>
+                      {u.blocked ? <Pill tone="crit" label="Заблокирован" sm /> : <Pill tone="ok" label="Активен" sm />}
+                      <div className="small muted" style={{ marginTop: 4 }}>
+                        {u.twoFactor && <span title="Двухфакторная аутентификация включена">2FA · </span>}
+                        {u.mustChangePassword && <span title="Сменит пароль при следующем входе">смена пароля · </span>}
+                        {u.sessions ? `сессий: ${u.sessions}` : "не в сети"}
+                      </div>
+                    </td>
                     <td className="actions">
                       {!self && (
                         <>
@@ -157,6 +167,18 @@ function UsersList() {
                             {u.blocked ? "Разблокировать" : "Заблокировать"}
                           </button>
                           {u.provider === "local" && <button className="btn sm" onClick={() => setResetting(u)}>Сменить пароль</button>}
+                          {u.twoFactor && (
+                            <button className="btn sm" title="Потерян телефон: пользователь войдёт по паролю и настроит 2FA заново"
+                              onClick={() => write(() => api("POST", `${usersUrl}/${encodeURIComponent(u.login)}/2fa/reset`, {}), `${u.name}: двухфакторная аутентификация сброшена`)}>
+                              Сбросить 2FA
+                            </button>
+                          )}
+                          {!!u.sessions && (
+                            <button className="btn sm" title="Выйти на всех устройствах (например, потерян ноутбук)"
+                              onClick={() => write(() => api("POST", `${usersUrl}/${encodeURIComponent(u.login)}/sessions/revoke`, {}), `${u.name}: все сессии завершены`)}>
+                              Завершить сессии
+                            </button>
+                          )}
                           <button className="btn ghost sm" style={{ color: "var(--crit)" }} onClick={() => setDel(u)} aria-label={`Удалить ${u.name}`}>Удалить</button>
                         </>
                       )}

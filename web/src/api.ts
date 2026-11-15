@@ -1,7 +1,14 @@
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  // data — весь ответ сервера: например, {twoFactor: true} при входе или {code: "password_change_required"}
+  constructor(public status: number, message: string, public data: any = {}) {
     super(message);
   }
+}
+
+// Сервер требует сменить пароль или включить 2FA: приложение покажет нужный экран (App.tsx)
+let onPending = (_code: string) => {};
+export function setPendingHandler(fn: (code: string) => void) {
+  onPending = fn;
 }
 
 let onUnauthorized = () => {};
@@ -16,7 +23,8 @@ async function parse<T>(res: Response, url: string): Promise<T> {
   } catch {}
   if (!res.ok) {
     if (res.status === 401 && !url.startsWith("/api/auth/")) onUnauthorized();
-    throw new ApiError(res.status, json.error || `Ошибка сервера (${res.status})`);
+    if (res.status === 403 && (json.code === "password_change_required" || json.code === "2fa_setup_required")) onPending(json.code);
+    throw new ApiError(res.status, json.error || `Ошибка сервера (${res.status})`, json);
   }
   return json as T;
 }

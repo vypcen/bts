@@ -1,10 +1,11 @@
 // Основной путь тестировщика: вход → кейс → прогон → упавший кейс → баг из него
 const { test, expect } = require("@playwright/test");
+const PASSWORD = "Tb-pass-2026";
 
 async function login(page, login = "tester") {
   await page.goto("/");
   await page.getByLabel("Логин").fill(login);
-  await page.getByLabel("Пароль", { exact: true }).fill("password123");
+  await page.getByLabel("Пароль", { exact: true }).fill("Tb-pass-2026");
   await page.locator("form").getByRole("button", { name: "Войти" }).click();
   await expect(page.getByText("Личный кабинет").first()).toBeVisible();
 }
@@ -197,4 +198,31 @@ test("справка: открывается из шапки, ссылка ве�
   await expect(page.getByRole("heading", { name: "Перенос данных из других систем" })).toBeInViewport();
   await page.getByRole("navigation", { name: "Разделы справки" }).getByRole("link", { name: "API" }).click();
   await expect(page.getByRole("heading", { name: "TestBall QA — HTTP API" })).toBeVisible();
+});
+
+test("2FA: включить в «Безопасности», войти с кодом из приложения", async ({ page }) => {
+  const security = require("../server/security");
+  await login(page, "viewer");
+  await page.getByRole("button", { name: "Безопасность" }).click();
+  await page.getByRole("tab", { name: "Двухфакторная аутентификация" }).click();
+  await page.locator(".modal").getByRole("button", { name: "Включить" }).click();
+  await expect(page.locator(".qr svg")).toBeVisible();
+  const secret = (await page.locator(".sec-steps .mono").textContent()).replace(/\s/g, "");
+  await page.getByLabel("Код из приложения").fill(security.totp(secret, security.stepNow()));
+  await page.locator(".modal").getByRole("button", { name: "Включить" }).click();
+  await expect(page.getByLabel("Резервные коды")).toBeVisible();
+  const recovery = (await page.getByLabel("Резервные коды").textContent()).trim().split("\n");
+  expect(recovery).toHaveLength(10);
+  await page.locator(".modal").getByRole("button", { name: "Закрыть" }).click();
+  await page.getByRole("button", { name: "Выйти" }).click();
+  // вход: после пароля появляется поле кода
+  await page.getByLabel("Логин").fill("viewer");
+  await page.getByLabel("Пароль", { exact: true }).fill(PASSWORD);
+  await page.locator("form").getByRole("button", { name: "Войти" }).click();
+  await expect(page.getByLabel("Код из приложения-аутентификатора")).toBeVisible();
+  await page.getByLabel("Код из приложения-аутентификатора").fill(recovery[0]);
+  await page.locator("form").getByRole("button", { name: "Войти" }).click();
+  await expect(page.getByRole("button", { name: "Безопасность" })).toBeVisible();
+  // выключаем обратно, чтобы не мешать другим тестам
+  await page.request.post("/api/auth/2fa/disable", { data: { password: PASSWORD, code: recovery[1] } });
 });
