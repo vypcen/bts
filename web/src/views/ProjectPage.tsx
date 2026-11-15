@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { isOpenBug } from "../labels";
 import { href } from "../router";
-import { useCanEdit, useData, useStore } from "../store";
+import { useCan, useData, useStore } from "../store";
 import type { Project } from "../types";
 import { AnalyticsTab } from "./Analytics";
 import { AutoRunPage, AutotestsTab } from "./Autotests";
@@ -18,7 +18,8 @@ import { RequirementsTab } from "./Requirements";
 export function ProjectPage({ project, tab, id }: { project: Project; tab: string; id?: string }) {
   const data = useData();
   const { liveError } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("settings");
+  const canTrash = useCan("trash.restore");
   const [settings, setSettings] = useState(false);
   const p = project.id;
   const n = id && /^\d+$/.test(id) ? Number(id) : undefined;
@@ -42,7 +43,8 @@ export function ProjectPage({ project, tab, id }: { project: Project; tab: strin
     ["bugs", "Баги", count.bugs],
     ["auto", "Автотесты", count.auto],
     ["analytics", "Аналитика", null],
-    ...(canEdit ? [["integrations", "Настройки", null] as [string, string, null], ["trash", "Корзина", null] as [string, string, null]] : []),
+    ...(canEdit ? [["integrations", "Настройки", null] as [string, string, null]] : []),
+    ...(canTrash ? [["trash", "Корзина", null] as [string, string, null]] : []),
   ];
 
   return (

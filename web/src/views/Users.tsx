@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { api } from "../api";
-import { find, PROJECT_ROLES, PROVIDERS, ROLES } from "../labels";
+import { PROVIDERS } from "../labels";
 import { href, useRoute } from "../router";
 import { useData, useLoad, useStore } from "../store";
 import type { ProjectRole, Role } from "../types";
-import { Avatar, Confirm, Empty, fmt, Modal, Pill } from "../ui";
+import { Avatar, Confirm, Empty, fmt, Modal, Pill, useRoles } from "../ui";
 import { NewUserModal, PasswordModal } from "./Password";
 import { AuditLog, DeletedProjects, SystemInfo } from "./Admin";
+import { RolesAdmin } from "./Roles";
 
 // Ответ GET /api/admin/users
 interface AdminUser {
@@ -45,9 +46,11 @@ export function Users() {
         <a href={href("users")} aria-current={!sub ? "page" : undefined}>Пользователи</a>
         <a href={href("users", "audit")} aria-current={sub === "audit" ? "page" : undefined}>Журнал аудита</a>
         <a href={href("users", "trash")} aria-current={sub === "trash" ? "page" : undefined}>Удалённые проекты</a>
+        <a href={href("users", "roles")} aria-current={sub === "roles" ? "page" : undefined}>Роли</a>
         <a href={href("users", "system")} aria-current={sub === "system" ? "page" : undefined}>Лицензия и система</a>
       </nav>
       {sub === "audit" ? <main className="wrap"><AuditLog /></main>
+        : sub === "roles" ? <main className="wrap"><RolesAdmin /></main>
         : sub === "trash" ? <main className="wrap"><DeletedProjects /></main>
         : sub === "system" ? <main className="wrap"><SystemInfo /></main>
         : <UsersList />}
@@ -57,6 +60,7 @@ export function Users() {
 
 function UsersList() {
   const { me, write, liveError } = useStore();
+  const roleList = useRoles();
   const { value, error } = useLoad<{ users: AdminUser[]; seats: Seats }>(usersUrl);
   const [q, setQ] = useState("");
   const [access, setAccess] = useState<AdminUser | null>(null);
@@ -89,11 +93,12 @@ function UsersList() {
         <button className="btn primary" onClick={() => setCreating(true)}>+ Новый пользователь</button>
       </div>
       <div className="stats" style={{ flexWrap: "wrap" }}>
-        {ROLES.map((r) => (
+        {roleList.all.map((r) => (
           <span key={r.key} className="small muted" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <Pill tone={r.tone} label={r.label} sm /> {r.hint}
+            <Pill tone={r.key === "admin" ? "accent" : r.key === "tester" ? "info" : "neutral"} label={r.label} sm /> {r.hint}
           </span>
         ))}
+        <a className="small" href={href("users", "roles")}>Настроить роли →</a>
       </div>
       {value?.seats && (
         <div className="small muted" style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -133,8 +138,8 @@ function UsersList() {
                     <td>
                       <select className="input" aria-label={`Роль ${u.name}`} value={u.role} disabled={self}
                         title={self ? "Свою роль поменять нельзя: попросите другого администратора" : undefined}
-                        onChange={(e) => patch(u, { role: e.target.value }, `${u.name}: ${find(ROLES, e.target.value as Role).label}`)}>
-                        {ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                        onChange={(e) => patch(u, { role: e.target.value }, `${u.name}: ${roleList.name(e.target.value)}`)}>
+                        {roleList.all.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
                       </select>
                     </td>
                     <td>
@@ -143,8 +148,8 @@ function UsersList() {
                       ) : (
                         <div className="chips" style={{ alignItems: "center" }}>
                           {u.projects.map((k) => (
-                            <a key={k} className="chip" href={href("p", k)} title={u.projectRoles[k] ? `Роль в проекте: ${find(ROLES, u.projectRoles[k]).label}` : undefined}>
-                              {k}{u.projectRoles[k] && <span className="muted"> · {find(ROLES, u.projectRoles[k]).label.toLowerCase()}</span>}
+                            <a key={k} className="chip" href={href("p", k)} title={u.projectRoles[k] ? `Роль в проекте: ${roleList.name(u.projectRoles[k])}` : undefined}>
+                              {k}{u.projectRoles[k] && <span className="muted"> · {roleList.name(u.projectRoles[k]).toLowerCase()}</span>}
                             </a>
                           ))}
                           {!u.projects.length && <span className="small" style={{ color: "var(--warn)" }}>Нет доступа ни к одному</span>}
@@ -213,6 +218,7 @@ function UsersList() {
 function AccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
   const data = useData();
   const { write } = useStore();
+  const roleList = useRoles();
   const [picked, setPicked] = useState(new Set(user.projects));
   // роль в проекте; "" — как глобальная
   const [roles, setRoles] = useState<Record<string, ProjectRole | "">>({ ...user.projectRoles });
@@ -232,7 +238,7 @@ function AccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }
       <h2>Доступ к проектам: {user.name}</h2>
       <p className="muted small" style={{ margin: 0 }}>
         Отмеченные проекты пользователь видит, остальные для него не существуют. Роль можно задать отдельно для проекта —
-        иначе действует глобальная ({find(ROLES, user.role).label.toLowerCase()}).
+        иначе действует глобальная ({roleList.name(user.role).toLowerCase()}).
       </p>
       {projects.length ? (
         <div className="history" style={{ maxHeight: 360, overflow: "auto" }}>
@@ -245,7 +251,7 @@ function AccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }
                 <select className="input" style={{ width: 170 }} aria-label={`Роль в ${p.id}`} value={roles[p.id] || ""}
                   onChange={(e) => setRoles({ ...roles, [p.id]: e.target.value as ProjectRole | "" })}>
                   <option value="">Как глобальная</option>
-                  {PROJECT_ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                  {roleList.project.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
                 </select>
               )}
             </label>

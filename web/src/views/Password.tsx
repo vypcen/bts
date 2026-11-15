@@ -1,9 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
-import { ROLES } from "../labels";
 import { useStore } from "../store";
 import type { Role } from "../types";
-import { Modal } from "../ui";
+import { Modal, useRoles } from "../ui";
 
 const userUrl = (login: string) => `/api/admin/users/${encodeURIComponent(login)}`;
 
@@ -54,6 +53,7 @@ export function PasswordModal({ target, onClose }: { target?: { login: string; n
 // Новый пользователь от имени админа — единственный способ завести учётную запись при REGISTRATION=closed
 export function NewUserModal({ onClose }: { onClose: () => void }) {
   const { write, me } = useStore();
+  const roleList = useRoles();
   const [f, setF] = useState({ login: "", name: "", pass: "", role: "tester" as Role });
   const [err, setErr] = useState("");
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
@@ -79,7 +79,7 @@ export function NewUserModal({ onClose }: { onClose: () => void }) {
           <input className="input" id="nu-pass" type="password" autoComplete="new-password" value={f.pass} onChange={set("pass")} />
           <span className="muted" style={{ fontSize: 12 }}>Пароль: {me?.passwordPolicy || "не короче 8 символов"}. При первом входе пользователь сменит его на свой</span></div>
         <div className="field"><label htmlFor="nu-role">Роль</label>
-          <select className="input" id="nu-role" value={f.role} onChange={set("role")}>{ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}</select></div>
+          <select className="input" id="nu-role" value={f.role} onChange={set("role")}>{roleList.all.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}</select></div>
         <div className="err" role="alert">{err}</div>
         <div className="acts">
           <button type="button" className="btn" onClick={onClose}>Отмена</button>

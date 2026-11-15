@@ -6,7 +6,7 @@ import { checklistItems, doneCount, itemsWord } from "../checklist";
 import { BUG_STATUSES, CASE_STATUSES, find, isOpenBug, PRIORITIES, RESULTS } from "../labels";
 import { go, href } from "../router";
 import { countBy, folderPath, lastResults } from "../selectors";
-import { useCanEdit, useData, useLoad, useStore } from "../store";
+import { useCan, useData, useLoad, useStore } from "../store";
 import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } from "../types";
 import { CaseRequirements } from "./Requirements";
 import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
@@ -43,7 +43,8 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const [moveTo, setMoveTo] = useState("");
   const [importing, setImporting] = useState(false);
   const { write, toast } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("cases.edit");
+  const canDelete = useCan("cases.delete");
   // выбранную папку могли удалить в другой вкладке или другие участники
   const sel: FolderSel = typeof folderSel === "number" && !data.folders.some((f) => f.id === folderSel) ? "all" : folderSel;
 
@@ -225,7 +226,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
                             <td className="muted small nowrap">{fmt(c.updated)}</td>
                             <td className="actions" onClick={(e) => e.stopPropagation()}>
                               {canEdit && <button className="btn ghost" onClick={() => setEditing(c)} aria-label="Редактировать">✎</button>}
-                              {canEdit && <button className="btn ghost" onClick={() => setDeleting(c)} aria-label="Удалить" style={{ color: "var(--crit)" }}>✕</button>}
+                              {canDelete && <button className="btn ghost" onClick={() => setDeleting(c)} aria-label="Удалить" style={{ color: "var(--crit)" }}>✕</button>}
                             </td>
                           </tr>
                         );
@@ -277,7 +278,10 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
 function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onClose: () => void; onEdit: () => void; onDelete: () => void; onBug: (d: BugDraft) => void }) {
   const data = useData();
   const { write } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("cases.edit");
+  const canDelete = useCan("cases.delete");
+  const canMark = useCan("runs.execute");
+  const canBug = useCan("bugs.create");
   const { reload, toast } = useStore();
   const nameOf = useNames();
   const [resetting, setResetting] = useState(false);
@@ -323,12 +327,12 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
       title={c.title}
       onClose={onClose}
       footer={
-        canEdit && (
+        (canEdit || canBug || canDelete) && (
           <>
-            <button className="btn primary" onClick={onEdit}>Редактировать</button>
-            <button className="btn" onClick={newBug}>Завести баг</button>
+            {canEdit && <button className="btn primary" onClick={onEdit}>Редактировать</button>}
+            {canBug && <button className="btn" onClick={newBug}>Завести баг</button>}
             <div className="spacer" />
-            <button className="btn danger" onClick={onDelete}>Удалить</button>
+            {canDelete && <button className="btn danger" onClick={onDelete}>Удалить</button>}
           </>
         )
       }
@@ -349,7 +353,7 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span className="label">Пункты · выполнено {done} из {items.length}</span>
             <div className="spacer" />
-            {canEdit && done > 0 && <button className="btn ghost sm" onClick={() => setResetting(true)}>Снять все отметки</button>}
+            {canMark && done > 0 && <button className="btn ghost sm" onClick={() => setResetting(true)}>Снять все отметки</button>}
           </div>
           <div className="done-list">
             {items.map((item) => {
@@ -357,7 +361,7 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
               return (
                 <label key={item} className={isDone(item) ? "is-done" : undefined}
                   title={mark ? `Отметил ${nameOf(mark.by)} · ${fmt(new Date(mark.at).getTime())}` : undefined}>
-                  <input type="checkbox" checked={isDone(item)} disabled={!canEdit} onChange={(e) => check(item, e.target.checked)} />
+                  <input type="checkbox" checked={isDone(item)} disabled={!canMark} onChange={(e) => check(item, e.target.checked)} />
                   <span className="item-text">{item}</span>
                 </label>
               );
@@ -537,7 +541,7 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
 // История версий: что менялось и кем; любую прежнюю версию можно вернуть (создастся новая версия)
 const FIELDS: [keyof CaseVersion, string][] = [["title", "Название"], ["priority", "Приоритет"], ["status", "Статус"], ["pre", "Предусловия"], ["steps", "Шаги"], ["expected", "Ожидаемый результат"]];
 function Versions({ c }: { c: TestCase }) {
-  const canEdit = useCanEdit();
+  const canEdit = useCan("cases.edit");
   const { write } = useStore();
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState<number | null>(null);

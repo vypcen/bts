@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { api } from "./api";
 import { go, href, useRoute } from "./router";
 import { useStore } from "./store";
-import { Avatar } from "./ui";
+import { Avatar, useRoles } from "./ui";
 import { Login } from "./views/Login";
 import { PendingScreen, SecurityModal } from "./views/Security";
 import { ProjectPage } from "./views/ProjectPage";
@@ -11,7 +11,6 @@ import { Settings } from "./views/Settings";
 import { Users } from "./views/Users";
 import { Help } from "./views/Help";
 import { SearchPalette, useSearchHotkey } from "./views/Search";
-import { roleOf } from "./labels";
 
 export function App() {
   const { me, bootError, data, projectLoading } = useStore();
@@ -64,6 +63,7 @@ export function App() {
 
 function Topbar({ projectName, projectKey, users, settings }: { projectName?: string; projectKey?: string; users?: boolean; settings?: boolean }) {
   const { me, liveError, setMe, toast } = useStore();
+  const roleList = useRoles();
   const [password, setPassword] = useState(false);
   const [searching, setSearching] = useState(false);
   useSearchHotkey(useCallback(() => setSearching(true), []));
@@ -105,10 +105,10 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
         {me?.role === "admin" && <a className="btn" href={href("users")} style={{ textDecoration: "none" }}>Пользователи</a>}
         {me?.role === "admin" && <a className="btn" href={href("settings")} style={{ textDecoration: "none" }} title="Подключение языковой модели">Настройки</a>}
         {me && (
-          <span className="user who" title={`${roleOf(me.role).hint}${me.version ? `\nTestBall ${me.version}` : ""}`}>
+          <span className="user who" title={`@${me.login} · ${roleList.name(me.role)}\n${roleList.all.find((r) => r.key === me.role)?.hint || ""}${me.version ? `\nTestBall ${me.version}` : ""}`}>
             <Avatar login={me.login} />
             <span>{me.name}</span>
-            <span className="mono" style={{ fontSize: 12 }}>@{me.login} · {roleOf(me.role).label}</span>
+            <span className="mono user-extra" style={{ fontSize: 12 }}>@{me.login} · {roleList.name(me.role)}</span>
           </span>
         )}
         {me && <button className="btn ghost" onClick={() => setPassword(true)} title="Пароль, двухфакторная аутентификация, активные сессии">Безопасность</button>}

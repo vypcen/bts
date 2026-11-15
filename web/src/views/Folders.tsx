@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { api, paths } from "../api";
 import { folderPath, folderTree, withSubfolders } from "../selectors";
-import { useCanEdit, useData, useStore } from "../store";
+import { useCan, useData, useStore } from "../store";
 import type { CaseFolder, TestCase } from "../types";
 import { Confirm, Modal } from "../ui";
 
@@ -32,7 +32,7 @@ export function FolderOptions({ pid, exclude, rootLabel = "Без папки" }:
 export function FolderTree({ pid, cases, sel, onSelect }: { pid: string; cases: TestCase[]; sel: FolderSel; onSelect: (s: FolderSel) => void }) {
   const data = useData();
   const { write } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("cases.edit");
   const [closed, setClosed] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<{ folder?: CaseFolder; parent: number | null } | null>(null);
   const [deleting, setDeleting] = useState<CaseFolder | null>(null);

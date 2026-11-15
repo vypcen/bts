@@ -129,7 +129,7 @@ function readDef(body, partial) {
 }
 
 router.post("/fields", wrap(async (req, res) => {
-  if (!access.canWrite(req.projectRole)) return res.status(403).json({ error: access.READ_ONLY });
+  if (!access.can(req.projectRole, "settings")) return res.status(403).json({ error: access.READ_ONLY });
   const { d, error } = readDef(req.body, false);
   if (error) return res.status(400).json({ error });
   if ((d.type === "select" || d.type === "multiselect") && !d.options?.length) return res.status(400).json({ error: "Добавьте варианты для списка" });
@@ -145,7 +145,7 @@ router.post("/fields", wrap(async (req, res) => {
 }));
 
 router.patch("/fields/:id", wrap(async (req, res) => {
-  if (!access.canWrite(req.projectRole)) return res.status(403).json({ error: access.READ_ONLY });
+  if (!access.can(req.projectRole, "settings")) return res.status(403).json({ error: access.READ_ONLY });
   const { d, error } = readDef(req.body, true);
   if (error) return res.status(400).json({ error });
   delete d.entity; // поле не переносится между кейсами и багами
@@ -160,7 +160,7 @@ router.patch("/fields/:id", wrap(async (req, res) => {
 }));
 
 router.delete("/fields/:id", wrap(async (req, res) => {
-  if (!access.canWrite(req.projectRole)) return res.status(403).json({ error: access.READ_ONLY });
+  if (!access.can(req.projectRole, "settings")) return res.status(403).json({ error: access.READ_ONLY });
   const r = await pool.query("DELETE FROM custom_fields WHERE project_key=$1 AND id=$2", [req.params.key, num(req.params.id)]);
   if (!r.rowCount) return res.status(404).json({ error: "Поле не найдено" });
   broadcast("fields");

@@ -99,7 +99,8 @@ const fileRouter = express.Router();
 async function findFile(req, write = false) {
   if (!UUID_RE.test(req.params.id)) return null;
   const { rows } = await pool.query(
-    `SELECT a.filename, a.mime, a.size, COALESCE(b.project_key, t.project_key, r.project_key) AS project_key
+    `SELECT a.filename, a.mime, a.size, COALESCE(b.project_key, t.project_key, r.project_key) AS project_key,
+       a.bug_id, a.run_result_id, a.auto_result_id
      FROM attachments a
      LEFT JOIN bugs b ON b.id=a.bug_id
      LEFT JOIN run_results rr ON rr.id=a.run_result_id LEFT JOIN test_runs t ON t.id=rr.run_id
@@ -109,8 +110,12 @@ async function findFile(req, write = false) {
   );
   const a = rows[0];
   if (!a) return null;
-  const role = await access.projectRole(req.user, a.project_key);
-  return role && (!write || access.canWrite(role)) ? a : null;
+  const [role] = await Promise.all([access.projectRole(req.user, a.project_key), require("./roles").load()]);
+  if (!role) return null;
+  if (!write) return a;
+  // удалить вложение может тот, кто может менять то, к чему оно приложено
+  const perm = a.bug_id ? ["bugs.edit", "bugs.create"] : a.run_result_id ? ["runs.execute"] : ["autotests.manage"];
+  return perm.some((p) => access.can(role, p)) ? a : null;
 }
 
 fileRouter.get("/:id", wrap(async (req, res) => {

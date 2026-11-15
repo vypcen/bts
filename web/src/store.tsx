@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { api, setPendingHandler, setUnauthorizedHandler } from "./api";
 import { useRoute } from "./router";
-import type { MetaState, ProjectState, State, User } from "./types";
+import type { MetaState, Permission, ProjectState, State, User } from "./types";
 
 interface Store {
   me: User | null | undefined; // undefined — ещё не знаем, вошёл ли пользователь
   // Может ли менять данные. Внутри проекта — по роли в этом проекте, вне проекта — по глобальной роли
-  canEdit: boolean;
+  canEdit: boolean; // может менять тест-кейсы (cases.edit); точнее — useCan(разрешение)
+  permissions: Set<string>;
   canComment: boolean; // разработчик комментирует, наблюдатель — нет
   bootError: boolean;
   data: State | null;
@@ -23,6 +24,9 @@ const Ctx = createContext<Store>(null!);
 export const useStore = () => useContext(Ctx);
 export const useData = () => useContext(Ctx).data!;
 export const useCanEdit = () => useContext(Ctx).canEdit;
+// Разрешено ли текущему пользователю действие в открытом проекте (вне проекта — по глобальной роли).
+// Кнопки прячутся для удобства; права проверяет сервер (server/roles.js)
+export const useCan = (perm: Permission) => useContext(Ctx).permissions.has(perm);
 export const useCanComment = () => useContext(Ctx).canComment;
 
 // Загружает данные, которых нет в общем состоянии, и перечитывает их при каждом обновлении состояния
@@ -198,6 +202,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const data: State | null = !meta
     ? null
     : {
+        roles: meta.roles,
         projects: meta.projects,
         users: meta.users,
         plans: proj ? proj.plans : meta.plans,
@@ -218,13 +223,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const role = me && data?.users[me.login]?.role;
   const user = me && role && role !== me.role ? { ...me, role } : me;
   // роль в открытом проекте (#/p/KEY/...) может отличаться от глобальной
-  const projectRole = section === "p" ? data?.projects.find((p) => p.id === key)?.myRole : undefined;
-  const effective = projectRole || user?.role;
-  const canEdit = effective === "tester" || effective === "admin";
-  const canComment = canEdit || effective === "developer";
+  const project = section === "p" ? data?.projects.find((p) => p.id === key) : undefined;
+  const permissions = new Set<string>(project ? project.myPermissions || [] : meta?.myPermissions || []);
+  const canEdit = permissions.has("cases.edit");
+  const canComment = permissions.has("comments");
 
   return (
-    <Ctx.Provider value={{ me: user, canEdit, canComment, bootError, data, projectLoading, liveError, setMe, reload, toast, write }}>
+    <Ctx.Provider value={{ me: user, canEdit, canComment, permissions, bootError, data, projectLoading, liveError, setMe, reload, toast, write }}>
       {children}
       <div className="toast" hidden={!toastMsg} role="status">
         {toastMsg}

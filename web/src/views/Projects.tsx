@@ -1,14 +1,14 @@
 import { useState, type FormEvent } from "react";
 import { api, paths } from "../api";
 import { go, href } from "../router";
-import { useCanEdit, useData, useStore } from "../store";
+import { useCan, useData, useStore } from "../store";
 import type { Project } from "../types";
 import { Empty, Modal, ResultBar, useNames } from "../ui";
 
 export function Projects({ missing }: { missing?: string }) {
   const data = useData();
   const { liveError } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("projects.create");
   const nameOf = useNames();
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);

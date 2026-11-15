@@ -682,6 +682,24 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 
 Версия, коммит и дата сборки, версии Node.js и PostgreSQL, число миграций и история версий, запускавшихся на этой базе: `{"version": "1.1.0", "commit": "…", "built": "…", "node": "v20…", "postgres": "16.4", "migrations": {"count": 19, "last": "019_license.sql", "lastAt": …}, "history": [{"version": "1.1.0", "commit": null, "since": …, "last": …}]}`.
 
+## Роли (админ)
+
+### `GET /api/admin/roles`
+
+`{"permissions": [{"key": "cases.edit", "group": "Тест-кейсы", "label": "…"}, …], "viewPermissions": ["comments", "bugs.status", "ai"], "roles": [{"key": "tester", "name": "Тестировщик", "permissions": [...], "seat": "full", "builtin": true, "users": 12}, {"key": "r_3f9c1a7b2e", "name": "Тест-менеджер", …, "builtin": false}]}`
+
+Разрешения: `cases.edit`, `cases.delete`, `requirements.edit`, `plans.edit`, `runs.manage`, `runs.execute`, `bugs.create`, `bugs.edit`, `bugs.status`, `bugs.delete`, `comments`, `ai`, `autotests.manage`, `trash.restore`, `settings`, `projects.create`.
+
+### `POST /api/admin/roles`, `PATCH /api/admin/roles/:key`
+
+Тело: `{"name": "Тест-менеджер", "description": "…", "permissions": ["plans.edit", "runs.manage", "comments"]}`. Ответ — ключ роли (`r_…`) и место в лицензии (`seat`). Ключ используется как значение `role` пользователя и роли в проекте. Встроенные роли не меняются (`404`); если изменение потребует больше полных мест, чем есть в лицензии, — `409`.
+
+### `DELETE /api/admin/roles/:key`
+
+Роль, которая кому-то выдана, удаляется только с заменой: `{"replaceWith": "viewer"}` (иначе `409` с `inUse`).
+
+Отказ по разрешению — `403` с текстом «Ваша роль в этом проекте не позволяет: …» и полем `permission`. В `GET /api/state` у каждого проекта есть `myPermissions`, а в корне — `roles` (названия всех ролей) и `myPermissions` по глобальной роли.
+
 ## Пользователи (админ)
 
 Все запросы раздела — только для `admin`, остальным `403`. Свою роль и блокировку админ поменять не может, себя удалить тоже (`409`): так нельзя случайно остаться без админа.

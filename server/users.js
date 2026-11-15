@@ -2,7 +2,9 @@
 const express = require("express");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
-const { ROLES, PROJECT_ROLES } = require("./access");
+const access = require("./access");
+const roles = require("./roles");
+const crypto = require("crypto");
 const auth = require("./auth");
 const audit = require("./audit");
 const security = require("./security");
@@ -10,6 +12,8 @@ const seats = require("./seats");
 const { wrap, str } = require("./util");
 
 const router = express.Router();
+// кэш ролей свежий перед любой проверкой роли
+router.use((_req, _res, next) => roles.load().then(() => next(), next));
 
 const findUser = async (db, login) =>
   (await db.query("SELECT id, role, blocked, auth_provider FROM users WHERE login=$1", [str(login, 64)])).rows[0];
@@ -42,7 +46,7 @@ router.post("/users", wrap(async (req, res) => {
   const login = str(req.body.login, 64).toLowerCase();
   const name = str(req.body.name, 100);
   const role = req.body.role === undefined ? "tester" : req.body.role;
-  const bad = auth.checkLogin(login) || (!name && "Укажите имя") || auth.checkPassword(req.body.password, { login, name }) || (!ROLES.includes(role) && "Неизвестная роль");
+  const bad = auth.checkLogin(login) || (!name && "Укажите имя") || auth.checkPassword(req.body.password, { login, name }) || (!access.isRole(role) && "Неизвестная роль");
   if (bad) return res.status(400).json({ error: bad });
   const noSeat = await seats.check(pool, role);
   if (noSeat) return res.status(409).json({ error: noSeat });
@@ -71,7 +75,7 @@ router.patch("/users/:login", wrap(async (req, res) => {
     const noSeat = await seats.check(pool, role ?? u.role, u.id);
     if (noSeat) return res.status(409).json({ error: noSeat });
   }
-  if (role !== undefined && !ROLES.includes(role)) return res.status(400).json({ error: "Неизвестная роль" });
+  if (role !== undefined && !access.isRole(role)) return res.status(400).json({ error: "Неизвестная роль" });
   if (blocked !== undefined && typeof blocked !== "boolean") return res.status(400).json({ error: "blocked должно быть true или false" });
   const badPass = password !== undefined && auth.checkPassword(password, { login: req.params.login });
   if (badPass) return res.status(400).json({ error: badPass });
@@ -117,9 +121,15 @@ router.put("/users/:login/projects", wrap(async (req, res) => {
   if (!u) return res.status(404).json({ error: "Пользователь не найден" });
   if (!Array.isArray(req.body.projects)) return res.status(400).json({ error: "Передайте список ключей проектов projects" });
   const items = req.body.projects.map((p) => (typeof p === "string" ? { key: p } : p || {}))
-    .map((p) => ({ key: str(p.key, 10).toUpperCase(), role: PROJECT_ROLES.includes(p.role) ? p.role : null }))
+    .map((p) => ({ key: str(p.key, 10).toUpperCase(), role: access.isProjectRole(p.role) ? p.role : null }))
     .filter((p) => p.key);
   const keys = items.map((p) => p.key);
+  // полная роль в проекте занимает полное место в лицензии
+  const fullRole = items.find((p) => p.role && roles.seatOf(p.role) === "full");
+  if (fullRole && !u.blocked) {
+    const noSeat = await seats.check(pool, fullRole.role, u.id);
+    if (noSeat) return res.status(409).json({ error: noSeat });
+  }
   await tx(async (db) => {
     await db.query("DELETE FROM project_members WHERE user_id=$1 AND NOT (project_key = ANY($2::text[]))", [u.id, keys]);
     // несуществующие ключи молча пропускаются
@@ -132,6 +142,115 @@ router.put("/users/:login/projects", wrap(async (req, res) => {
   });
   broadcast("users");
   broadcast("projects");
+  res.json({ ok: true });
+}));
+
+// ---------- роли ----------
+// Список разрешений, встроенные и пользовательские роли (с числом пользователей)
+router.get("/roles", wrap(async (_req, res) => {
+  await roles.load(true);
+  const { rows } = await pool.query("SELECT key FROM roles ORDER BY name");
+  const used = Object.fromEntries((await pool.query(
+    `SELECT role, count(DISTINCT id)::int AS n FROM (
+       SELECT id, role FROM users UNION ALL SELECT user_id, role FROM project_members WHERE role IS NOT NULL) x GROUP BY role`
+  )).rows.map((r) => [r.role, r.n]));
+  const out = (key, d, builtin) => ({ key, name: d.name, description: d.description, permissions: d.permissions, seat: roles.seatOf(key), builtin, users: used[key] || 0 });
+  res.json({
+    permissions: roles.PERMS,
+    viewPermissions: roles.VIEW_PERMS,
+    roles: [
+      ...Object.entries(roles.BUILTIN).map(([k, d]) => out(k, d, true)),
+      ...rows.map((r) => out(r.key, roles.def(r.key), false)),
+    ],
+  });
+}));
+
+function readRole(body, prev = {}) {
+  const name = str(body.name ?? prev.name, 60);
+  const description = str(body.description ?? prev.description ?? "", 300);
+  const permissions = body.permissions !== undefined
+    ? [...new Set((Array.isArray(body.permissions) ? body.permissions : []).map(String))]
+    : prev.permissions;
+  if (!name || name.length < 2) return { error: "Название роли: от 2 до 60 символов" };
+  if (Object.values(roles.BUILTIN).some((b) => b.name.toLowerCase() === name.toLowerCase())) return { error: "Так называется встроенная роль" };
+  const bad = permissions.find((p) => !roles.ALL.includes(p));
+  if (bad) return { error: `Неизвестное разрешение: ${bad}` };
+  return { role: { name, description, permissions } };
+}
+
+// Сколько полных мест понадобится, если роли станут такими (для проверки лицензии при изменении роли)
+async function fullSeatsIf(db, fullKeys) {
+  const { rows } = await db.query(
+    `SELECT count(*)::int AS n FROM users u WHERE NOT blocked AND (u.role = ANY($1::text[])
+       OR EXISTS (SELECT 1 FROM project_members m WHERE m.user_id=u.id AND m.role = ANY($1::text[])))`,
+    [fullKeys]
+  );
+  return rows[0].n;
+}
+async function seatProblem(db, key, permissions) {
+  const isFull = permissions.some((p) => !roles.VIEW_PERMS.includes(p));
+  if (!isFull || roles.seatOf(key) === "full") return null;
+  const limit = (await seats.usage(db)).full.limit;
+  if (limit === null) return null;
+  const need = await fullSeatsIf(db, [...roles.fullRoles(), key]);
+  return need > limit ? `С такими разрешениями роль займёт полные места, а их не хватит: нужно ${need}, по лицензии ${limit}` : null;
+}
+
+router.post("/roles", wrap(async (req, res) => {
+  const { role, error } = readRole(req.body, { permissions: [] });
+  if (error) return res.status(400).json({ error });
+  const key = "r_" + crypto.randomBytes(5).toString("hex");
+  try {
+    await pool.query("INSERT INTO roles(key, name, description, permissions, created_by) VALUES ($1,$2,$3,$4,$5)",
+      [key, role.name, role.description, role.permissions, req.user.id]);
+  } catch (e) {
+    if (e.code === "23505") return res.status(409).json({ error: "Роль с таким названием уже есть" });
+    throw e;
+  }
+  await roles.load(true);
+  audit.log(req, "role.create", { project: null, target: role.name, details: { permissions: role.permissions } });
+  broadcast("users");
+  res.status(201).json({ key, seat: roles.seatOf(key) });
+}));
+
+router.patch("/roles/:key", wrap(async (req, res) => {
+  const cur = roles.def(req.params.key);
+  if (!cur || roles.BUILTIN[req.params.key]) return res.status(404).json({ error: "Роль не найдена (встроенные роли не меняются)" });
+  const { role, error } = readRole(req.body, cur);
+  if (error) return res.status(400).json({ error });
+  const problem = await seatProblem(pool, req.params.key, role.permissions);
+  if (problem) return res.status(409).json({ error: problem });
+  try {
+    await pool.query("UPDATE roles SET name=$2, description=$3, permissions=$4 WHERE key=$1", [req.params.key, role.name, role.description, role.permissions]);
+  } catch (e) {
+    if (e.code === "23505") return res.status(409).json({ error: "Роль с таким названием уже есть" });
+    throw e;
+  }
+  await roles.load(true);
+  audit.log(req, "role.update", { project: null, target: role.name, details: { permissions: role.permissions } });
+  broadcast("users");
+  res.json({ ok: true, seat: roles.seatOf(req.params.key) });
+}));
+
+// Удалить роль можно, только если она никому не выдана — иначе {replaceWith: "viewer"}: всем, у кого она была, выдать другую
+router.delete("/roles/:key", wrap(async (req, res) => {
+  const key = req.params.key;
+  const cur = roles.def(key);
+  if (!cur || roles.BUILTIN[key]) return res.status(404).json({ error: "Роль не найдена (встроенные роли не удаляются)" });
+  const replace = req.body.replaceWith;
+  const { rows } = await pool.query("SELECT (SELECT count(*) FROM users WHERE role=$1)::int + (SELECT count(*) FROM project_members WHERE role=$1)::int AS n", [key]);
+  if (rows[0].n && !replace) return res.status(409).json({ error: `Роль выдана (${rows[0].n}). Укажите, какую роль выдать вместо неё`, inUse: rows[0].n });
+  if (replace && (!access.isProjectRole(replace) || replace === key)) return res.status(400).json({ error: "replaceWith: другая роль, кроме администратора" });
+  await tx(async (db) => {
+    if (replace) {
+      await db.query("UPDATE users SET role=$2 WHERE role=$1", [key, replace]);
+      await db.query("UPDATE project_members SET role=$2 WHERE role=$1", [key, replace]);
+    }
+    await db.query("DELETE FROM roles WHERE key=$1", [key]);
+  });
+  await roles.load(true);
+  audit.log(req, "role.delete", { project: null, target: cur.name, details: { replaceWith: replace || null } });
+  broadcast("users");
   res.json({ ok: true });
 }));
 

@@ -337,9 +337,9 @@ app.use("/api/projects-import", auth.requireUser, access.requireWriter, projecti
 app.use("/api/projects/:key", auth.requireUser, access.project, live.inProject);
 app.use("/api/projects/:key", state.router, lists.router, trash.router, casemodel.router, require("./reports").router);
 app.use("/api/search", auth.requireUser, lists.searchRouter);
-// Настройки интеграций содержат адреса и заголовки внутренних систем — их видят только те, кто может менять проект
+// Настройки интеграций содержат адреса и заголовки внутренних систем — их видят только те, кто может менять настройки
 app.use(["/api/projects/:key/webhooks", "/api/projects/:key/tracker"], (req, res, next) =>
-  access.canWrite(req.projectRole) ? next() : res.status(403).json({ error: access.READ_ONLY }));
+  access.can(req.projectRole, "settings") ? next() : res.status(403).json({ error: access.READ_ONLY }));
 
 app.patch("/api/projects/:key", auth.requireUser, wrap(async (req, res) => {
   const name = str(req.body.name, 200);

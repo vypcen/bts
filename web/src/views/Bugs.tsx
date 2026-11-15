@@ -5,7 +5,7 @@ import { api, paths } from "../api";
 import { BUG_FLOW, BUG_STATUSES, find, isOpenBug, SEVERITIES, transitionLabel } from "../labels";
 import { go, href } from "../router";
 import { assigneesOf, countBy } from "../selectors";
-import { useCanEdit, useData, useLoad, useStore } from "../store";
+import { useCan, useData, useLoad, useStore } from "../store";
 import type { Bug, BugStatus, FieldValues, Project, Result, Run, Severity, TestCase } from "../types";
 import { CommentCount, Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who, PagedRows } from "../ui";
 import { Attachments } from "./Attachments";
@@ -65,7 +65,7 @@ const EMPTY: BugDraft = { title: "", severity: "major", assignee: "", env: "", s
 export function BugsTab({ project, openNum }: { project: Project; openNum?: number }) {
   const data = useData();
   const { me } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("bugs.create");
   const p = project.id;
   const [q, setQ] = useState("");
   const [fStatus, setFStatus] = useState("open");
@@ -167,7 +167,10 @@ export function BugsTab({ project, openNum }: { project: Project; openNum?: numb
 function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; onEdit: () => void }) {
   const data = useData();
   const { write } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("bugs.edit");
+  const canStatus = useCan("bugs.status");
+  const canDelete = useCan("bugs.delete");
+  const canAttach = useCan("bugs.create") || canEdit;
   const nameOf = useNames();
   const [dupOpen, setDupOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -192,11 +195,11 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
       title={bug.title}
       onClose={onClose}
       footer={
-        canEdit && (
+        (canEdit || canDelete) && (
           <>
-            <button className="btn primary" onClick={onEdit}>Редактировать</button>
+            {canEdit && <button className="btn primary" onClick={onEdit}>Редактировать</button>}
             <div className="spacer" />
-            <button className="btn danger" onClick={() => setDeleting(true)}>Удалить</button>
+            {canDelete && <button className="btn danger" onClick={() => setDeleting(true)}>Удалить</button>}
           </>
         )
       }
@@ -205,8 +208,8 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
         <span className="label">Статус</span>
         <div className="flow" style={{ alignItems: "center" }}>
           <Pill tone={st.tone} label={st.label} />
-          {canEdit && <span className="muted">→</span>}
-          {canEdit && BUG_FLOW[bug.status].map((to) => (
+          {canStatus && <span className="muted">→</span>}
+          {canStatus && BUG_FLOW[bug.status].map((to) => (
             <button key={to} className={`btn sm${to === "fixed" || to === "verified" || to === "closed" ? " primary" : ""}`} onClick={() => move(to)}>
               {transitionLabel(bug.status, to)}
             </button>
@@ -251,7 +254,7 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
           {result && <> · сейчас: <ResultPill r={result.result} sm /></>}
         </div>
       )}
-      <Attachments list={files} uploadUrl={canEdit ? `${paths.bug(p, bug.num)}/attachments` : undefined} paste={canEdit} />
+      <Attachments list={files} uploadUrl={canAttach ? `${paths.bug(p, bug.num)}/attachments` : undefined} paste={canAttach} />
       {resultFiles.length > 0 && <Attachments list={resultFiles} label={`Вложения из прогона ${run?.id || ""}`} />}
       <div className="row2 small">
         <div className="view-block"><span className="label">Создал</span><Who login={bug.createdBy} /><span className="muted">{fmt(bug.created)}</span></div>
@@ -377,7 +380,7 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
 
 // Задача во внешнем трекере (Jira, YouTrack, GitLab, GitHub, Redmine)
 function ExternalIssue({ bug }: { bug: Bug }) {
-  const canEdit = useCanEdit();
+  const canEdit = useCan("bugs.edit");
   const { write } = useStore();
   const [key, setKey] = useState("");
   const tracker = useLoad<{ tracker: { kind: string } | null }>(canEdit ? paths.tracker(bug.pid) : null);

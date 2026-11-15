@@ -3,14 +3,14 @@ import { api, paths } from "../api";
 import { FieldsEditor, missingRequired, useFields } from "../casekit";
 import { href, go } from "../router";
 import { folderTree, withSubfolders } from "../selectors";
-import { useCanEdit, useData, useStore } from "../store";
+import { useCan, useData, useStore } from "../store";
 import type { Project, Run, TestCase } from "../types";
 import { Empty, fmt, Modal, Pill, Prio, ResultBar, Who } from "../ui";
 import { AssignPicker, type Assign } from "./Plans";
 
 export function RunsTab({ project }: { project: Project }) {
   const data = useData();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("runs.manage");
   const p = project.id;
   const [creating, setCreating] = useState(false);
   const runs = data.runs.filter((r) => r.pid === p).sort((a, b) => b.num - a.num);

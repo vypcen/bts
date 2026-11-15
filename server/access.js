@@ -1,18 +1,24 @@
-// Роли и доступ к проектам.
-// tester — создаёт, меняет и удаляет всё в своих проектах; developer — читает свои проекты и пишет комментарии;
-// viewer — просмотровая лицензия: только чтение; admin — всё во всех проектах, плюс пользователи, роли и участники проектов.
+// Роли и доступ к проектам. Что разрешает каждая роль — server/roles.js (встроенные и пользовательские роли).
+// tester — всё в своих проектах; developer — просмотр, комментарии, статусы багов; viewer — только чтение;
+// admin — всё во всех проектах, плюс пользователи, роли и участники проектов.
 // Роль можно задать отдельно для проекта (project_members.role): например, тестировщик в одном проекте и наблюдатель в другом.
 // «Свои проекты» — те, где пользователь есть в project_members. Чужой проект выглядит как несуществующий.
 const { pool } = require("./db");
+const roles = require("./roles");
 
+// встроенные роли (список для проверок); пользовательские — roles.exists()
 const ROLES = ["tester", "developer", "viewer", "admin"];
 const PROJECT_ROLES = ["tester", "developer", "viewer"];
 const READ_ONLY = "У вашей роли в этом проекте доступ только на просмотр";
+const isRole = (r) => roles.exists(r);
+const isProjectRole = (r) => r !== "admin" && roles.exists(r);
 
 const roleOf = (userOrRole) => (typeof userOrRole === "string" ? userOrRole : userOrRole?.role);
 const isAdmin = (user) => roleOf(user) === "admin";
-const canWrite = (userOrRole) => ["tester", "admin"].includes(roleOf(userOrRole));
-const canComment = (userOrRole) => ["tester", "admin", "developer"].includes(roleOf(userOrRole));
+// «пишет»: занимает полное место — может что-то менять сверх комментариев и статусов
+const canWrite = (userOrRole) => roles.seatOf(roleOf(userOrRole)) === "full";
+const canComment = (userOrRole) => roles.can(roleOf(userOrRole), "comments");
+const can = (userOrRole, perm) => roles.can(roleOf(userOrRole), perm);
 
 // Ключи проектов, доступных пользователю; null — все (админ)
 // Удалённые в корзину проекты (projects.deleted_at) не видны никому, в том числе админу: их список — в корзине
@@ -45,34 +51,34 @@ async function projectRole(user, key) {
 
 const hasProject = async (user, key) => Boolean(await projectRole(user, key));
 
-// Что разработчик может отправлять при доступе «только просмотр»: комментарии (кто может менять конкретный, решает
-// server/comments.js) и разбор падения автотеста моделью — он ничего не меняет
-const DEV_WRITES_RE = /^\/((bugs|cases)\/[^/]+\/comments|comments\/[^/]+|ai\/autoresults\/[^/]+\/explain)$/;
-
-// Для всего под /api/projects/:key: проект должен быть доступен, а изменения — разрешены ролью.
+// Для всего под /api/projects/:key: проект должен быть доступен, а изменение — разрешено ролью (roles.ruleFor).
 // Действующая роль кладётся в req.projectRole
 function project(req, res, next) {
-  projectRole(req.user, req.params.key).then((role) => {
+  Promise.all([projectRole(req.user, req.params.key), roles.load()]).then(([role]) => {
     if (!role) return res.status(404).json({ error: "Проект не найден" });
     req.projectRole = role;
-    if (req.method !== "GET" && !canWrite(role) && !(canComment(role) && DEV_WRITES_RE.test(req.path))) {
-      return res.status(403).json({ error: READ_ONLY });
-    }
+    const perm = roles.ruleFor(req.method, req.path, req.body);
+    if (!roles.allowed(role, perm)) return res.status(403).json({ error: roles.deniedText(perm), permission: perm });
     next();
   }, next);
 }
 
+// Создание и импорт проектов — по глобальной роли
 function requireWriter(req, res, next) {
-  if (!canWrite(req.user)) return res.status(403).json({ error: READ_ONLY });
-  next();
+  roles.load().then(() => {
+    if (!can(req.user, "projects.create")) return res.status(403).json({ error: roles.deniedText("projects.create") });
+    next();
+  }, next);
 }
 
-// Пишет хотя бы в одном проекте (например, может создать токен для отправки автотестов)
-async function writesSomewhere(user) {
-  if (canWrite(user)) return true;
-  const { rows } = await pool.query("SELECT 1 FROM project_members WHERE user_id=$1 AND role='tester' LIMIT 1", [user.id]);
-  return rows.length > 0;
+// Есть ли разрешение хотя бы в одном проекте (например, создать токен для отправки автотестов)
+async function permittedSomewhere(user, perm) {
+  await roles.load();
+  if (can(user, perm)) return true;
+  const { rows } = await pool.query("SELECT role FROM project_members WHERE user_id=$1 AND role IS NOT NULL", [user.id]);
+  return rows.some((r) => roles.can(r.role, perm));
 }
+const writesSomewhere = (user) => permittedSomewhere(user, "autotests.manage");
 
 function requireAdmin(req, res, next) {
   if (!isAdmin(req.user)) return res.status(403).json({ error: "Нужны права администратора" });
@@ -80,6 +86,6 @@ function requireAdmin(req, res, next) {
 }
 
 module.exports = {
-  ROLES, PROJECT_ROLES, READ_ONLY, isAdmin, canWrite, canComment, projectKeys, projectRole, hasProject, project, requireWriter,
-  writesSomewhere, requireAdmin,
+  ROLES, PROJECT_ROLES, READ_ONLY, isAdmin, isRole, isProjectRole, canWrite, canComment, can, projectKeys, projectRole, hasProject, project, requireWriter,
+  writesSomewhere, permittedSomewhere, requireAdmin,
 };

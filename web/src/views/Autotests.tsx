@@ -3,7 +3,7 @@ import { AiBar, useAi, useAiReady } from "../ai";
 import { api, paths } from "../api";
 import { AUTO_RUN_STATES, AUTO_STATUSES, find } from "../labels";
 import { go, href } from "../router";
-import { useCanEdit, useData, useLoad, useStore } from "../store";
+import { useCan, useData, useLoad, useStore } from "../store";
 import type { Attachment, AutoResult, AutoRun, AutoStatus, AutoStep, AutoTest, CiJob, Project } from "../types";
 import { Confirm, Drawer, Empty, fmt, Modal, Pill, ResultBar } from "../ui";
 import { Attachments } from "./Attachments";
@@ -71,7 +71,7 @@ const total = (c: Record<AutoStatus, number>) => c.passed + c.failed + c.broken 
 
 export function AutotestsTab({ project, view }: { project: Project; view: "runs" | "tests" }) {
   const data = useData();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("autotests.manage");
   const p = project.id;
   const [connect, setConnect] = useState(false);
   const [launch, setLaunch] = useState(false);
@@ -194,7 +194,7 @@ type Filter = "all" | "problems" | AutoStatus;
 export function AutoRunPage({ project, num }: { project: Project; num: number }) {
   const data = useData();
   const { write, liveError } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("autotests.manage");
   const p = project.id;
   const run = data.autoruns.find((r) => r.pid === p && r.num === num);
   const { value, error } = useLoad<{ results: AutoResult[]; attachments: Attachment[] }>(paths.autorun(p, num));
@@ -354,7 +354,8 @@ function draftFromAuto(run: AutoRun, r: AutoResult): BugDraft {
 
 function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachment[]; onClose: () => void; onBug: (d: BugDraft) => void }) {
   const { run, r, files } = props;
-  const canEdit = useCanEdit();
+  const canEdit = useCan("autotests.manage");
+  const canBug = useCan("bugs.create");
   const aiReady = useAiReady();
   const ai = useAi();
   // разбор привязан к результату: при переходе к другому тесту старый не показываем
@@ -373,7 +374,7 @@ function AutoResultDrawer(props: { run: AutoRun; r: AutoResult; files: Attachmen
       onClose={props.onClose}
       footer={
         <>
-          {canEdit && isProblem(r.status) && <button className="btn" onClick={() => props.onBug(draftFromAuto(run, r))}>Завести баг</button>}
+          {canBug && isProblem(r.status) && <button className="btn" onClick={() => props.onBug(draftFromAuto(run, r))}>Завести баг</button>}
           <div className="spacer" />
           <button className="btn" onClick={props.onClose}>Закрыть</button>
         </>
@@ -452,7 +453,7 @@ function AutoRunModal({ run, onClose }: { run: AutoRun; onClose: () => void }) {
 function TestsRegistry({ project }: { project: Project }) {
   const p = project.id;
   const { write } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("autotests.manage");
   const { value, error } = useLoad<{ tests: AutoTest[] }>(paths.autotests(p));
   const [q, setQ] = useState("");
   const [onlyFlaky, setOnlyFlaky] = useState(false);

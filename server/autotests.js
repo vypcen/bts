@@ -368,7 +368,9 @@ tokenRouter.post("/", wrap(async (req, res) => {
   if (project) {
     const role = await access.projectRole(req.user, project);
     if (!role) return res.status(404).json({ error: "Проект не найден" });
-    if (writes && !access.canWrite(role)) return res.status(403).json({ error: "В этом проекте у вас нет права на запись — доступен только токен для чтения" });
+    // results — нужно право на автотесты; write — роль, которая вообще может что-то менять
+    if (scopes.includes("results") && !access.can(role, "autotests.manage")) return res.status(403).json({ error: "В этом проекте у вас нет права отправлять результаты автотестов — доступен только токен для чтения" });
+    if (scopes.includes("write") && !access.canWrite(role)) return res.status(403).json({ error: "В этом проекте у вас нет права на запись — доступен только токен для чтения" });
   } else if (writes && !(await access.writesSomewhere(req.user))) return res.status(403).json({ error: `${access.READ_ONLY}. Доступен только токен для чтения (scopes: ["read"])` });
   // срок действия в днях (необязательно)
   const days = num(req.body.expiresDays);

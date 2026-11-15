@@ -226,3 +226,25 @@ test("2FA: включить в «Безопасности», войти с ко�
   // выключаем обратно, чтобы не мешать другим тестам
   await page.request.post("/api/auth/2fa/disable", { data: { password: PASSWORD, code: recovery[1] } });
 });
+
+test("роли: админ создаёт роль в матрице разрешений; разработчик двигает баг по статусам", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/#/users/roles");
+  await expect(page.locator(".roles-matrix th", { hasText: "Разработчик" })).toBeVisible();
+  await page.getByRole("button", { name: "+ Роль" }).click();
+  await page.locator("#roleForm").getByLabel("Название *").fill("Автоматизатор");
+  await page.locator("#roleForm").getByLabel(/Отправлять результаты, управлять автотестами/).check();
+  await expect(page.locator("#roleForm").getByText("полное место")).toBeVisible();
+  await page.locator("#roleForm").getByRole("button", { name: "Создать" }).click();
+  await expect(page.getByRole("button", { name: /Автоматизатор ✎/ })).toBeVisible();
+  // разработчик: статусы бага — да, редактирование — нет
+  const bug = await (await page.request.post("/api/projects/LK/bugs", { data: { title: "E2E: статус разработчиком", severity: "minor" } })).json();
+  await page.getByRole("button", { name: "Выйти" }).click();
+  await login(page, "dev");
+  await page.goto(`/#/p/LK/bugs/${bug.num}`);
+  const drawer = page.locator("aside.drawer");
+  await expect(drawer.getByRole("button", { name: "Взять в работу" })).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "Редактировать" })).toHaveCount(0);
+  await drawer.getByRole("button", { name: "Взять в работу" }).click();
+  await expect(drawer.getByText("В работе").first()).toBeVisible();
+});

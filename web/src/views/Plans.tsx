@@ -4,7 +4,7 @@ import { api, paths } from "../api";
 import { CASE_STATUSES, DIST_STRATEGIES, PRIORITIES, RESULTS } from "../labels";
 import { go, href } from "../router";
 import { folderTree } from "../selectors";
-import { useCanEdit, useData, useLoad, useStore } from "../store";
+import { useCan, useData, useLoad, useStore } from "../store";
 import type { CaseKind, CaseStatus, Plan, PlanCase, PlanFilter, Priority, Project, ResultValue, State } from "../types";
 import { Confirm, Empty, fmt, Modal, Pill, Prio, useNames, Who } from "../ui";
 import { CasePicker } from "./Runs";
@@ -163,7 +163,7 @@ function PlanEditor({ pid, plan, onClose }: { pid: string; plan?: Plan; onClose:
 }
 
 export function PlansTab({ project, openNum }: { project: Project; openNum?: number }) {
-  const canEdit = useCanEdit();
+  const canEdit = useCan("plans.edit");
   const p = project.id;
   const { value, error } = useLoad<{ plans: Plan[] }>(paths.plans(p));
   const [creating, setCreating] = useState(false);
@@ -239,7 +239,8 @@ function PlanRunModal({ pid, plan, onClose }: { pid: string; plan: Plan; onClose
 function PlanPage({ project, num }: { project: Project; num: number }) {
   const data = useData();
   const { me, write } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("plans.edit");
+  const canRun = useCan("runs.manage");
   const p = project.id;
   const list = useLoad<{ plans: Plan[] }>(paths.plans(p));
   const cases = useLoad<{ cases: PlanCase[] }>(`${paths.plan(p, num)}/cases`);
@@ -268,7 +269,7 @@ function PlanPage({ project, num }: { project: Project; num: number }) {
           <a className="btn" href={`${paths.plan(p, num)}/export?format=json`} style={{ textDecoration: "none" }}>JSON</a>
           <a className="btn" href={`${paths.plan(p, num)}/report?format=pdf`} download style={{ textDecoration: "none" }} title="Последний результат каждого кейса во всех прогонах плана">Отчёт PDF</a>
           <a className="btn" href={`${paths.plan(p, num)}/report?format=xlsx`} download style={{ textDecoration: "none" }}>Отчёт Excel</a>
-          {canEdit && <button className="btn primary" disabled={!plan.caseCount} onClick={() => setModal("run")}>Создать прогон</button>}
+          {canRun && <button className="btn primary" disabled={!plan.caseCount} onClick={() => setModal("run")}>Создать прогон</button>}
           {canEdit && !plan.locked && <button className="btn" onClick={() => setModal("edit")}>Параметры</button>}
           {canEdit && !plan.locked && plan.mode === "static" && <button className="btn" onClick={() => setModal("compose")}>Состав</button>}
           {canEdit && !plan.locked && (

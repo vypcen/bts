@@ -17,8 +17,13 @@ export interface AutoStep {
 
 // tester — работает с проектами, developer — смотрит и комментирует, viewer — только смотрит (просмотровая лицензия),
 // admin — ещё и пользователи с доступами
-export type Role = "tester" | "developer" | "viewer" | "admin";
-export type ProjectRole = "tester" | "developer" | "viewer";
+// встроенные роли; пользовательские — ключи вида r_… (названия в MetaState.roles)
+export type Role = "tester" | "developer" | "viewer" | "admin" | (string & {});
+export type ProjectRole = "tester" | "developer" | "viewer" | (string & {});
+export type Permission =
+  | "cases.edit" | "cases.delete" | "requirements.edit" | "plans.edit" | "runs.manage" | "runs.execute"
+  | "bugs.create" | "bugs.edit" | "bugs.status" | "bugs.delete" | "comments" | "ai" | "autotests.manage"
+  | "trash.restore" | "settings" | "projects.create";
 // Откуда учётная запись: локальная или из каталога / SSO
 export type AuthProvider = "local" | "ldap" | "oidc" | "kerberos";
 
@@ -44,6 +49,7 @@ export interface Project {
   members: string[]; // логины участников; админы видят проект и без этого
   memberRoles: Record<string, ProjectRole>; // роли участников в этом проекте (если отличаются от глобальной)
   myRole: Role; // действующая роль текущего пользователя в проекте
+  myPermissions?: Permission[]; // что эта роль разрешает
   stats: ProjectStats; // сводка для карточки проекта (считает сервер)
 }
 
@@ -272,6 +278,8 @@ export interface MetaState {
   projects: Project[];
   plans: PlanSummary[];
   users: Record<string, { name: string; role: Role }>;
+  roles?: Record<string, { name: string; seat: "full" | "view" }>;
+  myPermissions?: Permission[]; // по глобальной роли (вне проекта: создание проектов)
 }
 
 // GET /api/projects/:key/state — данные одного проекта. results — последний результат каждого кейса
@@ -298,6 +306,7 @@ export interface RunResults {
 
 // Что видят экраны: общее состояние и данные открытого проекта (вне проекта списки пустые)
 export interface State {
+  roles?: MetaState["roles"];
   projects: Project[];
   plans: PlanSummary[];
   cases: TestCase[];

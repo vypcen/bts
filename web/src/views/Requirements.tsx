@@ -2,7 +2,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { api } from "../api";
 import { go, href } from "../router";
-import { useCanEdit, useData, useLoad, useStore } from "../store";
+import { useCan, useData, useLoad, useStore } from "../store";
 import type { Priority, Project, ResultValue } from "../types";
 import { find, PRIORITIES, BUG_STATUSES, type Tone } from "../labels";
 import { Confirm, Drawer, Empty, fmt, Modal, Pill, Prio, ResultPill } from "../ui";
@@ -44,7 +44,7 @@ export function RequirementsTab({ project, openNum }: { project: Project; openNu
   const [status, setStatus] = useState<ReqStatus | "">("");
   const [editing, setEditing] = useState<Requirement | "new" | null>(null);
   const [importing, setImporting] = useState(false);
-  const canEdit = useCanEdit();
+  const canEdit = useCan("requirements.edit");
   const { value, error } = useLoad<{ items: Requirement[]; summary: Partial<Record<Coverage, number>> }>(base);
   const items = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -122,7 +122,7 @@ export function RequirementsTab({ project, openNum }: { project: Project; openNu
 
 function RequirementDrawer({ project, base, req, onEdit, onClose }: { project: Project; base: string; req: Requirement; onEdit: () => void; onClose: () => void }) {
   const { value } = useLoad<RequirementFull>(`${base}/${req.num}`);
-  const canEdit = useCanEdit();
+  const canEdit = useCan("requirements.edit");
   const { write } = useStore();
   const [deleting, setDeleting] = useState(false);
   const p = project.id;

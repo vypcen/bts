@@ -26,7 +26,7 @@ async function executors(db, key, logins) {
     const u = rows.find((r) => r.login === login);
     const role = !u ? null : u.global_role === "admin" ? "admin" : u.member ? u.project_role || u.global_role : null;
     if (!role) throw new HttpError(400, `${login}: нет доступа к проекту`);
-    if (!access.canWrite(role)) throw new HttpError(400, `${login}: роль в проекте не позволяет отмечать результаты`);
+    if (!access.can(role, "runs.execute")) throw new HttpError(400, `${login}: роль в проекте не позволяет отмечать результаты`);
   }
   return uniq.map((l) => rows.find((r) => r.login === l));
 }

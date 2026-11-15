@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { find, PRIORITIES, RESULTS, SEVERITIES, type Tone } from "./labels";
+import { find, PRIORITIES, RESULTS, ROLES as ROLE_DEFS, SEVERITIES, type Tone } from "./labels";
 import { api, paths } from "./api";
-import { useLoad, useStore } from "./store";
+import { useData, useLoad, useStore } from "./store";
 import type { Priority, ResultValue, Severity, TestCase } from "./types";
 
 export const fmt = (ts: number | null | undefined) =>
@@ -208,3 +208,15 @@ export function FullCase({ c, children }: { c: TestCase; children: (full: TestCa
 
 // То же для обработчиков: кейс с текстами (например, чтобы завести баг из строки таблицы)
 export const fullCase = async (c: TestCase): Promise<TestCase> => (c.light ? api<TestCase>("GET", paths.testCase(c.pid, c.num)) : c);
+
+// Роли для выпадающих списков и подписей: встроенные (labels.ts) и созданные администратором (MetaState.roles)
+export interface RoleOption { key: string; label: string; hint: string; seat: "full" | "view"; builtin: boolean }
+export function useRoles(): { all: RoleOption[]; project: RoleOption[]; name: (key: string) => string } {
+  const data = useData();
+  const builtin: RoleOption[] = ROLE_DEFS.map((r) => ({ key: r.key, label: r.label, hint: r.hint, seat: r.key === "tester" || r.key === "admin" ? "full" : "view", builtin: true }));
+  const custom: RoleOption[] = Object.entries(data?.roles || {})
+    .filter(([k]) => !builtin.some((b) => b.key === k))
+    .map(([k, r]) => ({ key: k, label: r.name, hint: r.seat === "full" ? "Своя роль · полная лицензия" : "Своя роль · просмотровая лицензия", seat: r.seat, builtin: false }));
+  const all = [...builtin, ...custom];
+  return { all, project: all.filter((r) => r.key !== "admin"), name: (key) => all.find((r) => r.key === key)?.label || key };
+}

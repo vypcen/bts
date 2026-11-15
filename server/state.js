@@ -9,6 +9,7 @@
 const express = require("express");
 const { pool } = require("./db");
 const access = require("./access");
+const roles = require("./roles");
 const { wrap, num, ms } = require("./util");
 
 const caseSql = `SELECT c.project_key, c.num, c.kind, c.checked, c.folder_id, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected, c.version,
@@ -44,7 +45,7 @@ const toAttachment = (a) => ({
 
 // ---------- общее состояние ----------
 async function meta(user) {
-  const keys = await access.projectKeys(user);
+  const [keys] = await Promise.all([access.projectKeys(user), roles.load()]);
   const mine = (col) => `($1::text[] IS NULL OR ${col} = ANY($1::text[]))`;
   const [projects, users, plans, stats] = await Promise.all([
     // myRole — действующая роль текущего пользователя в проекте (роль в проекте или глобальная)
@@ -85,12 +86,15 @@ async function meta(user) {
       const s = statsOf[p.key] || {};
       return {
         id: p.key, name: p.name, desc: p.description, createdBy: p.created_by, created: p.created_at.getTime(), members: p.members,
-        memberRoles: p.member_roles, myRole: p.my_role,
+        memberRoles: p.member_roles, myRole: p.my_role, myPermissions: p.my_role === "admin" ? roles.ALL : [...roles.permsOf(p.my_role)],
         stats: { cases: s.cases || 0, runs: s.runs || 0, bugs: s.bugs || 0, openBugs: s.open_bugs || 0, last: { ...empty, ...(s.last || {}) } },
       };
     }),
     plans: plans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked })),
     users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name, role: u.role }])),
+    // названия ролей (встроенных и пользовательских) и мои глобальные разрешения
+    roles: Object.fromEntries([...Object.entries(roles.BUILTIN), ...[...roles.load.cache().entries()]].map(([k, d]) => [k, { name: d.name, seat: roles.seatOf(k) }])),
+    myPermissions: user.role === "admin" ? roles.ALL : [...roles.permsOf(user.role)],
   };
 }
 

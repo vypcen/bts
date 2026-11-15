@@ -2,14 +2,14 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { FieldsSettings } from "./FieldsSettings";
 import { api, paths } from "../api";
 import { SEVERITIES } from "../labels";
-import { useCanEdit, useLoad, useStore } from "../store";
+import { useCan, useLoad, useStore } from "../store";
 import type { CiJob, CiParam, Project, Severity, Tracker, TrackerKind, Webhook, WebhookDelivery } from "../types";
 import { Confirm, fmt, Modal, Pill } from "../ui";
 
 // Настройки интеграций проекта: вебхуки, трекер задач, задачи CI, перенос проекта
 export function IntegrationsTab({ project }: { project: Project }) {
-  const canEdit = useCanEdit();
-  if (!canEdit) return <div className="banner">Настройки интеграций доступны тестировщикам и администраторам проекта.</div>;
+  const canEdit = useCan("settings");
+  if (!canEdit) return <div className="banner">Настройки проекта доступны ролям с разрешением «Настройки проекта» — обратитесь к администратору.</div>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       <FieldsSettings pid={project.id} />

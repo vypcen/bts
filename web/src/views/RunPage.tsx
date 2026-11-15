@@ -5,7 +5,7 @@ import { checkedCount, checklistItems, itemMark } from "../checklist";
 import { BUG_STATUSES, find, RESULTS } from "../labels";
 import { go, href } from "../router";
 import { countResults } from "../selectors";
-import { useCanEdit, useData, useLoad, useStore } from "../store";
+import { useCan, useData, useLoad, useStore } from "../store";
 import type { Attachment, CaseVersion, Project, Result, ResultValue, Run, RunResults, TestCase } from "../types";
 import { Confirm, Drawer, fmt, FullCase, fullCase, Modal, PagedRows, Pill, Prio, ResultBar, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { AssignPicker, executorsOf, type Assign } from "./Plans";
@@ -25,7 +25,9 @@ function withActual(steps: Result["steps"], i: number, typed: string | undefined
 export function RunPage({ project, num }: { project: Project; num: number }) {
   const data = useData();
   const { write, liveError, me } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("runs.manage");
+  const canMark = useCan("runs.execute");
+  const canBug = useCan("bugs.create");
   const p = project.id;
   const run = data.runs.find((r) => r.pid === p && r.num === num);
   const [filter, setFilter] = useState<"all" | ResultValue>("all");
@@ -49,7 +51,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   }
 
   const open = run.state === "open";
-  const editable = open && canEdit;
+  const editable = open && canMark;
   if (!loaded.value) {
     return <main className="wrap">{loaded.error ? <div className="banner">{loaded.error}</div> : <div className="skel">Загружаем прогон…</div>}</main>;
   }
@@ -178,7 +180,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
                   <td onClick={(e) => e.stopPropagation()}>
                     <div className="chips">
                       {bugs.map((b) => <a key={b.id} className="chip" href={href("p", p, "bugs", b.num)} title={`${b.title} · ${find(BUG_STATUSES, b.status).label}`}>B{b.num}</a>)}
-                      {canEdit && !bugs.length && (r.result === "failed" || r.result === "blocked") && (
+                      {canBug && !bugs.length && (r.result === "failed" || r.result === "blocked") && (
                         <button className="btn sm" onClick={async () => setBugDraft(draftFromCase(await fullCase(c), run, r))}>+ Баг</button>
                       )}
                     </div>
@@ -246,7 +248,8 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   const { run, r, c, prev } = props;
   const data = useData();
   const { write } = useStore();
-  const canEdit = useCanEdit();
+  const canEdit = useCan("runs.execute");
+  const canBug = useCan("bugs.create");
   const [comment, setComment] = useState(r.comment);
   const p = run.pid;
   // разработчик видит результат так же, как в закрытом прогоне: без кнопок и правки
@@ -297,7 +300,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
       onClose={props.onClose}
       footer={
         <>
-          {canEdit && c.kind !== "checklist" && (r.result === "failed" || r.result === "blocked") && (
+          {canBug && c.kind !== "checklist" && (r.result === "failed" || r.result === "blocked") && (
             <button className="btn" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(c, run, { ...r, comment: comment.trim() })); }}>Завести баг</button>
           )}
           <a className="btn ghost" href={href("p", p, "cases", c.num)} style={{ textDecoration: "none" }}>Открыть кейс</a>
@@ -345,7 +348,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
                     {open ? <ResultButtons value={m} onPick={(v) => pickItem(item, v)} label={`Результат: ${item}`} /> : <ResultPill r={m} sm />}
                     {was === "passed" && m === "failed" && <span className="small" style={{ color: "var(--crit)", fontWeight: 600 }}>Регресс</span>}
                     {was && was !== "untested" && was !== m && m !== "failed" && <span className="muted small">ранее: <ResultPill r={was} sm /></span>}
-                    {canEdit && (m === "failed" || m === "blocked") && (
+                    {canBug && (m === "failed" || m === "blocked") && (
                       <button className="btn sm" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(c, run, { ...r, comment: comment.trim() }, item)); }}>+ Баг</button>
                     )}
                   </div>
@@ -367,7 +370,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
               return (
                 <div className="step-mark">
                   {open ? <ResultButtons value={m} onPick={(v) => pickStep(i, v)} label={`Результат шага ${i + 1}`} /> : <ResultPill r={m} sm />}
-                  {canEdit && bad && (
+                  {canBug && bad && (
                     <button className="btn sm" onClick={async () => { if (await saveComment()) props.onBug(draftFromCase(shown, run, { ...r, comment: comment.trim(), steps: withActual(r.steps, i, actuals[i]) }, undefined, i)); }}>+ Баг</button>
                   )}
                   {(bad || sr?.actual) && (
