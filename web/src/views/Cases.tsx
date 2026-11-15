@@ -9,6 +9,7 @@ import { countBy, folderPath, lastResults } from "../selectors";
 import { useCan, useData, useLoad, useStore } from "../store";
 import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } from "../types";
 import { CaseRequirements } from "./Requirements";
+import { SaveAsTemplate, TemplatePicker } from "./Templates";
 import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, Modal, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { ImportModal } from "./CaseImport";
@@ -513,10 +514,16 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
   return (
     <Drawer label={c ? "Редактирование" : list ? "Новый чек-лист" : "Новый тест-кейс"} idTag={c?.id}
       title={c ? "Редактирование" : list ? "Новый чек-лист" : "Новый тест-кейс"} onClose={onClose}
-      footer={<><button className="btn primary" type="submit" form="caseForm">{c ? "Сохранить" : "Создать"}</button><button className="btn" type="button" onClick={onClose}>Отмена</button></>}>
+      footer={<>
+        <button className="btn primary" type="submit" form="caseForm">{c ? "Сохранить" : "Создать"}</button>
+        <button className="btn" type="button" onClick={onClose}>Отмена</button>
+        <div className="spacer" />
+        <SaveAsTemplate pid={pid} kind="case" data={{ priority: f.priority, status: f.status, pre: f.pre, expected: f.expected, tags: f.tags, fields: f.fields, ...(list ? { steps: f.steps } : { stepList: f.stepList }) }} />
+      </>}>
       <form id="caseForm" onSubmit={submit} noValidate>
         <div className="field"><label htmlFor="c-title">Название *</label><input className="input" id="c-title" value={f.title} onChange={set("title")}
           placeholder={list ? "Например: Смоук перед релизом" : "Например: Вход с неверным паролем"} autoFocus /></div>
+        {!c && <TemplatePicker pid={pid} kind="case" form={f} setForm={setF} defaults={{ priority: "medium", status: "draft" }} />}
         <div className="row2">
           <div className="field"><label htmlFor="c-kind">Вид</label>
             <select className="input" id="c-kind" value={f.kind} onChange={set("kind")}>

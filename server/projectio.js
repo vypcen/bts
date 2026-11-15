@@ -5,6 +5,7 @@
 // TestRail (XML-экспорт), TestLink (XML-экспорт), Qase (JSON-экспорт) — они сначала приводятся к формату testball-project.
 const express = require("express");
 const casemodel = require("./casemodel");
+const templatesMod = require("./templates");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const attachments = require("./attachments");
@@ -27,10 +28,13 @@ async function exportProject(key, withFiles) {
   // значения пользовательских полей — по названию поля: id в другой установке будут другими
   const fieldName = new Map(customFields.map((f) => [String(f.id), f.name]));
   const byName = (vals) => Object.fromEntries(Object.entries(vals || {}).filter(([id]) => fieldName.has(id)).map(([id, v]) => [fieldName.get(id), v]));
-  const [requirements, reqCases] = await Promise.all([
+  const [requirements, reqCases, templates] = await Promise.all([
     q("SELECT r.*, u.login AS cb FROM requirements r LEFT JOIN users u ON u.id=r.created_by WHERE r.project_key=$1 ORDER BY r.num"),
     q("SELECT r.num AS req, c.num FROM requirement_cases rc JOIN requirements r ON r.id=rc.requirement_id JOIN test_cases c ON c.id=rc.case_id WHERE r.project_key=$1"),
+    q("SELECT kind, name, data, is_default FROM templates WHERE project_key=$1 ORDER BY id"),
   ]);
+  // в шаблонах пользовательские поля — по названию, как в кейсах
+  const tplData = (d) => (d.fields ? { ...d, fields: byName(d.fields) } : d);
   const [folders, cases, versions, plans, planCases, runs, results, bugs, bugLog, comments, autotests, autoruns, autoresults, files] = await Promise.all([
     q("SELECT id, parent_id, name FROM case_folders WHERE project_key=$1 ORDER BY id"),
     q(`SELECT c.*, cu.login AS cb, uu.login AS ub FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by
@@ -93,6 +97,7 @@ async function exportProject(key, withFiles) {
         expected: v.expected, stepList: v.step_list, tags: v.tags, fields: byName(v.fields), changedBy: v.by, changed: iso(v.changed_at),
       })),
     })),
+    templates: templates.map((t) => ({ kind: t.kind, name: t.name, data: tplData(t.data), isDefault: t.is_default })),
     requirements: requirements.map((r) => ({
       num: r.num, title: r.title, description: r.description, status: r.status, priority: r.priority, extRef: r.ext_ref, url: r.url, tags: r.tags,
       createdBy: r.cb, created: iso(r.created_at), cases: reqCases.filter((x) => x.req === r.num).map((x) => x.num),
@@ -233,6 +238,15 @@ async function importProject(data, { key, name }, user) {
         }
       }
 
+      for (const t of arr(data.templates)) {
+        const kind = oneOf(t.kind, ["case", "bug"], null);
+        if (!kind || !str(t.name, 100)) continue;
+        const d = templatesMod.readData(kind, { ...(t.data || {}), fields: undefined });
+        const fv = t.data?.fields ? fieldsOf(kind, t.data.fields) : null;
+        if (fv && Object.keys(fv).length) d.fields = fv;
+        await db.query("INSERT INTO templates(project_key, kind, name, data, is_default, created_by) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
+          [key, kind, str(t.name, 100), d, t.isDefault === true, user.id]);
+      }
       const reqs = arr(data.requirements);
       if (reqs.length) await db.query("UPDATE projects SET req_seq=$2 WHERE key=$1", [key, maxNum(reqs)]);
       for (const r of reqs) {

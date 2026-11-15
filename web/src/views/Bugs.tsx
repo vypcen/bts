@@ -10,6 +10,7 @@ import type { Bug, BugStatus, FieldValues, Project, Result, Run, Severity, TestC
 import { CommentCount, Confirm, Drawer, Empty, fmt, Modal, Pill, ResultPill, Sev, TextBlock, useNames, Who, PagedRows } from "../ui";
 import { Attachments } from "./Attachments";
 import { Comments } from "./Comments";
+import { SaveAsTemplate, TemplatePicker } from "./Templates";
 
 export interface BugDraft {
   title: string;
@@ -345,7 +346,12 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
 
   return (
     <Drawer label={bug ? "Редактирование бага" : "Новый баг"} idTag={bug?.id} title={bug ? "Редактирование" : "Новый баг"} onClose={onClose}
-      footer={<><button className="btn primary" type="submit" form="bugForm">{bug ? "Сохранить" : "Создать баг"}</button><button className="btn" type="button" onClick={onClose}>Отмена</button></>}>
+      footer={<>
+        <button className="btn primary" type="submit" form="bugForm">{bug ? "Сохранить" : "Создать баг"}</button>
+        <button className="btn" type="button" onClick={onClose}>Отмена</button>
+        <div className="spacer" />
+        <SaveAsTemplate pid={pid} kind="bug" data={{ severity: f.severity, env: f.env, steps: f.steps, actual: f.actual, expected: f.expected, tags: f.tags, fields: f.fields }} />
+      </>}>
       <form id="bugForm" onSubmit={submit} noValidate>
         {!bug && linkedCase && (
           <div className="linkbox">
@@ -357,6 +363,7 @@ export function BugEditor({ pid, bug, draft, onClose }: { pid: string; bug?: Bug
             onUndo={beforeAi ? () => { setF(beforeAi); setBeforeAi(null); } : undefined} />
         )}
         <div className="field"><label htmlFor="b-title">Заголовок *</label><input className="input" id="b-title" value={f.title} onChange={set("title")} placeholder="Что сломалось, коротко" autoFocus /></div>
+        {!bug && <TemplatePicker pid={pid} kind="bug" form={f} setForm={setF} />}
         <div className="row2">
           <div className="field"><label htmlFor="b-sev">Серьёзность</label>
             <select className="input" id="b-sev" value={f.severity} onChange={set("severity")}>{SEVERITIES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}</select></div>

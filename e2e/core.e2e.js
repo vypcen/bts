@@ -86,7 +86,7 @@ test("карточка и редактор кейса догружают шаг�
   await page.getByRole("button", { name: "Редактировать", exact: true }).last().click();
   const title = page.getByLabel(/Название/).first();
   await title.fill("Шаги на месте — правка");
-  await page.getByRole("button", { name: /Сохранить/ }).click();
+  await page.getByRole("button", { name: "Сохранить", exact: true }).click();
   await expect.poll(async () => (await (await api.get(`/api/projects/LK/cases/${k.num}`)).json()).title).toBe("Шаги на месте — правка");
   const full = await (await api.get(`/api/projects/LK/cases/${k.num}`)).json();
   expect(full.steps).toBe("Первый шаг\nВторой шаг");
@@ -278,4 +278,25 @@ test("массовое изменение: выбрать кейсы, поста
   await expect(page.getByText("Изменено кейсов: 2")).toBeVisible();
   const items = (await (await page.request.get("/api/projects/LK/cases?q=" + encodeURIComponent("E2E массово"))).json()).items;
   expect(items.every((c) => c.status === "ready" && c.tags.includes("массовый"))).toBe(true);
+});
+
+test("шаблоны: шаблон по умолчанию заполняет новый кейс, форму можно сохранить как шаблон", async ({ page }) => {
+  await login(page);
+  await page.request.post("/api/projects/LK/templates", { data: { kind: "case", name: "E2E шаблон", isDefault: true, data: { pre: "Пользователь вошёл", priority: "high", tags: ["e2e-шаблон"] } } });
+  await page.goto("/#/p/LK/cases");
+  await page.getByRole("button", { name: "+ Тест-кейс" }).click();
+  const form = page.locator("aside.drawer");
+  await expect(form.locator("#tpl-case")).toHaveValue(/\d+/);
+  await expect(form.getByLabel("Предусловия")).toHaveValue("Пользователь вошёл");
+  await expect(form.getByLabel("Приоритет")).toHaveValue("high");
+  await form.getByLabel("Название *").fill("Кейс по шаблону");
+  await form.getByRole("button", { name: "Сохранить как шаблон" }).click();
+  await page.locator(".modal").getByLabel("Название шаблона").fill("E2E из формы");
+  await page.locator(".modal").getByRole("button", { name: "Сохранить" }).click();
+  await expect(page.getByText("Шаблон «E2E из формы» сохранён")).toBeVisible();
+  await form.getByRole("button", { name: "Создать" }).click();
+  const items = (await (await page.request.get("/api/projects/LK/cases?q=" + encodeURIComponent("Кейс по шаблону"))).json()).items;
+  expect(items[0].priority).toBe("high");
+  expect(items[0].tags).toContain("e2e-шаблон");
+  await page.request.delete(`/api/projects/LK/templates/${(await (await page.request.get("/api/projects/LK/templates?kind=case")).json()).templates.find((t) => t.name === "E2E шаблон").id}`, { data: {} });
 });

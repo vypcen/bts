@@ -389,6 +389,33 @@ test("массовое изменение кейсов: статус, приор
   assert.ok((trash.items || trash).filter((t) => /Массово/.test(t.title)).length >= 2);
 });
 
+test("шаблоны кейсов и багов: сохранение, по умолчанию один, права, перенос при экспорте", async () => {
+  let r = await u.tester.post("/api/projects/LK/templates", { kind: "case", name: "API-проверка", isDefault: true,
+    data: { priority: "high", pre: "Получен токен", stepList: [{ action: "Отправить запрос", expected: "200 OK" }], tags: ["api"], title: "не сохраняется", junk: 1 } });
+  assert.equal(r.status, 201);
+  const t1 = r.data.id;
+  r = await u.tester.post("/api/projects/LK/templates", { kind: "case", name: "UI", isDefault: true, data: { pre: "Открыт браузер" } });
+  const t2 = r.data.id;
+  assert.equal((await u.tester.post("/api/projects/LK/templates", { kind: "case", name: "ui", data: {} })).status, 409);
+  assert.equal((await u.tester.post("/api/projects/LK/templates", { kind: "run", name: "x", data: {} })).status, 400);
+  assert.equal((await u.viewer.post("/api/projects/LK/templates", { kind: "bug", name: "x", data: {} })).status, 403);
+  await u.tester.post("/api/projects/LK/templates", { kind: "bug", name: "Вёрстка", data: { severity: "minor", env: "Chrome", tags: ["ui"] } });
+  const list = (await u.viewer.get("/api/projects/LK/templates?kind=case")).data.templates;
+  assert.deepEqual(list.filter((t) => t.isDefault).map((t) => t.id), [t2], "по умолчанию — только последний отмеченный");
+  const api = list.find((t) => t.id === t1);
+  assert.deepEqual(Object.keys(api.data).sort(), ["pre", "priority", "stepList", "tags"]);
+  assert.equal(api.data.stepList[0].expected, "200 OK");
+  assert.equal((await u.tester.patch(`/api/projects/LK/templates/${t1}`, { name: "API" })).status, 200);
+  assert.equal((await u.viewer.get("/api/projects/LK/templates?kind=bug")).data.templates.length, 1);
+  // экспорт и импорт проекта переносят шаблоны
+  const exp = await u.tester.get("/api/projects/LK/export");
+  assert.equal(exp.data.templates.length, 3);
+  r = await u.admin.post("/api/projects-import", { source: "testball", data: exp.data, key: "TPL" });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal((await u.admin.get("/api/projects/TPL/templates")).data.templates.length, 3);
+  assert.equal((await u.tester.del(`/api/projects/LK/templates/${t2}`)).status, 200);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);

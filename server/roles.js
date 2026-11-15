@@ -68,6 +68,7 @@ const RULES = [
   [/^\/(cases|cases\/import|cases\/move|cases\/\d+\/versions\/\d+\/restore|folders(\/\d+)?)$/, "cases.edit"],
   [/^\/(bugs|cases)\/\d+\/comments$|^\/comments\/\d+$/, "comments"],
   [/^\/requirements(\/.*)?$/, "requirements.edit"],
+  [/^\/templates(\/\d+)?$/, ["cases.edit", "settings"]],
   [/^\/plans\/preview$/, ["plans.edit", "runs.manage"]],
   [/^\/plans\/\d+\/runs$/, "runs.manage"],
   [/^\/plans(\/.*)?$/, "plans.edit"],
