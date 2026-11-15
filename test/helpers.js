@@ -136,7 +136,7 @@ function client(base, { token } = {}) {
 // Типовой набор: админ, тестировщик, разработчик и проект LK
 async function seed(srv) {
   const admin = client(srv.base);
-  let r = await admin.post("/api/auth/register", { login: "admin", name: "Админ", password: "Tb-pass-2026", setupCode: SETUP_CODE });
+  let r = await admin.post("/api/auth/register", { login: "admin", name: "Админ", password: "Tb-pass-2026", setupCode: SETUP_CODE, consent: true });
   if (r.status !== 201) throw new Error(`register admin: ${r.status} ${JSON.stringify(r.data)}`);
   for (const [login, role] of [["tester", "tester"], ["dev", "developer"], ["viewer", "viewer"], ["outsider", "tester"]]) {
     r = await admin.post("/api/admin/users", { login, name: login, password: "Tb-pass-2026", role });

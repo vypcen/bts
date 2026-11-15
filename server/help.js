@@ -14,6 +14,7 @@ const PAGES = {
   admin: { file: "docs/ADMIN_GUIDE.md", title: "Руководство администратора" },
   install: { file: "README.md", title: "Установка и настройка" },
   pilot: { file: "docs/PILOT.md", title: "Пилот" },
+  privacy: { file: "docs/PERSONAL_DATA.md", title: "Персональные данные (152-ФЗ)" },
   upgrade: { file: "docs/UPGRADE.md", title: "Обновление" },
   changelog: { file: "CHANGELOG.md", title: "Изменения версий" },
   api: { file: "docs/API.md", title: "API" },

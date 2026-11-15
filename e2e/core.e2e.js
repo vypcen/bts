@@ -248,3 +248,18 @@ test("роли: админ создаёт роль в матрице разре�
   await drawer.getByRole("button", { name: "Взять в работу" }).click();
   await expect(drawer.getByText("В работе").first()).toBeVisible();
 });
+
+test("152-ФЗ: админ обезличивает пользователя из меню «Ещё»", async ({ page }) => {
+  await login(page, "admin");
+  const created = await page.request.post("/api/admin/users", { data: { login: "leaver", name: "Уходящий Сотрудник", password: "Exit-pass-2077", role: "viewer" } });
+  expect(created.status()).toBe(201);
+  await page.goto("/#/users");
+  const row = page.getByRole("row", { name: /Уходящий Сотрудник/ });
+  await row.locator("summary").click();
+  await expect(row.getByRole("menuitem", { name: "Выгрузить персональные данные" })).toBeVisible();
+  await row.getByRole("menuitem", { name: "Обезличить (152-ФЗ)" }).click();
+  await page.locator(".modal").getByLabel(/Введите логин/).fill("leaver");
+  await page.locator(".modal").getByRole("button", { name: "Обезличить" }).click();
+  await expect(page.getByRole("row", { name: /Удалённый пользователь/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Уходящий Сотрудник/ })).toHaveCount(0);
+});

@@ -67,6 +67,7 @@ function UsersList() {
   const [del, setDel] = useState<AdminUser | null>(null);
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<AdminUser | null>(null);
+  const [anon, setAnon] = useState<AdminUser | null>(null);
   const users = value?.users || [];
   const needle = q.trim().toLowerCase();
   const rows = users.filter((u) => !needle || u.login.includes(needle) || u.name.toLowerCase().includes(needle));
@@ -171,20 +172,31 @@ function UsersList() {
                           <button className="btn sm" onClick={() => patch(u, { blocked: !u.blocked }, u.blocked ? `${u.name} разблокирован` : `${u.name} заблокирован`)}>
                             {u.blocked ? "Разблокировать" : "Заблокировать"}
                           </button>
-                          {u.provider === "local" && <button className="btn sm" onClick={() => setResetting(u)}>Сменить пароль</button>}
-                          {u.twoFactor && (
-                            <button className="btn sm" title="Потерян телефон: пользователь войдёт по паролю и настроит 2FA заново"
-                              onClick={() => write(() => api("POST", `${usersUrl}/${encodeURIComponent(u.login)}/2fa/reset`, {}), `${u.name}: двухфакторная аутентификация сброшена`)}>
-                              Сбросить 2FA
-                            </button>
-                          )}
-                          {!!u.sessions && (
-                            <button className="btn sm" title="Выйти на всех устройствах (например, потерян ноутбук)"
-                              onClick={() => write(() => api("POST", `${usersUrl}/${encodeURIComponent(u.login)}/sessions/revoke`, {}), `${u.name}: все сессии завершены`)}>
-                              Завершить сессии
-                            </button>
-                          )}
-                          <button className="btn ghost sm" style={{ color: "var(--crit)" }} onClick={() => setDel(u)} aria-label={`Удалить ${u.name}`}>Удалить</button>
+                          <details className="menu">
+                            <summary className="btn sm" aria-label={`Ещё действия: ${u.name}`}>Ещё ▾</summary>
+                            <div className="menu-list" role="menu" onClick={(e) => ((e.currentTarget.parentElement as HTMLDetailsElement).open = false)}>
+                              {u.provider === "local" && <button role="menuitem" onClick={() => setResetting(u)}>Сменить пароль</button>}
+                              {u.twoFactor && (
+                                <button role="menuitem" title="Потерян телефон: пользователь войдёт по паролю и настроит 2FA заново"
+                                  onClick={() => write(() => api("POST", `${usersUrl}/${encodeURIComponent(u.login)}/2fa/reset`, {}), `${u.name}: двухфакторная аутентификация сброшена`)}>
+                                  Сбросить 2FA
+                                </button>
+                              )}
+                              {!!u.sessions && (
+                                <button role="menuitem" title="Выйти на всех устройствах (например, потерян ноутбук)"
+                                  onClick={() => write(() => api("POST", `${usersUrl}/${encodeURIComponent(u.login)}/sessions/revoke`, {}), `${u.name}: все сессии завершены`)}>
+                                  Завершить сессии
+                                </button>
+                              )}
+                              <a role="menuitem" href={`${userUrl(u.login)}/personal-data`} download title="Все персональные данные пользователя одним файлом — для ответа на запрос по 152-ФЗ">
+                                Выгрузить персональные данные
+                              </a>
+                              {!u.login.startsWith("deleted-") && (
+                                <button role="menuitem" onClick={() => setAnon(u)} title="Отзыв согласия или увольнение: личные данные удаляются, история работы остаётся">Обезличить (152-ФЗ)</button>
+                              )}
+                              <button role="menuitem" className="c-crit" onClick={() => setDel(u)} aria-label={`Удалить ${u.name}`}>Удалить</button>
+                            </div>
+                          </details>
                         </>
                       )}
                     </td>
@@ -199,6 +211,7 @@ function UsersList() {
       {access && <AccessModal user={access} onClose={() => setAccess(null)} />}
       {creating && <NewUserModal onClose={() => setCreating(false)} />}
       {resetting && <PasswordModal target={resetting} onClose={() => setResetting(null)} />}
+      {anon && <AnonymizeModal user={anon} onClose={() => setAnon(null)} />}
       {del && (
         <Confirm
           title={`Удалить пользователя «${del.name}»?`}
@@ -264,6 +277,32 @@ function AccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }
         <button type="button" className="btn sm" style={{ marginRight: "auto" }} onClick={() => setPicked(new Set(projects.map((p) => p.id)))}>Все</button>
         <button type="button" className="btn" onClick={onClose}>Отмена</button>
         <button type="button" className="btn primary" onClick={save}>Сохранить</button>
+      </div>
+    </Modal>
+  );
+}
+
+// Обезличивание (152-ФЗ): подтверждение вводом логина
+function AnonymizeModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const { write } = useStore();
+  const [typed, setTyped] = useState("");
+  return (
+    <Modal onClose={onClose}>
+      <h2>Обезличить {user.name}?</h2>
+      <p className="small" style={{ margin: 0 }}>
+        Логин, имя, почта, IP-адреса в журнале, сессии, токены и доступы будут удалены, учётная запись заблокирована. Кейсы, баги, результаты и
+        комментарии останутся, автором будет «Удалённый пользователь». <b>Отменить нельзя.</b> Перед этим можно выгрузить его данные кнопкой «Данные (152-ФЗ)».
+      </p>
+      <div className="field">
+        <label htmlFor="an-login">Введите логин: <b className="mono">{user.login}</b></label>
+        <input id="an-login" className="input mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" />
+      </div>
+      <div className="acts">
+        <button className="btn" onClick={onClose}>Отмена</button>
+        <button className="btn danger solid" disabled={typed !== user.login}
+          onClick={async () => { if (await write(() => api("POST", `${userUrl(user.login)}/anonymize`, { confirm: user.login }), `${user.name}: данные обезличены`)) onClose(); }}>
+          Обезличить
+        </button>
       </div>
     </Modal>
   );

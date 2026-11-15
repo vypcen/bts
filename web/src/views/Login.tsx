@@ -17,6 +17,9 @@ export function Login() {
   // сервер попросил второй фактор: показываем поле кода
   const [needOtp, setNeedOtp] = useState(false);
   const [policy, setPolicy] = useState("");
+  // 152-ФЗ: ссылка на политику обработки ПДн и согласие при регистрации
+  const [privacyUrl, setPrivacyUrl] = useState<string | null>(null);
+  const [consent, setConsent] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   // setup — пользователей ещё нет: регистрируется первый администратор с кодом из логов сервера
@@ -24,8 +27,9 @@ export function Login() {
     setup: false, registration: "open", providers: { local: true, ldap: false, oidc: null, kerberos: null },
   });
   useEffect(() => {
-    api<{ setup?: boolean; registration?: "open" | "closed"; providers?: Providers; passwordPolicy?: string }>("GET", "/api/auth/me").then((r) => {
+    api<{ setup?: boolean; registration?: "open" | "closed"; providers?: Providers; passwordPolicy?: string; privacyPolicyUrl?: string | null }>("GET", "/api/auth/me").then((r) => {
       setPolicy(r.passwordPolicy || "");
+      setPrivacyUrl(r.privacyPolicyUrl || null);
       setMode({ setup: !!r.setup, registration: r.registration || "open", providers: r.providers || { local: true, ldap: false, oidc: null, kerberos: null } });
       if (r.setup) setTab("register");
     }, () => {});
@@ -57,12 +61,13 @@ export function Login() {
       if (!f.name.trim()) return setErr("Укажите имя");
       if (f.pass !== f.pass2) return setErr("Пароли не совпадают");
       if (mode.setup && !f.code.trim()) return setErr("Введите код установки из логов сервера");
+      if (privacyUrl && !consent) return setErr("Подтвердите согласие на обработку персональных данных");
     }
     setBusy(true);
     setErr("");
     try {
       const r = reg
-        ? await api<{ user: User }>("POST", "/api/auth/register", { login, name: f.name.trim(), password: f.pass, setupCode: f.code.trim() || undefined })
+        ? await api<{ user: User }>("POST", "/api/auth/register", { login, name: f.name.trim(), password: f.pass, setupCode: f.code.trim() || undefined, consent: consent || undefined })
         : await api<{ user: User }>("POST", "/api/auth/login", { login, password: f.pass, code: needOtp ? f.otp.trim() : undefined });
       if (reg) toast("Аккаунт создан");
       setMe(r.user);
@@ -145,6 +150,12 @@ export function Login() {
             <input className="input" id="a-pass2" type="password" autoComplete="new-password" value={f.pass2} onChange={set("pass2")} />
           </div>
         )}
+        {reg && privacyUrl && (
+          <label className="small" style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} style={{ marginTop: 3 }} />
+            <span>Даю согласие на обработку персональных данных в соответствии с <a href={privacyUrl} target="_blank" rel="noreferrer">политикой обработки персональных данных</a></span>
+          </label>
+        )}
         <div className="err" role="alert">{err}</div>
         <button className="btn primary" type="submit" disabled={busy} style={{ justifyContent: "center", padding: 10 }}>
           {busy ? "Проверяем…" : reg ? "Зарегистрироваться" : "Войти"}
@@ -152,6 +163,7 @@ export function Login() {
         </>}
         {pv.ldap && !reg && <p className="muted small" style={{ margin: 0, textAlign: "center" }}>Можно войти доменной учётной записью: логин и пароль Windows.</p>}
         {passwordForm && !canRegister && !pv.ldap && <p className="muted small" style={{ margin: 0, textAlign: "center" }}>Нет учётной записи? Её создаёт администратор.</p>}
+        {privacyUrl && <a className="muted small" style={{ textAlign: "center" }} href={privacyUrl} target="_blank" rel="noreferrer">Политика обработки персональных данных</a>}
       </form>
     </div>
   );

@@ -157,6 +157,9 @@ const me = (u) => ({ login: u.login, name: u.name, role: u.role, provider: u.aut
 // Администратор видит предупреждения о лицензии (истекает, истекла, ключ не принят) в шапке
 const { limits, TOO_MANY } = auth;
 
+// Политика обработки персональных данных (152-ФЗ): ссылка на странице входа, согласие при регистрации
+const PRIVACY_URL = /^https?:\/\//.test(process.env.PRIVACY_POLICY_URL || "") ? process.env.PRIVACY_POLICY_URL : "";
+
 // Что пользователь обязан сделать до начала работы (server/security.js)
 async function pendingOf(userId) {
   const { rows } = await pool.query(
@@ -177,7 +180,7 @@ app.get("/api/auth/me", wrap(async (req, res) => {
     }
     return res.json({ user });
   }
-  res.json({ user: null, setup: await auth.needsSetup(), registration: sso.cfg.localLogin ? REGISTRATION : "closed", providers: sso.providers(), passwordPolicy: security.policyText() });
+  res.json({ user: null, setup: await auth.needsSetup(), registration: sso.cfg.localLogin ? REGISTRATION : "closed", providers: sso.providers(), passwordPolicy: security.policyText(), privacyPolicyUrl: PRIVACY_URL || null });
 }));
 
 app.post("/api/auth/register", wrap(async (req, res) => {
@@ -200,14 +203,16 @@ app.post("/api/auth/register", wrap(async (req, res) => {
   }
   // логин из ADMIN_LOGIN станет админом при перезапуске — занять его регистрацией нельзя
   if (!setup && login === RESERVED_ADMIN) return res.status(403).json({ error: "Этот логин зарезервирован. Выберите другой" });
+  // 152-ФЗ: если задана политика обработки персональных данных, без согласия зарегистрироваться нельзя
+  if (PRIVACY_URL && req.body.consent !== true) return res.status(400).json({ error: "Подтвердите согласие на обработку персональных данных" });
   const hash = await auth.hashPassword(password);
   // новичок только смотрит и не видит ни одного проекта, пока админ не выдаст доступ;
   // первый пользователь в пустой базе становится админом
   const { rows } = await pool.query(
-    `INSERT INTO users(login, name, password_hash, role)
-     VALUES ($1,$2,$3, CASE WHEN EXISTS (SELECT 1 FROM users) THEN 'developer' ELSE 'admin' END)
+    `INSERT INTO users(login, name, password_hash, role, pd_consent_at)
+     VALUES ($1,$2,$3, CASE WHEN EXISTS (SELECT 1 FROM users) THEN 'developer' ELSE 'admin' END, CASE WHEN $4 THEN now() END)
      ON CONFLICT (login) DO NOTHING RETURNING id, role`,
-    [login, name, hash]
+    [login, name, hash, req.body.consent === true]
   );
   if (!rows[0]) return res.status(409).json({ error: "Логин уже занят. Выберите другой или войдите" });
   if (rows[0].role === "admin") auth.setupDone();
@@ -537,7 +542,7 @@ app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bu
 app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
-app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"), audit.router, trash.adminRouter);
+app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"), require("./personal").router, audit.router, trash.adminRouter);
 app.use("/api/llm", auth.requireUser, llm.router);
 // подключения к языковым моделям (облачные сервисы и свои модели) — только администратор
 app.use("/api/admin/llm", auth.requireUser, access.requireAdmin, llm.adminRouter);
@@ -643,7 +648,7 @@ app.use((err, req, res, _next) => {
   await live.listen();
   attachments.startSweeper();
   // уборка раз в час: корзина, журнал аудита, журнал вебхуков, выполненные фоновые задачи
-  jobs.define("housekeeping", () => Promise.all([trash.purgeExpired(), audit.purge(), webhooks.trimDeliveries(), jobs.cleanup()]), { maxAttempts: 1, title: "Уборка устаревших данных" });
+  jobs.define("housekeeping", () => Promise.all([trash.purgeExpired(), audit.purge(), require("./personal").purgeIps(), webhooks.trimDeliveries(), jobs.cleanup()]), { maxAttempts: 1, title: "Уборка устаревших данных" });
   jobs.every("housekeeping", 60 * 60 * 1000);
   trackers.startSync();
   jobs.start();

@@ -376,3 +376,13 @@ label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;font-
 
 /* шапка: на экранах уже 1500px логин и роль — только в подсказке, чтобы кнопки помещались в одну строку */
 @media (max-width:1500px){.user-extra{display:none}}
+
+/* выпадающее меню действий (details/summary) */
+.menu{position:relative;display:inline-block}
+.menu>summary{list-style:none;cursor:pointer}
+.menu>summary::-webkit-details-marker{display:none}
+.menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+  box-shadow:0 6px 24px rgba(0,0,0,.12);min-width:240px;padding:4px;display:flex;flex-direction:column}
+.menu-list>button,.menu-list>a{all:unset;cursor:pointer;padding:7px 10px;border-radius:4px;font-size:14px;color:var(--fg)}
+.menu-list>button:hover,.menu-list>a:hover{background:var(--sunken)}
+.menu-list>.c-crit{color:var(--crit)}
