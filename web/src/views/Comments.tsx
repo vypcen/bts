@@ -3,14 +3,22 @@ import { api, paths } from "../api";
 import { useCanComment, useStore } from "../store";
 import type { Comment } from "../types";
 import { Avatar, Confirm, fmt, useNames } from "../ui";
+import { useMentionSuggest } from "./Notifications";
 
 // Обсуждение бага или тест-кейса. Писать может любой участник проекта, менять — автор, удалять — автор или админ
 export function Comments({ list, postUrl }: { list: Comment[]; postUrl: string }) {
   const { me, write } = useStore();
   const canComment = useCanComment();
   const [text, setText] = useState("");
+  const [caret, setCaret] = useState(0);
   const [del, setDel] = useState<Comment | null>(null);
-  const pid = list[0]?.pid;
+  const pid = list[0]?.pid || /\/api\/projects\/([^/]+)\//.exec(postUrl)?.[1];
+  const mention = useMentionSuggest(pid ? decodeURIComponent(pid) : undefined, text, caret);
+  const pickMention = (login: string) => {
+    const next = `${text.slice(0, mention.start)}@${login} ${text.slice(caret)}`;
+    setText(next);
+    setCaret(mention.start + login.length + 2);
+  };
 
   async function send() {
     if (!text.trim()) return;
@@ -28,8 +36,19 @@ export function Comments({ list, postUrl }: { list: Comment[]; postUrl: string }
         </div>
       )}
       {/* наблюдатель (просмотровая лицензия) только читает обсуждение */}
-      {canComment && <textarea className="input" rows={2} placeholder="Написать комментарий… (Ctrl+Enter — отправить)" value={text}
-        onChange={(e) => setText(e.target.value)} onKeyDown={(e) => submitOnCtrlEnter(e, send)} aria-label="Новый комментарий" />}
+      {canComment && <textarea className="input" rows={2} placeholder="Написать комментарий… @логин — упомянуть коллегу (Ctrl+Enter — отправить)" value={text}
+        onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); }}
+        onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+        onKeyDown={(e) => submitOnCtrlEnter(e, send)} aria-label="Новый комментарий" />}
+      {canComment && mention.list.length > 0 && (
+        <div className="mention-list" role="listbox" aria-label="Упомянуть">
+          {mention.list.map((m) => (
+            <button key={m.login} type="button" role="option" aria-selected="false" onMouseDown={(e) => { e.preventDefault(); pickMention(m.login); }}>
+              <b>{m.name}</b> <span className="muted mono small">@{m.login}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {!canComment && !list.length && <span className="muted small">Комментариев нет</span>}
       {text.trim() && (
         <div className="flow">
@@ -76,7 +95,7 @@ function CommentItem({ c, mine, canDelete, onDelete }: { c: Comment; mine: boole
           {canDelete && edit === null && <button className="link small" onClick={onDelete}>Удалить</button>}
         </div>
         {edit === null ? (
-          <div className="c-text">{c.text}</div>
+          <div className="c-text">{withMentions(c.text)}</div>
         ) : (
           <>
             <textarea className="input" rows={3} value={edit} autoFocus onChange={(e) => setEdit(e.target.value)} onKeyDown={(e) => submitOnCtrlEnter(e, save)} aria-label="Текст комментария" />
@@ -89,6 +108,12 @@ function CommentItem({ c, mine, canDelete, onDelete }: { c: Comment; mine: boole
       </div>
     </div>
   );
+}
+
+// @логин в тексте — выделен
+function withMentions(text: string) {
+  const parts = text.split(/(@[a-z0-9][a-z0-9._-]{1,31})/gi);
+  return parts.map((p, i) => (i % 2 ? <span key={i} className="mention">{p}</span> : p));
 }
 
 function submitOnCtrlEnter(e: KeyboardEvent, fn: () => void) {

@@ -8,6 +8,7 @@ const events = require("./events");
 const { distribute, executors } = require("./distribute");
 const releases = require("./releases");
 const configs = require("./configs");
+const notify = require("./notify");
 const { wrap, str, tooLong, num } = require("./util");
 
 const RESULTS = ["untested", "passed", "failed", "blocked", "skipped"];
@@ -68,11 +69,12 @@ router.post("/runs", wrap(async (req, res) => {
     await db.query("INSERT INTO run_results(run_id, case_id) SELECT $1, unnest($2::int[])", [run.rows[0].id, ids]);
     // {"assign": {"users": [...], "strategy": "balanced"}} — сразу распределить кейсы
     const dist = req.body.assign?.users?.length ? await distribute(db, req.params.key, run.rows[0].id, req.body.assign.users, req.body.assign.strategy) : null;
-    return { n, dist };
+    return { n, dist, runId: run.rows[0].id };
   });
   if (out.error) return res.status(out.status).json({ error: out.error });
   broadcast("runs");
   events.emit(req.params.key, "run.created", { run: await events.snap.run(req.params.key, out.n) }, req.user);
+  if (out.dist) await notify.onRunAssigned(req, { runId: out.runId, logins: req.body.assign.users }).catch((e) => console.error("[notify]", e.message));
   res.status(201).json({ num: out.n, distribution: out.dist });
 }));
 
@@ -283,6 +285,7 @@ router.post("/runs/:num/distribute", wrap(async (req, res) => {
   if (run.state !== "open") return res.status(409).json({ error: "Прогон закрыт" });
   const out = await tx((db) => distribute(db, req.params.key, run.id, req.body.users, req.body.strategy || "balanced", req.body.onlyUnassigned !== false));
   broadcast("runs");
+  await notify.onRunAssigned(req, { runId: run.id, logins: Array.isArray(req.body.users) ? req.body.users : [] }).catch((e) => console.error("[notify]", e.message));
   res.json(out);
 }));
 

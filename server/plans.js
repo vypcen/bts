@@ -13,6 +13,7 @@ const { distribute } = require("./distribute");
 const { isAdmin } = require("./access");
 const releases = require("./releases");
 const configs = require("./configs");
+const notify = require("./notify");
 const { wrap, str, tooLong, num, HttpError } = require("./util");
 
 const PRIORITIES = ["critical", "high", "medium", "low"];
@@ -314,12 +315,15 @@ router.post("/plans/:num/runs", wrap(async (req, res) => {
       );
       const assign = req.body.assign;
       const dist = assign?.users?.length ? await distribute(db, key, run.rows[0].id, assign.users, assign.strategy || "balanced") : null;
-      made.push({ n, dist });
+      made.push({ n, dist, runId: run.rows[0].id });
     }
     return made;
   });
   broadcast("runs");
-  for (const m of out) events.emit(req.params.key, "run.created", { run: await events.snap.run(req.params.key, m.n) }, req.user);
+  for (const m of out) {
+    events.emit(req.params.key, "run.created", { run: await events.snap.run(req.params.key, m.n) }, req.user);
+    if (m.dist) await notify.onRunAssigned(req, { runId: m.runId, logins: req.body.assign.users }).catch((e) => console.error("[notify]", e.message));
+  }
   res.status(201).json({ num: out[0].n, distribution: out[0].dist, runs: out.map((m) => m.n), batch });
 }));
 

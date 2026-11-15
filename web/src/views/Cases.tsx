@@ -11,6 +11,7 @@ import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } fr
 import { CaseRequirements } from "./Requirements";
 import { SaveAsTemplate, TemplatePicker } from "./Templates";
 import { SharedStepsModal } from "./SharedSteps";
+import { WatchButton } from "./Notifications";
 import { DatasetsModal, ParamsEditor, paramsBody, paramsForm, paramsOf, ParamsView } from "./Params";
 import { ReviewBlock, statusOptions, useMyReviews, useReviewGate } from "./Review";
 import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, Modal, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
@@ -466,6 +467,7 @@ function CaseDrawer({ c, onClose, onEdit, onDelete, onBug }: { c: TestCase; onCl
         <div className="view-block"><span className="label">Изменил</span><Who login={c.updatedBy} /><span className="muted">{fmt(c.updated)}</span></div>
       </div>
       <Versions c={c} />
+      <div><WatchButton pid={p} kind="cases" num={c.num} /></div>
       <Comments list={comments} postUrl={`${paths.testCase(p, c.num)}/comments`} />
       {resetting && (
         <Confirm title="Снять все отметки?" text={`Все ${done} отмеченных пунктов станут невыполненными — у всех участников.`} action="Снять"

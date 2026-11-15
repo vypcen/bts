@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { ReleaseSelect } from "./Releases";
+import { WatchButton } from "./Notifications";
 import { FieldsEditor, FieldsView, missingRequired, TagInput, Tags, useFields, useProjectTags } from "../casekit";
 import { AI_NOTE, AiBar, useAi, useAiReady } from "../ai";
 import { api, paths } from "../api";
@@ -262,6 +263,7 @@ function BugDrawer({ bug, onClose, onEdit }: { bug: Bug; onClose: () => void; on
         <div className="view-block"><span className="label">Создал</span><Who login={bug.createdBy} /><span className="muted">{fmt(bug.created)}</span></div>
         <div className="view-block"><span className="label">Изменил</span><Who login={bug.updatedBy} /><span className="muted">{fmt(bug.updated)}</span></div>
       </div>
+      <div><WatchButton pid={p} kind="bugs" num={bug.num} /></div>
       <Comments list={comments} postUrl={`${paths.bug(p, bug.num)}/comments`} />
 
       {dupOpen && <DuplicateModal bug={bug} onClose={() => setDupOpen(false)} />}

@@ -5,6 +5,7 @@ const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const events = require("./events");
 const releases = require("./releases");
+const notify = require("./notify");
 const { wrap, str, tooLong, num } = require("./util");
 
 const SEVERITIES = ["blocker", "critical", "major", "minor"];
@@ -89,11 +90,13 @@ router.post("/bugs", wrap(async (req, res) => {
       "INSERT INTO bug_status_log(bug_id, from_status, to_status, changed_by) SELECT id, NULL, 'new', $3 FROM bugs WHERE project_key=$1 AND num=$2",
       [key, n, req.user.id]
     );
-    return { n };
+    const bugId = (await db.query("SELECT id FROM bugs WHERE project_key=$1 AND num=$2", [key, n])).rows[0].id;
+    return { n, bugId, assignee };
   });
   if (out.error) return res.status(out.status).json({ error: out.error });
   broadcast("bugs");
   events.emit(key, "bug.created", { bug: await events.snap.bug(key, out.n) }, req.user);
+  await notify.onBugCreated(req, { bugId: out.bugId, num: out.n, title: b.title, assigneeId: out.assignee }).catch((e) => console.error("[notify]", e.message));
   res.status(201).json({ num: out.n });
 }));
 
@@ -146,6 +149,9 @@ router.patch("/bugs/:num", wrap(async (req, res) => {
   });
   broadcast("bugs");
   const bug = await events.snap.bug(key, n);
+  const nf = (p) => p.catch((e) => console.error("[notify]", e.message));
+  if (assignee && assignee !== cur.assignee_id) await nf(notify.onBugAssigned(req, { bugId: cur.id, num: n, title: b.title, assigneeId: assignee }));
+  if (status !== cur.status) await nf(notify.onBugStatus(req, { bugId: cur.id, num: n, title: b.title, from: cur.status, to: status }));
   if (status !== cur.status) events.emit(key, "bug.status", { bug, from: cur.status, to: status }, req.user);
   else events.emit(key, "bug.updated", { bug }, req.user);
   res.json({ ok: true });

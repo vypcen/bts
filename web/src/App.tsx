@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Bell } from "./views/Notifications";
 import { api } from "./api";
 import { go, href, useRoute } from "./router";
 import { useStore } from "./store";
@@ -101,6 +102,7 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
           <span className="dot" />
           {liveError ? "Нет связи" : "Онлайн"}
         </span>
+        {me && <Bell />}
         <a className="btn ghost" href={href("help", "user")} style={{ textDecoration: "none" }} title="Руководства пользователя и администратора, API">Справка</a>
         {me?.role === "admin" && <a className="btn" href={href("users")} style={{ textDecoration: "none" }}>Пользователи</a>}
         {me?.role === "admin" && <a className="btn" href={href("settings")} style={{ textDecoration: "none" }} title="Подключение языковой модели">Настройки</a>}

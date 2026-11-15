@@ -3,6 +3,7 @@
 const express = require("express");
 const { pool } = require("./db");
 const { broadcast } = require("./live");
+const notify = require("./notify");
 const { isAdmin } = require("./access");
 const { wrap, str, num } = require("./util");
 
@@ -26,10 +27,12 @@ for (const [kind, o] of Object.entries(OWNERS)) {
   router.post(`/${kind}/:num/comments`, wrap(async (req, res) => {
     const { text, error } = readText(req.body);
     if (error) return res.status(400).json({ error });
-    const { rows } = await pool.query(`SELECT id FROM ${o.table} WHERE project_key=$1 AND num=$2`, [req.params.key, num(req.params.num)]);
+    const { rows } = await pool.query(`SELECT id, title FROM ${o.table} WHERE project_key=$1 AND num=$2`, [req.params.key, num(req.params.num)]);
     if (!rows[0]) return res.status(404).json({ error: o.missing });
     const r = await pool.query(`INSERT INTO comments(${o.col}, author_id, body) VALUES ($1,$2,$3) RETURNING id`, [rows[0].id, req.user.id, text]);
     broadcast("comments");
+    // @упоминания и подписчики (I-02, I-03); ошибка уведомлений не отменяет комментарий
+    await notify.onComment(req, { kind, ownerId: rows[0].id, ownerNum: num(req.params.num), title: rows[0].title, text }).catch((e) => console.error("[notify]", e.message));
     res.status(201).json({ id: r.rows[0].id });
   }));
 }

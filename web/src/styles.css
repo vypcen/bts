@@ -419,3 +419,19 @@ section>h3{margin:18px 0 8px}
 .drawer.docked{position:sticky;top:12px;height:calc(100vh - 24px);width:auto;z-index:auto;border:1px solid var(--line);border-radius:8px;animation:none}
 .kbd-hint{align-self:center}
 @media (max-width:900px){.exec-layout{grid-template-columns:1fr}.exec-list{position:static;max-height:240px}.drawer.docked{position:static;height:auto}}
+
+/* уведомления */
+.bell{position:relative}
+.bell-n{display:inline-block;min-width:18px;padding:0 5px;margin-left:2px;border-radius:999px;background:var(--crit);color:#fff;font-size:11px;font-weight:600;line-height:18px;text-align:center}
+.bell-panel{position:absolute;right:0;top:calc(100% + 6px);width:min(420px,92vw);max-height:70vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);z-index:30}
+.bell-head{display:flex;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface)}
+.bell-panel ul{list-style:none;margin:0;padding:0}
+.bell-panel li+li{border-top:1px solid var(--line)}
+.bell-panel li button{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;background:none;border:0;padding:10px 12px;font:inherit;color:inherit;cursor:pointer}
+.bell-panel li.unread{background:var(--accent-soft)}
+.bell-panel .t{font-size:14px;overflow-wrap:anywhere}
+.bell-panel .b{overflow-wrap:anywhere}
+.mention{color:var(--accent);font-weight:600}
+.mention-list{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:6px;background:var(--surface);max-width:360px}
+.mention-list button{text-align:left;background:none;border:0;padding:6px 10px;font:inherit;color:inherit;cursor:pointer}
+.mention-list button:hover{background:var(--accent-soft)}

@@ -469,3 +469,27 @@ test("конфигурации: справочник в настройках, п
   await expect(page.locator(".modal").getByRole("link", { name: "Firefox" })).toBeVisible();
   await expect(page.locator(".modal").getByText("Кросс-браузерный вход")).toBeVisible();
 });
+
+test("уведомления: упоминание через подсказку, колокольчик у упомянутого, переход по уведомлению", async ({ page, browser }) => {
+  await login(page);
+  const api = page.request;
+  const n = (await (await api.post("/api/projects/LK/bugs", { data: { title: "Колокольчик E2E", severity: "minor" } })).json()).num;
+  await page.goto(`/#/p/LK/bugs/${n}`);
+  const d = page.locator("aside.drawer");
+  await expect(d.getByRole("button", { name: /Слежу/ })).toBeVisible();
+  const box = d.getByLabel("Новый комментарий");
+  await box.fill("Посмотри, @adm");
+  await d.getByRole("option", { name: /@admin/ }).click();
+  await expect(box).toHaveValue("Посмотри, @admin ");
+  await box.press("Control+Enter");
+  await expect(d.locator(".mention", { hasText: "@admin" })).toBeVisible();
+
+  const ctx = await browser.newContext();
+  const ap = await ctx.newPage();
+  await login(ap, "admin");
+  await ap.goto("/#/");
+  await ap.getByRole("button", { name: /Уведомления: непрочитанных/ }).click();
+  await ap.getByRole("dialog", { name: "Уведомления" }).getByText(/упомянул\(а\) вас в LK-B/).first().click();
+  await expect(ap).toHaveURL(new RegExp(`#/p/LK/bugs/${n}$`));
+  await ctx.close();
+});

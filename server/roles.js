@@ -72,6 +72,8 @@ const RULES = [
   [/^\/templates(\/\d+)?$/, ["cases.edit", "settings"]],
   [/^\/shared-steps(\/\d+)?$/, "cases.edit"],
   [/^\/datasets(\/\d+)?$/, "cases.edit"],
+  // подписка на баг или кейс — любому участнику, даже с правом только на чтение
+  [/^\/watch$/, null],
   [/^\/releases(\/\d+(\/link)?)?$/, "plans.edit"],
   [/^\/configs(\/\d+)?$/, ["settings", "plans.edit"]],
   [/^\/cases\/\d+\/review$/, "cases.edit"],

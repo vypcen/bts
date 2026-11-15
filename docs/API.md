@@ -280,6 +280,14 @@ data: {"type":"bugs","pid":"LK","at":1761040000000}
 
 Нужно разрешение `cases.edit`. Ссылка на блок другого проекта при сохранении кейса — `400`. Блоки переносятся при экспорте и импорте проекта.
 
+### Уведомления
+
+- `GET /api/notifications?unread=1` — `{"items": [{"id", "project", "kind": "assigned|mention|status|comment|review|run", "title", "body", "link": "p/LK/bugs/3", "actor", "created", "read"}], "unread": 3}` (последние 50).
+- `POST /api/notifications/read` — `{"ids": [1, 2]}` или `{"all": true}`.
+- `GET / PUT /api/notifications/settings` — `{"email", "emailOn", "off": ["comment"]}`; в ответе `GET` ещё `kinds` (названия видов) и `smtp` (настроена ли почта).
+- Подписка: `GET /api/projects/:key/watch?kind=bugs|cases&num=3` → `{watching, watchers}`; `POST` `{"kind", "num", "watching": false}` — отписаться (автоподписка больше не вернёт).
+- `@логин` в комментарии уведомляет участника проекта (или админа).
+
 ### Конфигурации: `/api/projects/:key/configs`
 
 - `GET` — `{"groups": [{"id", "name": "Браузер", "options": ["Chrome", "Firefox"], "position"}]}`; `POST` `{name, options}`, `PATCH /:id`, `DELETE /:id` (прогоны сохраняют свою конфигурацию). Нужно `settings` или `plans.edit`.
