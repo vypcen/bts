@@ -455,6 +455,9 @@ export interface CiJob {
 // ---------- аналитика (GET /api/projects/:key/analytics) ----------
 export interface Analytics {
   days: number;
+  // предрасчёт: когда посчитано и идёт ли пересчёт в фоне
+  computedAt?: number;
+  refreshing?: boolean;
   cases: { total: number; ready: number; draft: number; deprecated: number; checklists: number; automated: number; changed: number };
   coverage: { executed: number; executedPct: number | null; automatedPct: number | null };
   execution: { day: string; result: ResultValue; n: number }[];

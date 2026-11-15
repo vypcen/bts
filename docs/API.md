@@ -933,6 +933,8 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 
 `GET /api/projects/:key/analytics?days=30` возвращает `cases`, `coverage`, `execution` (по дням), `runs`, `bugs.open`, `bugs.flow`, `auto.runs`, `auto.topFailing`, `auto.flaky`, `workload`.
 
+Аналитика предрасчитывается: `computedAt` — когда посчитана, `refreshing: true` — данные старше минуты (`ANALYTICS_FRESH_SECONDS`) и уже пересчитываются в фоне, повторите запрос через несколько секунд. `?fresh=1` — посчитать сразу (не чаще 6 раз в минуту на пользователя).
+
 ## Экспорт и импорт проекта
 
 | Запрос | Описание |

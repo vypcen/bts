@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { paths } from "../api";
 import { BUG_STATUSES, find, SEVERITIES } from "../labels";
 import { href } from "../router";
@@ -118,7 +118,19 @@ function MiniBar({ value, max, label }: { value: number; max: number; label: str
 export function AnalyticsTab({ project }: { project: Project }) {
   const [days, setDays] = useState(30);
   const nameOf = useNames();
-  const { value: a, error } = useLoad<Analytics>(paths.analytics(project.id, days));
+  // nonce — перезапросить; fresh — пересчитать сразу (кнопка «Пересчитать»)
+  const [nonce, setNonce] = useState(0);
+  const [fresh, setFresh] = useState(false);
+  const { value: a, error } = useLoad<Analytics>(`${paths.analytics(project.id, days)}${fresh ? "&fresh=1" : ""}${nonce ? `&n=${nonce}` : ""}`);
+  // данные устарели и пересчитываются в фоне — заберём новые через несколько секунд
+  useEffect(() => {
+    if (!a?.refreshing) return;
+    const t = setTimeout(() => {
+      setFresh(false);
+      setNonce((n) => n + 1);
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [a]);
   const p = project.id;
 
   if (error && !a) return <div className="banner">Не удалось загрузить аналитику: {error}</div>;
@@ -138,6 +150,12 @@ export function AnalyticsTab({ project }: { project: Project }) {
         <select id="an-days" className="input" value={days} onChange={(e) => setDays(Number(e.target.value))}>
           {[7, 30, 90, 180, 365].map((d) => <option key={d} value={d}>{d} дней</option>)}
         </select>
+        {a.computedAt && (
+          <span className="small muted" style={{ marginLeft: "auto" }} title="Аналитика считается заранее и обновляется автоматически">
+            {a.refreshing ? "Обновляем… " : ""}данные на {new Date(a.computedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+        <button className="btn ghost sm" onClick={() => { setFresh(true); setNonce((n) => n + 1); }}>Пересчитать</button>
       </div>
 
       <div className="kpis">

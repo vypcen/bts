@@ -80,7 +80,7 @@ test("задача, зависшая на упавшем сервере, вып�
   const [j] = await sql("INSERT INTO jobs(kind, status, attempts, locked_until) VALUES ('housekeeping', 'running', 1, now() - interval '1 minute') RETURNING id");
   await until(async () => (await sql("SELECT status FROM jobs WHERE id=$1", [j.id]))[0].status === "done");
   const kinds = (await sql("SELECT kind FROM job_schedule ORDER BY kind")).map((r) => r.kind);
-  assert.deepEqual(kinds, ["attachments.sweep", "housekeeping", "tracker.sync"]);
+  assert.deepEqual(kinds, ["analytics.precompute", "attachments.sweep", "housekeeping", "tracker.sync"]);
   const overview = (await u.admin.get("/api/admin/jobs")).data;
   assert.ok(overview.kinds.find((k) => k.kind === "housekeeping").every > 0);
 });

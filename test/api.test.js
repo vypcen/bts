@@ -310,6 +310,23 @@ test("автотест связывается с кейсом по номеру 
   assert.equal((Array.isArray(again) ? again : again.items || again.tests).find((x) => x.name === "Оплата").caseNum, d);
 });
 
+test("аналитика: предрасчёт, ответ из кэша, пересчёт по кнопке", async () => {
+  const first = await u.viewer.get("/api/projects/LK/analytics?days=180");
+  assert.equal(first.status, 200);
+  assert.ok(first.data.computedAt > 0);
+  assert.equal(first.data.refreshing, false);
+  const total = first.data.cases.total;
+  // новый кейс: в течение минуты аналитика отдаётся из кэша, без пересчёта
+  await u.tester.post("/api/projects/LK/cases", { title: "Для аналитики", priority: "low", status: "draft" });
+  const cached = await u.viewer.get("/api/projects/LK/analytics?days=180");
+  assert.equal(cached.data.computedAt, first.data.computedAt);
+  assert.equal(cached.data.cases.total, total);
+  // «Пересчитать»
+  const fresh = await u.viewer.get("/api/projects/LK/analytics?days=180&fresh=1");
+  assert.equal(fresh.data.cases.total, total + 1);
+  assert.ok(fresh.data.computedAt >= first.data.computedAt);
+});
+
 test("тест-планы: динамический фильтр, блокировка, прогон по плану", async () => {
   let r = await u.tester.post("/api/projects/LK/plans", { title: "Высокий приоритет", mode: "dynamic", filter: { priorities: ["high"], statuses: ["ready", "draft"] } });
   assert.equal(r.status, 201);

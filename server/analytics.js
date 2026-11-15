@@ -1,14 +1,20 @@
 // Аналитика проекта для дашборда. Монтируется на /api/projects/:key. ?days=30 — период (7…365).
 // Всё считается в базе одним набором запросов: в браузер уходят только агрегаты.
+//
+// Предрасчёт: готовый ответ хранится в analytics_cache. Свежий (моложе FRESH_MS) отдаётся как есть;
+// постарше — тоже отдаётся сразу, а пересчёт уходит в очередь (server/jobs.js); старше MAX_STALE_MS — считаем сразу.
+// Раз в 10 минут очередь пересчитывает аналитику проектов, которую открывали за последнюю неделю.
 const express = require("express");
 const { pool } = require("./db");
+const jobs = require("./jobs");
+const { Limiter, MIN } = require("./limits");
 const { wrap } = require("./util");
 
+const FRESH_MS = Number(process.env.ANALYTICS_FRESH_SECONDS ?? 60) * 1000;
+const MAX_STALE_MS = 60 * 60 * 1000;
 const router = express.Router({ mergeParams: true });
 
-router.get("/analytics", wrap(async (req, res) => {
-  const key = req.params.key;
-  const days = Math.min(365, Math.max(7, Number(req.query.days) || 30));
+async function compute(key, days) {
   // PostgreSQL не принимает лишние параметры: $2 (период) передаём только тем запросам, где он есть
   const q = (sql) => pool.query(sql, sql.includes("$2") ? [key, days] : [key]).then((r) => r.rows);
 
@@ -72,7 +78,7 @@ router.get("/analytics", wrap(async (req, res) => {
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : null);
   const autoFinished = autoRuns.filter((r) => r.state === "finished" && r.total);
   const lastAuto = autoFinished[0];
-  res.json({
+  return {
     days,
     cases: cases[0],
     coverage: {
@@ -98,7 +104,55 @@ router.get("/analytics", wrap(async (req, res) => {
       flaky: flaky.map((t) => ({ id: t.id, suite: t.suite, name: t.name, score: t.flaky_score, reason: t.flaky_reason, quarantined: t.quarantined, since: t.flaky_since.getTime() })),
     },
     workload,
-  });
+  };
+}
+
+// Посчитать и сохранить
+async function refresh(key, days) {
+  const started = Date.now();
+  const data = await compute(key, days);
+  const ms = Date.now() - started;
+  const { rows } = await pool.query(
+    `INSERT INTO analytics_cache(project_key, days, data, computed_at, compute_ms) VALUES ($1,$2,$3,now(),$4)
+     ON CONFLICT (project_key, days) DO UPDATE SET data=EXCLUDED.data, computed_at=now(), compute_ms=EXCLUDED.compute_ms
+     RETURNING computed_at`,
+    [key, days, JSON.stringify(data), ms]
+  );
+  return { data, computedAt: rows[0].computed_at.getTime() };
+}
+
+jobs.define("analytics.refresh", ({ key, days }) => refresh(key, days), { maxAttempts: 2, title: "Пересчёт аналитики" });
+// фоновый предрасчёт: проекты, чью аналитику открывали за неделю и которая устарела
+jobs.define("analytics.precompute", async () => {
+  const { rows } = await pool.query(
+    `SELECT c.project_key, c.days FROM analytics_cache c JOIN projects p ON p.key=c.project_key AND p.deleted_at IS NULL
+     WHERE c.requested_at > now() - interval '7 days' AND c.computed_at < now() - make_interval(secs => $1::float / 1000)`,
+    [FRESH_MS]
+  );
+  for (const r of rows) await jobs.enqueue("analytics.refresh", { key: r.project_key, days: r.days }, { key: `analytics:${r.project_key}:${r.days}` });
+}, { maxAttempts: 1, title: "Предрасчёт аналитики" });
+jobs.every("analytics.precompute", 10 * 60 * 1000);
+
+// «Пересчитать» в интерфейсе — не чаще 6 раз в минуту на пользователя
+const forceLimit = new Limiter(6, MIN);
+
+router.get("/analytics", wrap(async (req, res) => {
+  const key = req.params.key;
+  const days = Math.min(365, Math.max(7, Number(req.query.days) || 30));
+  const force = req.query.fresh === "1" && forceLimit.take(String(req.user.id));
+  const { rows } = await pool.query(
+    "UPDATE analytics_cache SET requested_at=now() WHERE project_key=$1 AND days=$2 RETURNING data, computed_at",
+    [key, days]
+  );
+  const cached = rows[0];
+  const age = cached ? Date.now() - cached.computed_at.getTime() : Infinity;
+  if (!force && age < MAX_STALE_MS) {
+    // устарело — пересчёт в фоне, а пользователь сразу получает то, что есть
+    if (age >= FRESH_MS) await jobs.enqueue("analytics.refresh", { key, days }, { key: `analytics:${key}:${days}` });
+    return res.json({ ...cached.data, computedAt: cached.computed_at.getTime(), refreshing: age >= FRESH_MS });
+  }
+  const r = await refresh(key, days);
+  res.json({ ...r.data, computedAt: r.computedAt, refreshing: false });
 }));
 
-module.exports = router;
+module.exports = { router, compute, refresh };
