@@ -12,6 +12,7 @@ const events = require("./events");
 const { distribute } = require("./distribute");
 const { isAdmin } = require("./access");
 const releases = require("./releases");
+const configs = require("./configs");
 const { wrap, str, tooLong, num, HttpError } = require("./util");
 
 const PRIORITIES = ["critical", "high", "medium", "low"];
@@ -267,7 +268,8 @@ router.get("/plans/:num/export", wrap(async (req, res) => {
   caseio.sendCsv(res, rows.map((c) => caseio.csvRow(key, c, pathOf)), `${base} ${plan.title}.csv`.replace(/[\\/:*?"<>|]/g, "_"), `${base}.csv`);
 }));
 
-// Прогон из плана: {"title", "build", "env", "assign": {"users": ["anna"], "strategy": "balanced"}}
+// Прогон из плана: {"title", "build", "env", "assign": {"users": ["anna"], "strategy": "balanced"}}.
+// {"configs": [{"Браузер": "Chrome"}, {"Браузер": "Firefox"}]} — по прогону на каждую конфигурацию (пачка с общей матрицей)
 router.post("/plans/:num/runs", wrap(async (req, res) => {
   const title = str(req.body.title, 300);
   if (!title) return res.status(400).json({ error: "Укажите название прогона" });
@@ -276,30 +278,49 @@ router.post("/plans/:num/runs", wrap(async (req, res) => {
   const fields = cf.fields;
   const rel = await releases.releaseId(pool, req.params.key, req.body.release);
   if (rel.error) return res.status(400).json({ error: rel.error });
+  // конфигурации: без них — один прогон; с ними — пачка, по прогону на каждую
+  let configsList = [null];
+  if (Array.isArray(req.body.configs) && req.body.configs.length) {
+    if (req.body.configs.length > configs.MAX_COMBOS) return res.status(400).json({ error: `Не больше ${configs.MAX_COMBOS} конфигураций за раз` });
+    configsList = [];
+    for (const c of req.body.configs) {
+      const r = await configs.readConfig(pool, req.params.key, c);
+      if (r.error) return res.status(400).json({ error: r.error });
+      if (r.config && !configsList.some((x) => JSON.stringify(x) === JSON.stringify(r.config))) configsList.push(r.config);
+    }
+    if (!configsList.length) configsList = [null];
+  }
+  const batch = configsList.length > 1 ? require("crypto").randomUUID() : null;
   const out = await tx(async (db) => {
     const plan = await mustPlan(db, req);
     const key = plan.project_key;
     const list = await planCases(db, plan);
     if (!list.length) throw new HttpError(400, "В плане нет кейсов");
-    const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [key]);
-    const n = seq.rows[0].run_seq;
-    const run = await db.query(
-      // релиз: прислали — его, иначе триггер возьмёт релиз плана
-      "INSERT INTO test_runs(project_key, num, title, build, environment, plan_id, created_by, fields, release_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
-      [key, n, title, str(req.body.build, 200), str(req.body.env, 500), plan.id, req.user.id, fields, rel.id]
-    );
-    // у заблокированного плана в прогон идут зафиксированные версии, иначе триггер возьмёт текущие
-    await db.query(
-      "INSERT INTO run_results(run_id, case_id, case_version) SELECT $1, * FROM unnest($2::int[], $3::int[])",
-      [run.rows[0].id, list.map((c) => c.id), list.map((c) => (plan.locked ? c.version : null))]
-    );
-    const assign = req.body.assign;
-    const dist = assign?.users?.length ? await distribute(db, key, run.rows[0].id, assign.users, assign.strategy || "balanced") : null;
-    return { n, dist };
+    const made = [];
+    for (const cfg of configsList) {
+      const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [key]);
+      const n = seq.rows[0].run_seq;
+      const run = await db.query(
+        // релиз: прислали — его, иначе триггер возьмёт релиз плана
+        `INSERT INTO test_runs(project_key, num, title, build, environment, plan_id, created_by, fields, release_id, config, config_batch)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+        [key, n, cfg && batch ? `${title} — ${configs.label(cfg)}`.slice(0, 300) : title, str(req.body.build, 200), str(req.body.env, 500), plan.id, req.user.id, fields, rel.id,
+          cfg ? JSON.stringify(cfg) : null, batch]
+      );
+      // у заблокированного плана в прогон идут зафиксированные версии, иначе триггер возьмёт текущие
+      await db.query(
+        "INSERT INTO run_results(run_id, case_id, case_version) SELECT $1, * FROM unnest($2::int[], $3::int[])",
+        [run.rows[0].id, list.map((c) => c.id), list.map((c) => (plan.locked ? c.version : null))]
+      );
+      const assign = req.body.assign;
+      const dist = assign?.users?.length ? await distribute(db, key, run.rows[0].id, assign.users, assign.strategy || "balanced") : null;
+      made.push({ n, dist });
+    }
+    return made;
   });
   broadcast("runs");
-  events.emit(req.params.key, "run.created", { run: await events.snap.run(req.params.key, out.n) }, req.user);
-  res.status(201).json({ num: out.n, distribution: out.dist });
+  for (const m of out) events.emit(req.params.key, "run.created", { run: await events.snap.run(req.params.key, m.n) }, req.user);
+  res.status(201).json({ num: out[0].n, distribution: out[0].dist, runs: out.map((m) => m.n), batch });
 }));
 
 module.exports = { router, byFilter, readFilter, planCases };

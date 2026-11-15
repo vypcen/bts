@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { combos, ConfigPicker, useConfigs } from "./Configs";
 import { ReleaseSelect } from "./Releases";
 import { TagInput, useProjectTags } from "../casekit";
 import { api, paths } from "../api";
@@ -213,12 +214,15 @@ function PlanRunModal({ pid, plan, onClose }: { pid: string; plan: Plan; onClose
   const { write, toast } = useStore();
   const [f, setF] = useState({ title: plan.title, build: "", env: "" });
   const [assign, setAssign] = useState<Assign>({ users: [], strategy: "balanced" });
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const groups = useConfigs(pid);
+  const cfgs = combos(groups, picked);
   async function submit(e: FormEvent) {
     e.preventDefault();
-    let num = 0;
-    if (await write(async () => { num = (await api<{ num: number }>("POST", `${paths.plan(pid, plan.num)}/runs`, { ...f, assign })).num; })) {
-      toast(`Создан ${pid}-R${num}`);
-      go("p", pid, "runs", num);
+    let out = { num: 0, runs: [] as number[] };
+    if (await write(async () => { out = await api<{ num: number; runs: number[] }>("POST", `${paths.plan(pid, plan.num)}/runs`, { ...f, assign, configs: cfgs }); })) {
+      toast(out.runs.length > 1 ? `Создано прогонов: ${out.runs.length} (${out.runs.map((n) => `${pid}-R${n}`).join(", ")})` : `Создан ${pid}-R${out.num}`);
+      go("p", pid, "runs", out.num);
     }
   }
   return (
@@ -231,10 +235,13 @@ function PlanRunModal({ pid, plan, onClose }: { pid: string; plan: Plan; onClose
           <div className="field"><label htmlFor="pr-build">Сборка</label><input id="pr-build" className="input mono" value={f.build} onChange={(e) => setF({ ...f, build: e.target.value })} /></div>
           <div className="field"><label htmlFor="pr-env">Окружение</label><input id="pr-env" className="input" value={f.env} onChange={(e) => setF({ ...f, env: e.target.value })} /></div>
         </div>
+        <ConfigPicker pid={pid} picked={picked} onChange={setPicked} />
         <AssignPicker pid={pid} value={assign} onChange={setAssign} />
         <div className="acts">
           <button type="button" className="btn" onClick={onClose}>Отмена</button>
-          <button className="btn primary" type="submit">Создать прогон ({plan.caseCount})</button>
+          <button className="btn primary" type="submit" disabled={cfgs.length > 50}>
+            {cfgs.length > 1 ? `Создать ${cfgs.length} прогонов (по ${plan.caseCount} кейсов)` : `Создать прогон (${plan.caseCount})`}
+          </button>
         </div>
       </form>
     </Modal>

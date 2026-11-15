@@ -10,6 +10,7 @@ import type { Attachment, CaseVersion, Project, Result, ResultValue, Run, RunRes
 import { Confirm, Drawer, fmt, FullCase, fullCase, Modal, PagedRows, Pill, Prio, ResultBar, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { AssignPicker, executorsOf, type Assign } from "./Plans";
 import { substSteps } from "./Params";
+import { ConfigChips, MatrixModal, useConfigs } from "./Configs";
 import { Attachments } from "./Attachments";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { CasePicker, RunModal } from "./Runs";
@@ -39,6 +40,8 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const [who, setWho] = useState("");
   const nameOf = useNames();
   const [bugDraft, setBugDraft] = useState<BugDraft | null>(null);
+  const [matrix, setMatrix] = useState(false);
+  const cfgGroups = useConfigs(p);
   // режим выполнения: список кейсов слева, карточка кейса справа, горячие клавиши; выбор запоминается в браузере
   const [exec, setExecState] = useState(() => { try { return localStorage.getItem("tb.runExec") === "1"; } catch { return false; } });
   const setExec = (v: boolean) => { setExecState(v); try { localStorage.setItem("tb.runExec", v ? "1" : "0"); } catch { /* приватный режим */ } };
@@ -106,6 +109,12 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
             {run.env && <> · {run.env}</>} · создал <Who login={run.createdBy} /> {fmt(run.created)}
             {run.rerunOf && <> · перезапуск <a href={href("p", p, "runs", run.rerunOf)}>{p}-R{run.rerunOf}</a></>}
           </p>
+          {(run.config || run.batch) && (
+            <p style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "4px 0" }}>
+              <ConfigChips cfg={run.config} groups={cfgGroups} />
+              {run.batch && <button className="btn sm" onClick={() => setMatrix(true)}>Матрица конфигураций</button>}
+            </p>
+          )}
           <FieldsView entity="run" values={run.fields} />
         </div>
         <div className="spacer" />
@@ -258,6 +267,7 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
         )}</FullCase>
       ) : null}
       {modal === "edit" && <RunModal pid={p} run={run} onClose={() => setModal(null)} />}
+      {matrix && run.batch && <MatrixModal pid={p} batch={run.batch} onClose={() => setMatrix(false)} />}
       {modal === "add" && <AddCasesModal run={run} inRunNums={results.map((r) => r.caseNum)} onClose={() => setModal(null)} />}
       {modal === "distribute" && <DistributeModal run={run} onClose={() => setModal(null)} />}
       {modal === "rerun" && <RerunModal run={run} onClose={() => setModal(null)} />}

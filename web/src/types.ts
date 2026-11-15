@@ -121,7 +121,11 @@ export interface Run {
   fields: FieldValues;
   rerunOf?: number | null; // номер прогона, из упавших кейсов которого создан этот
   release?: number | null; // номер релиза (или спринта)
+  config?: Record<string, string> | null; // конфигурация: {"Браузер": "Chrome"}
+  batch?: string | null; // прогоны одного плана на разные конфигурации — общая матрица
 }
+
+export interface ConfigGroup { id: number; name: string; options: string[]; position: number }
 
 // Релиз или спринт (E-01)
 export type ReleaseStatus = "planned" | "active" | "released" | "cancelled";

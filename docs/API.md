@@ -280,6 +280,13 @@ data: {"type":"bugs","pid":"LK","at":1761040000000}
 
 Нужно разрешение `cases.edit`. Ссылка на блок другого проекта при сохранении кейса — `400`. Блоки переносятся при экспорте и импорте проекта.
 
+### Конфигурации: `/api/projects/:key/configs`
+
+- `GET` — `{"groups": [{"id", "name": "Браузер", "options": ["Chrome", "Firefox"], "position"}]}`; `POST` `{name, options}`, `PATCH /:id`, `DELETE /:id` (прогоны сохраняют свою конфигурацию). Нужно `settings` или `plans.edit`.
+- Прогон: `POST /runs` и `PATCH /runs/:num` принимают `config: {"Браузер": "Chrome", "ОС": "Windows"}` (`null` — без конфигурации); группы и варианты — из справочника, иначе `400`. В состоянии у прогона `config` и `batch`.
+- `POST /plans/:num/runs` с `configs: [{...}, {...}]` (до 50) создаёт по прогону на каждую конфигурацию с общим `batch`; ответ `{num, runs: [12, 13], batch}`. Повторы отбрасываются.
+- `GET /runs/matrix/:batch` — `{runs: [{num, title, label, counts}], cases: [{num, title, results: {"12": "passed"}}]}`.
+
 ### Релизы: `/api/projects/:key/releases`
 
 - `GET` — `{"items": [{"num", "ref": "LK-V1", "name", "status": "planned|active|released|cancelled", "parent": null, "starts": "2026-11-01", "due": "2026-12-31", "released", "runs", "openBugs", "cases": {"total", "done", "passed"}}]}`. `parent` — номер релиза у спринта.

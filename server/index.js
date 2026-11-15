@@ -629,7 +629,7 @@ app.post("/api/projects/:key/cases/:num/versions/:v/restore", auth.requireUser, 
 // подсказки языковой модели в формах; запись (черновики бага и кейса) — только тестировщикам, как и сами формы
 app.use("/api/projects/:key/ai", auth.requireUser, require("./assist"));
 app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, autotests.projectRouter, attachments.projectRouter);
-app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, review.router, datasets.router, require("./releases").router, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, review.router, datasets.router, require("./releases").router, require("./configs").router, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"), require("./personal").router, audit.router, trash.adminRouter);

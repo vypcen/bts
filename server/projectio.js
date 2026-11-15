@@ -29,7 +29,7 @@ async function exportProject(key, withFiles) {
   // значения пользовательских полей — по названию поля: id в другой установке будут другими
   const fieldName = new Map(customFields.map((f) => [String(f.id), f.name]));
   const byName = (vals) => Object.fromEntries(Object.entries(vals || {}).filter(([id]) => fieldName.has(id)).map(([id, v]) => [fieldName.get(id), v]));
-  const [requirements, reqCases, templates, sharedSteps, datasetList, releaseList, releaseLinks] = await Promise.all([
+  const [requirements, reqCases, templates, sharedSteps, datasetList, releaseList, releaseLinks, configGroups] = await Promise.all([
     q("SELECT r.*, u.login AS cb FROM requirements r LEFT JOIN users u ON u.id=r.created_by WHERE r.project_key=$1 ORDER BY r.num"),
     q("SELECT r.num AS req, c.num FROM requirement_cases rc JOIN requirements r ON r.id=rc.requirement_id JOIN test_cases c ON c.id=rc.case_id WHERE r.project_key=$1"),
     q("SELECT kind, name, data, is_default FROM templates WHERE project_key=$1 ORDER BY id"),
@@ -39,6 +39,7 @@ async function exportProject(key, withFiles) {
     q(`SELECT 'runs' AS kind, t.num, v.num AS rel FROM test_runs t JOIN releases v ON v.id=t.release_id WHERE t.project_key=$1
        UNION ALL SELECT 'plans', p.num, v.num FROM test_plans p JOIN releases v ON v.id=p.release_id WHERE p.project_key=$1
        UNION ALL SELECT 'bugs', b.num, v.num FROM bugs b JOIN releases v ON v.id=b.release_id WHERE b.project_key=$1`),
+    q("SELECT name, options, position FROM config_groups WHERE project_key=$1 ORDER BY position, id"),
   ]);
   // в шаблонах пользовательские поля — по названию, как в кейсах
   const tplData = (d) => (d.fields ? { ...d, fields: byName(d.fields) } : d);
@@ -109,6 +110,7 @@ async function exportProject(key, withFiles) {
     sharedSteps: sharedSteps.map((s) => ({ id: s.id, num: s.num, title: s.title, stepList: s.step_list })),
     // наборы данных: в кейсах ссылка dataset: id — при импорте id пересчитываются
     datasets: datasetList.map((d) => ({ id: d.id, num: d.num, name: d.name, columns: d.columns, rows: d.rows })),
+    configGroups: configGroups.map((g) => ({ name: g.name, options: g.options, position: g.position })),
     // релизы и спринты; связи — номерами прогонов, планов и багов
     releases: releaseList.map((r) => ({
       num: r.num, parent: r.parent_num ?? null, name: r.name, description: r.description, status: r.status,
@@ -129,6 +131,7 @@ async function exportProject(key, withFiles) {
     })),
     runs: runs.map((r) => ({
       num: r.num, title: r.title, build: r.build, env: r.environment, state: r.state, plan: r.plan_num, createdBy: r.cb, fields: byName(r.fields),
+      config: r.config || undefined, batch: r.config_batch || undefined,
       created: iso(r.created_at), closed: iso(r.closed_at),
       results: results.filter((x) => x.run_num === r.num).map((x) => ({
         case: x.case_num, result: x.result, comment: x.comment, items: x.items, steps: x.step_results, executedBy: x.eb, executed: iso(x.executed_at),
@@ -434,6 +437,18 @@ async function importProject(data, { key, name }, user) {
           );
           if (ar[0]) await attach(x.attachments, { auto: ar[0].id });
         }
+      }
+      // конфигурации: справочник и конфигурации прогонов (пачки сохраняют общий идентификатор)
+      for (const [i, g] of arr(data.configGroups).entries()) {
+        const options = arr(g.options).map((o) => str(String(o), 100)).filter(Boolean);
+        if (str(g.name, 100) && options.length) {
+          await db.query("INSERT INTO config_groups(project_key, name, options, position) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING", [key, str(g.name, 100), JSON.stringify(options), num(g.position) ?? i]);
+        }
+      }
+      for (const r of arr(data.runs)) {
+        if (!r.config || typeof r.config !== "object") continue;
+        const batch = typeof r.batch === "string" && /^[0-9a-f-]{36}$/.test(r.batch) ? r.batch : null;
+        await db.query("UPDATE test_runs SET config=$3, config_batch=$4 WHERE project_key=$1 AND num=$2", [key, num(r.num), JSON.stringify(r.config), batch]);
       }
       // релизы: сначала без родителя, затем спринты; связи с прогонами, планами и багами — по номерам
       const rels = arr(data.releases).filter((r) => num(r.num) && str(r.name, 200));

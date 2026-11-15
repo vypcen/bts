@@ -122,7 +122,7 @@ test("модель кейса: поле в настройках, кейс со �
   await page.goto("/#/p/LK/integrations");
   await page.getByRole("button", { name: "+ Поле" }).click();
   await page.getByLabel("Название *").fill("Компонент");
-  await page.getByLabel("Варианты").fill("Оплата\nВход");
+  await page.locator(".modal").getByLabel("Варианты").fill("Оплата\nВход");
   await page.locator(".modal").getByRole("button", { name: "Добавить" }).click();
   await expect(page.getByText("Оплата, Вход")).toBeVisible();
 
@@ -445,4 +445,27 @@ test("режим выполнения прогона: список и кейс �
   await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results.find((x) => x.caseNum === b).result).toBe("failed");
   await page.getByRole("button", { name: "Обычный вид" }).click();
   await expect(page.getByRole("table")).toBeVisible();
+});
+
+test("конфигурации: справочник в настройках, прогон по плану на две конфигурации, матрица", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  await page.goto("/#/p/LK/integrations");
+  await page.getByLabel("Группа", { exact: true }).fill("Браузер E2E");
+  await page.getByLabel("Варианты через запятую").fill("Chrome, Firefox");
+  await page.getByRole("button", { name: "+ Группа" }).click();
+  await expect(page.getByLabel("Варианты: Браузер E2E")).toHaveValue("Chrome, Firefox");
+  const c = (await (await api.post("/api/projects/LK/cases", { data: { title: "Кросс-браузерный вход", priority: "high", status: "ready", steps: "a" } })).json()).num;
+  const plan = (await (await api.post("/api/projects/LK/plans", { data: { title: "Кросс-браузер E2E", mode: "static", caseNums: [c] } })).json()).num;
+  await page.goto(`/#/p/LK/plans/${plan}`);
+  await page.getByRole("button", { name: "Создать прогон", exact: true }).click();
+  const modal = page.locator(".modal");
+  await modal.getByLabel("Chrome").check();
+  await modal.getByLabel("Firefox").check();
+  await expect(modal.getByText("Будет создано прогонов: 2")).toBeVisible();
+  await modal.getByRole("button", { name: "Создать 2 прогонов (по 1 кейсов)" }).click();
+  await expect(page.getByRole("heading", { name: /Кросс-браузер E2E — Chrome/ })).toBeVisible();
+  await page.getByRole("button", { name: "Матрица конфигураций" }).click();
+  await expect(page.locator(".modal").getByRole("link", { name: "Firefox" })).toBeVisible();
+  await expect(page.locator(".modal").getByText("Кросс-браузерный вход")).toBeVisible();
 });

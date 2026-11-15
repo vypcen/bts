@@ -1,4 +1,5 @@
 import { Fragment, useState, type FormEvent } from "react";
+import { ConfigChips, ConfigSelect, useConfigs } from "./Configs";
 import { ReleaseSelect, ReleaseTag, useReleases } from "./Releases";
 import { api, paths } from "../api";
 import { FieldsEditor, missingRequired, useFields } from "../casekit";
@@ -16,6 +17,7 @@ export function RunsTab({ project }: { project: Project }) {
   const [creating, setCreating] = useState(false);
   const runs = data.runs.filter((r) => r.pid === p).sort((a, b) => b.num - a.num);
   const releases = useReleases(p);
+  const cfgGroups = useConfigs(p);
 
   return (
     <>
@@ -45,7 +47,7 @@ export function RunsTab({ project }: { project: Project }) {
                 return (
                   <tr key={r.id} className="click" onClick={() => go("p", p, "runs", r.num)}>
                     <td className="id"><a href={href("p", p, "runs", r.num)} style={{ color: "inherit" }}>{r.id}</a></td>
-                    <td className="title">{r.title} <span onClick={(e) => e.stopPropagation()}><ReleaseTag pid={r.pid} num={r.release} list={releases} /></span>{r.env && <div className="muted small" style={{ fontWeight: 400 }}>{r.env}</div>}</td>
+                    <td className="title">{r.title} <span onClick={(e) => e.stopPropagation()}><ReleaseTag pid={r.pid} num={r.release} list={releases} /> <ConfigChips cfg={r.config} groups={cfgGroups} /></span>{r.env && <div className="muted small" style={{ fontWeight: 400 }}>{r.env}</div>}</td>
                     <td className="mono small">{r.build || <span className="muted">—</span>}</td>
                     <td>
                       <ResultBar counts={c} />
@@ -73,7 +75,7 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
   const { write, toast } = useStore();
   const cases = data.cases.filter((c) => c.pid === pid && c.status !== "deprecated").sort((a, b) => a.num - b.num);
   const lastRun = data.runs.filter((r) => r.pid === pid).sort((a, b) => b.num - a.num)[0];
-  const [f, setF] = useState({ title: run?.title || "", build: run?.build || "", env: run?.env ?? lastRun?.env ?? "", fields: run?.fields || {}, release: String(run?.release ?? "") });
+  const [f, setF] = useState({ title: run?.title || "", build: run?.build || "", env: run?.env ?? lastRun?.env ?? "", fields: run?.fields || {}, release: String(run?.release ?? ""), config: (run?.config || {}) as Record<string, string> });
   const fieldDefs = useFields("run");
   // по умолчанию — все кейсы, готовые к прогону
   const [picked, setPicked] = useState<Set<number>>(() => new Set(cases.filter((c) => c.status === "ready").map((c) => c.num)));
@@ -87,12 +89,12 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
     const missing = missingRequired(fieldDefs, f.fields);
     if (missing) return setErr(missing);
     if (run) {
-      if (await write(() => api("PATCH", paths.run(pid, run.num), { ...f, release: f.release ? Number(f.release) : null }), "Прогон сохранён")) onClose();
+      if (await write(() => api("PATCH", paths.run(pid, run.num), { ...f, release: f.release ? Number(f.release) : null, config: Object.keys(f.config).length ? f.config : null }), "Прогон сохранён")) onClose();
       return;
     }
     if (!picked.size) return setErr("Выберите хотя бы один тест-кейс");
     let num = 0;
-    if (await write(async () => { num = (await api<{ num: number }>("POST", paths.runs(pid), { ...f, release: f.release ? Number(f.release) : null, caseNums: [...picked], assign })).num; })) {
+    if (await write(async () => { num = (await api<{ num: number }>("POST", paths.runs(pid), { ...f, release: f.release ? Number(f.release) : null, config: Object.keys(f.config).length ? f.config : null, caseNums: [...picked], assign })).num; })) {
       toast(`Создан ${pid}-R${num}`);
       onClose();
       go("p", pid, "runs", num);
@@ -110,6 +112,7 @@ export function RunModal({ pid, run, onClose }: { pid: string; run?: Run; onClos
           <div className="field"><label htmlFor="r-env">Окружение</label><input className="input" id="r-env" value={f.env} onChange={set("env")} placeholder="staging, Chrome 130" /></div>
         </div>
         <ReleaseSelect pid={pid} value={f.release} onChange={(release) => setF({ ...f, release })} id="r-release" />
+        <ConfigSelect pid={pid} value={f.config} onChange={(config) => setF({ ...f, config })} />
         <FieldsEditor entity="run" values={f.fields} onChange={(fields) => setF({ ...f, fields })} />
         {!run && <CasePicker cases={cases} picked={picked} setPicked={setPicked} />}
         {!run && <AssignPicker pid={pid} value={assign} onChange={setAssign} />}

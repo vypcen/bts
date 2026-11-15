@@ -7,6 +7,7 @@ const checklist = require("./checklist");
 const events = require("./events");
 const { distribute, executors } = require("./distribute");
 const releases = require("./releases");
+const configs = require("./configs");
 const { wrap, str, tooLong, num } = require("./util");
 
 const RESULTS = ["untested", "passed", "failed", "blocked", "skipped"];
@@ -50,6 +51,8 @@ router.post("/runs", wrap(async (req, res) => {
   if (cf.error) return res.status(400).json({ error: cf.error });
   const rel = await releases.releaseId(pool, req.params.key, req.body.release);
   if (rel.error) return res.status(400).json({ error: rel.error });
+  const cfg = await configs.readConfig(pool, req.params.key, req.body.config);
+  if (cfg.error) return res.status(400).json({ error: cfg.error });
   const out = await tx(async (db) => {
     const seq = await db.query("UPDATE projects SET run_seq=run_seq+1 WHERE key=$1 RETURNING run_seq", [req.params.key]);
     if (!seq.rows[0]) return { status: 404, error: "Проект не найден" };
@@ -59,8 +62,8 @@ router.post("/runs", wrap(async (req, res) => {
     if (notReady) return { status: 409, error: notReady };
     const n = seq.rows[0].run_seq;
     const run = await db.query(
-      "INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, release_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id",
-      [req.params.key, n, r.title, r.build, r.env, req.user.id, cf.fields, rel.id]
+      "INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, release_id, config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id",
+      [req.params.key, n, r.title, r.build, r.env, req.user.id, cf.fields, rel.id, cfg.config ? JSON.stringify(cfg.config) : null]
     );
     await db.query("INSERT INTO run_results(run_id, case_id) SELECT $1, unnest($2::int[])", [run.rows[0].id, ids]);
     // {"assign": {"users": [...], "strategy": "balanced"}} — сразу распределить кейсы
@@ -81,7 +84,7 @@ router.post("/runs/:num/rerun", wrap(async (req, res) => {
   const results = Array.isArray(req.body.results) && req.body.results.length ? req.body.results.filter((r) => RERUN_RESULTS.includes(r)) : ["failed", "blocked"];
   if (!results.length) return res.status(400).json({ error: `results: ${RERUN_RESULTS.join(", ")}` });
   const out = await tx(async (db) => {
-    const { rows } = await db.query("SELECT id, title, build, environment, fields, plan_id FROM test_runs WHERE project_key=$1 AND num=$2", [key, num(req.params.num)]);
+    const { rows } = await db.query("SELECT id, title, build, environment, fields, plan_id, config FROM test_runs WHERE project_key=$1 AND num=$2", [key, num(req.params.num)]);
     const old = rows[0];
     if (!old) return { status: 404, error: "Прогон не найден" };
     const picked = await db.query(
@@ -94,10 +97,11 @@ router.post("/runs/:num/rerun", wrap(async (req, res) => {
     const n = seq.rows[0].run_seq;
     const title = str(req.body.title, 300) || `${old.title.replace(/ — перезапуск( \d+)?$/, "")} — перезапуск`;
     const run = await db.query(
-      `INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, plan_id, rerun_of)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      // конфигурация переносится: перезапуск проверяет то же окружение
+      `INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields, plan_id, rerun_of, config)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
       [key, n, title, req.body.build !== undefined ? str(req.body.build, 200) : old.build, req.body.env !== undefined ? str(req.body.env, 500) : old.environment,
-        req.user.id, old.fields, old.plan_id, old.id]
+        req.user.id, old.fields, old.plan_id, old.id, old.config ? JSON.stringify(old.config) : null]
     );
     await db.query(
       "INSERT INTO run_results(run_id, case_id, assignee_id) SELECT $1, * FROM unnest($2::int[], $3::int[])",
@@ -121,6 +125,11 @@ router.patch("/runs/:num", wrap(async (req, res) => {
   if (cf.error) return res.status(400).json({ error: cf.error });
   const state = req.body.state === undefined ? rows[0].state : req.body.state;
   if (!["open", "closed"].includes(state)) return res.status(400).json({ error: "Неизвестное состояние прогона" });
+  if (req.body.config !== undefined) {
+    const cfg = await configs.readConfig(pool, req.params.key, req.body.config);
+    if (cfg.error) return res.status(400).json({ error: cfg.error });
+    await pool.query("UPDATE test_runs SET config=$3 WHERE project_key=$1 AND num=$2", [req.params.key, n, cfg.config ? JSON.stringify(cfg.config) : null]);
+  }
   if (req.body.release !== undefined) {
     const rel = await releases.releaseId(pool, req.params.key, req.body.release);
     if (rel.error) return res.status(400).json({ error: rel.error });
