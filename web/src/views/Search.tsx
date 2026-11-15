@@ -14,10 +14,14 @@ interface SearchResult {
   autotests: { id: number; pid: string; suite: string; name: string }[];
 }
 
+// Подпись сочетания: на Mac — ⌘K
+export const SEARCH_HOTKEY = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl+K";
+
 export function useSearchHotkey(open: () => void) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      // по физической клавише: при русской раскладке e.key — «л»
+      if ((e.ctrlKey || e.metaKey) && (e.code === "KeyK" || e.key.toLowerCase() === "k")) {
         e.preventDefault();
         open();
       }

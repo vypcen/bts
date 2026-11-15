@@ -116,7 +116,8 @@ tbody tr.click:hover{background:var(--sunken)}
 tbody tr:last-child td{border-bottom:0}
 tbody tr[aria-selected="true"]{background:var(--accent-soft)}
 td.id{font-family:var(--f-mono);font-size:13px;color:var(--muted);white-space:nowrap}
-td.title{font-weight:500}
+td.title{font-weight:500;overflow-wrap:anywhere;min-width:200px}
+td.wrap{overflow-wrap:anywhere;min-width:160px}
 td.actions{text-align:right;white-space:nowrap}
 td.nowrap{white-space:nowrap}
 .nores{text-align:center;padding:28px;cursor:default;color:var(--muted)}

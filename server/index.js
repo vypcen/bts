@@ -31,7 +31,7 @@ const lists = require("./lists");
 const casemodel = require("./casemodel");
 const audit = require("./audit");
 const trash = require("./trash");
-const { wrap, str, num, HttpError } = require("./util");
+const { wrap, str, tooLong, num, HttpError } = require("./util");
 const { Limiter, MIN } = require("./limits");
 const version = require("./version");
 const license = require("./license");
@@ -390,6 +390,7 @@ function readCase(body, prevSteps = [], stepListSent = body.stepList !== undefin
   }
   if (!checklist.KINDS.includes(c.kind)) return { error: "Неизвестный вид: case или checklist" };
   if (!c.title) return { error: c.kind === "checklist" ? "Укажите название чек-листа" : "Укажите название тест-кейса" };
+  if (tooLong(body.title, 500)) return { error: tooLong(body.title, 500) };
   if (!PRIORITIES.includes(c.priority)) return { error: "Неизвестный приоритет" };
   if (!STATUSES.includes(c.status)) return { error: "Неизвестный статус" };
   // у чек-листа вместо шагов — пункты, предусловий и ожидаемого результата нет

@@ -232,7 +232,7 @@ data: {"type":"bugs","pid":"LK","at":1761040000000}
 | Поле | Тип | Обяз. | Описание |
 |---|---|---|---|
 | `kind` | string | нет | `case` — тест-кейс (по умолчанию), `checklist` — чек-лист |
-| `title` | string | да | До 500 символов |
+| `title` | string | да | До 500 символов, длиннее — `400` |
 | `priority` | string | да | `critical`, `high`, `medium`, `low` |
 | `status` | string | да | `draft`, `ready`, `deprecated` |
 | `pre` | string | нет | Предусловия |

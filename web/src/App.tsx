@@ -10,7 +10,7 @@ import { Projects } from "./views/Projects";
 import { Settings } from "./views/Settings";
 import { Users } from "./views/Users";
 import { Help } from "./views/Help";
-import { SearchPalette, useSearchHotkey } from "./views/Search";
+import { SEARCH_HOTKEY, SearchPalette, useSearchHotkey } from "./views/Search";
 
 export function App() {
   const { me, bootError, data, projectLoading } = useStore();
@@ -96,7 +96,7 @@ function Topbar({ projectName, projectKey, users, settings }: { projectName?: st
           )}
         </div>
         <div className="spacer" />
-        <button className="btn ghost" onClick={() => setSearching(true)} title="Поиск по всем проектам (Ctrl+K)">Поиск <span className="muted small mono">Ctrl+K</span></button>
+        <button className="btn ghost" onClick={() => setSearching(true)} title={`Поиск по всем проектам (${SEARCH_HOTKEY})`}>Поиск <span className="muted small mono">{SEARCH_HOTKEY}</span></button>
         <span className={`live${liveError ? " off" : ""}`} title="Изменения других участников появляются автоматически">
           <span className="dot" />
           {liveError ? "Нет связи" : "Онлайн"}

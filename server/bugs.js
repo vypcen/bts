@@ -4,7 +4,7 @@ const casemodel = require("./casemodel");
 const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const events = require("./events");
-const { wrap, str, num } = require("./util");
+const { wrap, str, tooLong, num } = require("./util");
 
 const SEVERITIES = ["blocker", "critical", "major", "minor"];
 // Допустимые переходы жизненного цикла. Тот же список есть в web/src/labels.ts
@@ -43,6 +43,7 @@ function readBug(body) {
     expected: str(body.expected),
   };
   if (!b.title) return { error: "Укажите заголовок бага" };
+  if (tooLong(body.title, 500, "Заголовок")) return { error: tooLong(body.title, 500, "Заголовок") };
   if (!SEVERITIES.includes(b.severity)) return { error: "Неизвестная серьёзность" };
   return { b };
 }

@@ -18,8 +18,10 @@ export function executorsOf(data: State, pid: string): string[] {
     const global = data.users[login].role;
     if (global === "admin") return true;
     if (!members.has(login)) return false;
+    // исполнитель — участник, чья роль в проекте позволяет отмечать результаты (встроенная или своя)
     const role = p.memberRoles?.[login] || global;
-    return role === "tester";
+    const perms = data.roles?.[role]?.permissions;
+    return perms ? perms.includes("runs.execute") : role === "tester";
   }).sort();
 }
 

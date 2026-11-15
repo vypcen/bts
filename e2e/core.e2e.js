@@ -77,6 +77,13 @@ test("глобальный поиск по Ctrl+K находит кейс и о�
   await expect(page).toHaveURL(new RegExp(`#/p/LK/cases/${k.num}$`));
 });
 
+test("поиск открывается и при русской раскладке (⌘/Ctrl + клавиша K = «л»)", async ({ page }) => {
+  await login(page);
+  await expect(page.getByRole("heading", { name: "Проекты" })).toBeVisible();
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "л", code: "KeyK", ctrlKey: true, bubbles: true })));
+  await expect(page.getByRole("combobox")).toBeVisible();
+});
+
 test("карточка и редактор кейса догружают шаги; правка названия не стирает шаги", async ({ page }) => {
   await login(page);
   const api = page.request;

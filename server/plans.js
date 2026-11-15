@@ -11,7 +11,7 @@ const caseio = require("./caseio");
 const events = require("./events");
 const { distribute } = require("./distribute");
 const { isAdmin } = require("./access");
-const { wrap, str, num, HttpError } = require("./util");
+const { wrap, str, tooLong, num, HttpError } = require("./util");
 
 const PRIORITIES = ["critical", "high", "medium", "low"];
 const STATUSES = ["draft", "review", "ready", "deprecated"];
@@ -97,6 +97,7 @@ function readPlan(body) {
     filter: readFilter(body.filter || {}),
   };
   if (!p.title) return { error: "Укажите название тест-плана" };
+  if (tooLong(body.title, 300)) return { error: tooLong(body.title, 300) };
   return { p };
 }
 

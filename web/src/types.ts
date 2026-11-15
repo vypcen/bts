@@ -286,7 +286,7 @@ export interface MetaState {
   projects: Project[];
   plans: PlanSummary[];
   users: Record<string, { name: string; role: Role }>;
-  roles?: Record<string, { name: string; seat: "full" | "view" }>;
+  roles?: Record<string, { name: string; seat: "full" | "view"; permissions?: Permission[] }>;
   myPermissions?: Permission[]; // по глобальной роли (вне проекта: создание проектов)
 }
 

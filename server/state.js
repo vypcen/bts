@@ -98,8 +98,8 @@ async function meta(user) {
     }),
     plans: plans.rows.map((p) => ({ id: `${p.project_key}-P${p.num}`, pid: p.project_key, num: p.num, title: p.title, mode: p.mode, locked: p.locked })),
     users: Object.fromEntries(users.rows.map((u) => [u.login, { name: u.name, role: u.role }])),
-    // названия ролей (встроенных и пользовательских) и мои глобальные разрешения
-    roles: Object.fromEntries([...Object.entries(roles.BUILTIN), ...[...roles.load.cache().entries()]].map(([k, d]) => [k, { name: d.name, seat: roles.seatOf(k) }])),
+    // роли (встроенные и пользовательские): название, место в лицензии, разрешения — интерфейс по ним решает, кого можно назначить
+    roles: Object.fromEntries([...Object.entries(roles.BUILTIN), ...[...roles.load.cache().entries()]].map(([k, d]) => [k, { name: d.name, seat: roles.seatOf(k), permissions: [...roles.permsOf(k)] }])),
     myPermissions: user.role === "admin" ? roles.ALL : [...roles.permsOf(user.role)],
   };
 }

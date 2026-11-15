@@ -11,7 +11,7 @@ const { broadcast } = require("./live");
 const secrets = require("./secrets");
 const events = require("./events");
 const jobs = require("./jobs");
-const { wrap, str, num } = require("./util");
+const { wrap, str, num, netError } = require("./util");
 
 const METHODS = ["POST", "PUT", "PATCH", "GET"];
 // задержки перед повторами: доставка идёт через очередь (server/jobs.js) и переживает перезапуск сервера
@@ -92,7 +92,7 @@ async function deliver(hook, event, attempt = 1) {
     response = (await res.text().catch(() => "")).slice(0, 2000);
     if (status >= 300) error = `HTTP ${status}`;
   } catch (e) {
-    error = e.name === "TimeoutError" ? `Нет ответа за ${TIMEOUT} мс` : e.message;
+    error = e.name === "TimeoutError" ? `Нет ответа за ${TIMEOUT} мс` : netError(e);
   }
   await pool.query(
     `INSERT INTO webhook_deliveries(webhook_id, event, attempt, status, error, duration_ms, request, response) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,

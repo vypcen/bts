@@ -158,7 +158,7 @@ function RequirementDrawer({ project, base, req, onEdit, onClose }: { project: P
               {value.caseList.map((c) => (
                 <tr key={c.num}>
                   <td className="mono small"><a href={href("p", p, "cases", String(c.num))}>{p}-{c.num}</a></td>
-                  <td>{c.title}</td>
+                  <td className="wrap">{c.title}</td>
                   <td><ResultPill r={c.lastResult} sm /></td>
                   <td className="small muted">{c.runNum ? <a href={href("p", p, "runs", String(c.runNum))}>прогон #{c.runNum}</a> : ""}{c.executed ? ` · ${fmt(c.executed)}` : ""}</td>
                 </tr>
@@ -175,7 +175,7 @@ function RequirementDrawer({ project, base, req, onEdit, onClose }: { project: P
               {value.bugs.map((b) => (
                 <tr key={b.num}>
                   <td className="mono small"><a href={href("p", p, "bugs", String(b.num))}>{p}-B{b.num}</a></td>
-                  <td>{b.title}</td>
+                  <td className="wrap">{b.title}</td>
                   <td className="small">{find(BUG_STATUSES, b.status as never)?.label || b.status}</td>
                   <td className="mono small muted">{p}-{b.caseNum}</td>
                 </tr>

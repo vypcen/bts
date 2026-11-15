@@ -302,7 +302,7 @@ function JobsCard() {
               <tbody>
                 {v.failed.map((j) => (
                   <tr key={j.id}>
-                    <td>{j.title}<div className="small muted">{what(j)}</div></td>
+                    <td className="wrap">{j.title}<div className="small muted">{what(j)}</div></td>
                     <td className="small" style={{ maxWidth: 420, wordBreak: "break-word" }}>{j.error}</td>
                     <td className="small">{j.attempts}</td>
                     <td className="small muted">{fmt(j.finished)}</td>

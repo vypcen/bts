@@ -8,7 +8,7 @@ const access = require("./access");
 const events = require("./events");
 const flaky = require("./flaky");
 const allure = require("./allure");
-const { wrap, str, num } = require("./util");
+const { wrap, str, tooLong, num } = require("./util");
 
 const STATUSES = ["passed", "failed", "broken", "skipped"];
 const STEP_STATUSES = ["passed", "failed", "skipped"];
@@ -26,6 +26,7 @@ function readRun(body) {
     scope: str(body.scope, 500), url: str(body.url, 500),
   };
   if (!r.title) return { error: "Укажите название запуска" };
+  if (tooLong(body.title, 300)) return { error: tooLong(body.title, 300) };
   return { r };
 }
 

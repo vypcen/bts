@@ -6,7 +6,7 @@ const { broadcast } = require("./live");
 const checklist = require("./checklist");
 const events = require("./events");
 const { distribute, executors } = require("./distribute");
-const { wrap, str, num } = require("./util");
+const { wrap, str, tooLong, num } = require("./util");
 
 const RESULTS = ["untested", "passed", "failed", "blocked", "skipped"];
 const router = express.Router({ mergeParams: true });
@@ -38,6 +38,7 @@ async function unapproved(db, key, ids) {
 function readRun(body) {
   const r = { title: str(body.title, 300), build: str(body.build, 200), env: str(body.env, 500) };
   if (!r.title) return { error: "Укажите название прогона" };
+  if (tooLong(body.title, 300)) return { error: tooLong(body.title, 300) };
   return { r };
 }
 
