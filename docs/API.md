@@ -719,12 +719,13 @@ curl -s "${H[@]}" -X PATCH "$URL/api/projects/$KEY/autoruns/$NUM" -d '{"state":"
 ```json
 {
   "edition": "enterprise", "status": "active", "notice": null, "full": 50, "view": null, "source": "db",
-  "license": { "id": "TB-20261115-3F2A1C", "customer": "ООО Ромашка", "issued": "2026-11-15", "expires": "2027-12-31", "updatesUntil": "2027-12-31", "host": null, "test": false },
+  "license": { "id": "TB-20261115-3F2A1C", "customer": "ООО Ромашка", "issued": "2026-11-15", "expires": null, "perpetual": true, "host": null, "test": false },
   "seats": { "full": { "used": 12, "limit": 50 }, "view": { "used": 40, "limit": null } }
 }
 ```
 
-`status`: `none` — ключа нет (бесплатная редакция), `active`, `grace` — истёк, идёт льготный период 14 дней, `expired`, `invalid` — подпись не сходится, `wrong-host` — ключ выдан для другого `PUBLIC_URL`. `notice` — предупреждение для администратора (оно же приходит в `GET /api/auth/me` как `user.licenseNotice`). `full`/`view` — лимиты мест, `null` — без ограничений. `source`: `db` — ключ введён в интерфейсе, `env` — из `LICENSE_KEY`.
+Лицензия бессрочная: у постоянного ключа `expires: null`, `perpetual: true`. Срок есть только у пилотного ключа (`edition: "trial"`).
+`status`: `none` — ключа нет (бесплатная редакция), `active`, `grace` — пилот закончился, идёт льготный период 14 дней, `expired` — пилот закончился, `invalid` — подпись не сходится, `wrong-host` — ключ выдан для другого `PUBLIC_URL`. `notice` — предупреждение для администратора (оно же приходит в `GET /api/auth/me` как `user.licenseNotice`). `full`/`view` — лимиты мест, `null` — без ограничений. `source`: `db` — ключ введён в интерфейсе, `env` — из `LICENSE_KEY`.
 
 ### `PUT /api/admin/license`
 

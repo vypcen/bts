@@ -3,12 +3,15 @@
 // поэтому изменить число мест или срок в ключе нельзя — подпись перестанет сходиться.
 // Ключ выпускает scripts/license.js issue (нужен закрытый ключ, у заказчика его нет).
 //
-// Условия (поля JSON): id, customer, edition, full, view (места; null — без ограничений), issued, expires
-// (дата окончания или null — бессрочно), updatesUntil (до какой даты выхода версии действует подписка на обновления),
-// host (необязательно: ключ работает только на этом адресе PUBLIC_URL).
+// Модель продажи: разовая оплата — бессрочная лицензия. Коммерческий ключ не истекает и не требует продления,
+// обновления в нём не ограничены. Срок есть только у пилотного ключа (edition "trial").
+//
+// Условия (поля JSON): id, customer, edition, full, view (места; null — без ограничений), issued,
+// expires (только у пилота: последний день; у коммерческого ключа игнорируется), host (необязательно: ключ работает
+// только на этом адресе PUBLIC_URL). Поле updatesUntil из ключей ранних версий игнорируется.
 //
 // Без ключа — бесплатная редакция: COMMUNITY.full полных мест, просмотровые без ограничений.
-// Ключ истёк — ещё GRACE_DAYS дней всё работает с предупреждением, затем лимиты бесплатной редакции.
+// Пилот закончился — ещё GRACE_DAYS дней всё работает с предупреждением, затем лимиты бесплатной редакции.
 // Лимиты никого не блокируют и не закрывают данные: при нехватке мест нельзя только выдать новую полную роль.
 const crypto = require("crypto");
 const { pool } = require("./db");
@@ -84,28 +87,25 @@ function evaluate(key, now = Date.now()) {
   }
   const t = v.terms;
   const info = {
-    id: t.id, customer: t.customer || "", issued: t.issued || null, expires: t.expires || null,
-    updatesUntil: t.updatesUntil || null, host: t.host || null, test: v.test,
+    id: t.id, customer: t.customer || "", issued: t.issued || null,
+    // срок — только у пилотного ключа; коммерческая лицензия бессрочная
+    expires: t.edition === "trial" ? t.expires || null : null, perpetual: t.edition !== "trial",
+    host: t.host || null, test: v.test,
   };
   const base = { edition: t.edition || "enterprise", full: t.full ?? null, view: t.view ?? null, license: info };
   if (t.host && hostOf(process.env.PUBLIC_URL) !== String(t.host).toLowerCase()) {
     return { ...COMMUNITY, license: info, status: "wrong-host", notice: `Ключ выдан для адреса ${t.host}, а сервер работает как ${hostOf(process.env.PUBLIC_URL) || "(PUBLIC_URL не задан)"}. Действуют условия бесплатной редакции.` };
   }
-  const end = dateMs(t.expires);
+  const end = dateMs(info.expires);
   if (end !== null && now > end) {
     const graceEnd = end + GRACE_DAYS * DAY;
     if (now <= graceEnd) {
-      return { ...base, status: "grace", notice: `Лицензия истекла ${t.expires}. Продлите её до ${new Date(graceEnd).toISOString().slice(0, 10)}, после этого будут действовать лимиты бесплатной редакции.` };
+      return { ...base, status: "grace", notice: `Пилотная лицензия закончилась ${t.expires}. До ${new Date(graceEnd).toISOString().slice(0, 10)} всё работает как прежде; чтобы продолжить, введите постоянный ключ.` };
     }
-    return { ...COMMUNITY, license: info, status: "expired", notice: `Лицензия истекла ${t.expires}. Действуют условия бесплатной редакции: ${COMMUNITY.full} полных мест.` };
+    return { ...COMMUNITY, license: info, status: "expired", notice: `Пилотная лицензия закончилась ${t.expires}. Действуют условия бесплатной редакции: ${COMMUNITY.full} полных мест. Введите постоянный ключ, чтобы вернуть места.` };
   }
   let notice = v.test ? "Тестовая лицензия: не для рабочей эксплуатации." : null;
-  if (end !== null && end - now < WARN_DAYS * DAY) notice = `Лицензия заканчивается ${t.expires}. Свяжитесь с поставщиком для продления.`;
-  const pkg = require("../package.json");
-  const released = process.env.BUILD_DATE ? Date.parse(process.env.BUILD_DATE) : null;
-  if (!notice && t.updatesUntil && released && released > dateMs(t.updatesUntil)) {
-    notice = `Эта версия (${pkg.version}) вышла после окончания подписки на обновления (${t.updatesUntil}). Лицензия действует, но продлите подписку, чтобы получать обновления законно.`;
-  }
+  if (end !== null && end - now < WARN_DAYS * DAY) notice = `Пилотная лицензия заканчивается ${t.expires}. Для работы после пилота нужен постоянный ключ.`;
   return { ...base, status: "active", notice };
 }
 
