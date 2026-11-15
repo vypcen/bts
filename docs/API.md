@@ -289,7 +289,7 @@ data: {"type":"bugs","pid":"LK","at":1761040000000}
 - `GET /api/projects/:key/cases/:num/reviews` — история: `{"reviews": [{"id", "version", "status": "pending|approved|changes|cancelled", "reviewer", "requestedBy", "requestComment", "comment", "decidedBy", "created", "decided"}], "required": false}`.
 - `GET /api/projects/:key/reviews` — кейсы, ждущие решения текущего пользователя: `{"items": [{"num", "title", "requestedBy", "since", "assigned"}]}`.
 - `GET /api/projects/:key/reviewers` — кого можно назначить: `{"reviewers": [{"login", "name"}]}`.
-- `PUT /api/projects/:key/review-settings` — `{"required": true}`: «Готов» только после ревью. Тогда без `cases.review` перевод в `ready` (правкой, созданием или массово) — `409`, а правка содержимого готового кейса возвращает его в `draft` (в ответе `PATCH` — `"statusReset": "draft"`). Нужно `settings`.
+- `PUT /api/projects/:key/review-settings` — `{"required": true}`: «Готов» только после ревью. Тогда без `cases.review` перевод в `ready` (правкой, созданием или массово) — `409`, а правка содержимого готового кейса возвращает его в `draft` (в ответе `PATCH` — `"statusReset": "draft"`), а в прогон (создание и добавление кейсов) попадают только кейсы `ready` — иначе `409` со списком неготовых. Нужно `settings`.
 
 События вебхуков: `case.review_requested`, `case.reviewed`.
 

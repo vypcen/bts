@@ -113,7 +113,12 @@ test("режим «готов только после ревью»: без пр�
   r = await author.patch(`/api/projects/LK/cases/${n}`, { title: "Черновик автора (исправлен)" });
   assert.equal(r.data.statusReset, "draft");
   assert.equal((await caseOf(n)).status, "draft");
+  // в прогон — только утверждённые кейсы
+  r = await u.tester.post("/api/projects/LK/runs", { title: "Регресс", caseNums: [n] });
+  assert.equal(r.status, 409);
+  assert.match(r.data.error, new RegExp(`LK-${n}`));
   // рецензент может ставить «Готов» напрямую
   assert.equal((await rev.anna.patch(`/api/projects/LK/cases/${n}`, { status: "ready" })).status, 200);
+  assert.equal((await u.tester.post("/api/projects/LK/runs", { title: "Регресс", caseNums: [n] })).status, 201);
   await u.tester.put("/api/projects/LK/review-settings", { required: false });
 });

@@ -27,6 +27,14 @@ async function caseIds(db, key, nums) {
   return rows.map((r) => r.id);
 }
 
+// Режим «готов только после ревью»: в прогон идут только утверждённые (готовые) кейсы
+async function unapproved(db, key, ids) {
+  const { rows } = await db.query(
+    `SELECT c.num FROM test_cases c JOIN projects p ON p.key=c.project_key
+     WHERE p.review_required AND c.project_key=$1 AND c.id = ANY($2::int[]) AND c.status <> 'ready' ORDER BY c.num`, [key, ids]);
+  return rows.length ? `В этом проекте в прогон попадают только утверждённые кейсы. Не готовы: ${rows.slice(0, 10).map((r) => `${key}-${r.num}`).join(", ")}${rows.length > 10 ? "…" : ""}` : null;
+}
+
 function readRun(body) {
   const r = { title: str(body.title, 300), build: str(body.build, 200), env: str(body.env, 500) };
   if (!r.title) return { error: "Укажите название прогона" };
@@ -43,6 +51,8 @@ router.post("/runs", wrap(async (req, res) => {
     if (!seq.rows[0]) return { status: 404, error: "Проект не найден" };
     const ids = await caseIds(db, req.params.key, req.body.caseNums);
     if (!ids.length) return { status: 400, error: "Выберите хотя бы один тест-кейс" };
+    const notReady = await unapproved(db, req.params.key, ids);
+    if (notReady) return { status: 409, error: notReady };
     const n = seq.rows[0].run_seq;
     const run = await db.query(
       "INSERT INTO test_runs(project_key, num, title, build, environment, created_by, fields) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
@@ -136,6 +146,8 @@ router.post("/runs/:num/cases", wrap(async (req, res) => {
   if (run.locked) return res.status(409).json({ error: "Состав прогона из заблокированного тест-плана изменить нельзя" });
   const ids = await caseIds(pool, req.params.key, req.body.caseNums);
   if (!ids.length) return res.status(400).json({ error: "Выберите хотя бы один тест-кейс" });
+  const notReady = await unapproved(pool, req.params.key, ids);
+  if (notReady) return res.status(409).json({ error: notReady });
   const r = await pool.query(
     "INSERT INTO run_results(run_id, case_id) SELECT $1, unnest($2::int[]) ON CONFLICT (run_id, case_id) DO NOTHING",
     [run.id, ids]
