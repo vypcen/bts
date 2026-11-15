@@ -170,10 +170,11 @@ async function sweep() {
   }
   if (removed) console.log(`[attachments] удалено файлов без записи в базе: ${removed}`);
 }
+// Очистка — периодическая задача очереди (одна реплика за раз)
 function startSweeper() {
-  const run = () => sweep().catch((e) => console.error("[attachments] очистка не удалась:", e.message));
-  run();
-  setInterval(run, 30 * 60 * 1000).unref();
+  const jobs = require("./jobs");
+  jobs.define("attachments.sweep", () => sweep(), { maxAttempts: 1, title: "Удаление файлов без записи в базе" });
+  jobs.every("attachments.sweep", 30 * 60 * 1000);
 }
 
 // Для экспорта проекта: содержимое файла целиком

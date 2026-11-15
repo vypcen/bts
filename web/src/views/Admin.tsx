@@ -246,7 +246,76 @@ export function SystemInfo() {
     <>
       <LicenseCard />
       <About />
+      <JobsCard />
     </>
+  );
+}
+
+interface JobsOverview {
+  kinds: { kind: string; title: string; every: number | null }[];
+  counts: { kind: string; title: string; status: "queued" | "running" | "done" | "failed"; count: number; oldest: number | null }[];
+  failed: { id: number; kind: string; title: string; payload: any; attempts: number; error: string; finished: number | null; created: number }[];
+}
+const JOB_STATUS: Record<string, string> = { queued: "в очереди", running: "выполняются", done: "выполнено за сутки", failed: "упали" };
+
+// Фоновые задачи: доставка вебхуков, задачи в трекере, синхронизация, уборка. Упавшие можно повторить
+function JobsCard() {
+  const [v, setV] = useState<JobsOverview | null>(null);
+  const [error, setError] = useState("");
+  const { toast } = useStore();
+  const load = () => api<JobsOverview>("GET", "/api/admin/jobs").then(setV, (e) => setError(e.message));
+  useEffect(() => {
+    load();
+  }, []);
+  if (error) return <div className="banner">{error}</div>;
+  if (!v) return null;
+  const byKind = new Map<string, Record<string, number>>();
+  for (const c of v.counts) byKind.set(c.title, { ...(byKind.get(c.title) || {}), [c.status]: c.count });
+  const what = (j: JobsOverview["failed"][number]) =>
+    j.payload?.event ? `${j.payload.event.title || j.payload.event.event} · ${j.payload.event.project?.key || ""}` : j.payload?.key ? `${j.payload.key}-B${j.payload.num}` : "";
+  return (
+    <section className="card" style={{ marginTop: 16 }}>
+      <h3 style={{ marginTop: 0 }}>Фоновые задачи</h3>
+      <p className="muted small" style={{ marginTop: 0 }}>
+        Доставка вебхуков, задачи в трекере, синхронизация статусов и уборка выполняются в очереди: переживают перезапуск сервера и повторяются при ошибках.
+      </p>
+      {byKind.size > 0 ? (
+        <table className="tbl">
+          <tbody>
+            {[...byKind.entries()].map(([title, st]) => (
+              <tr key={title}>
+                <td style={{ width: 280 }}>{title}</td>
+                <td className="small">
+                  {Object.entries(st).map(([k, n]) => <span key={k} className={k === "failed" ? "c-crit" : "muted"} style={{ marginRight: 12 }}>{JOB_STATUS[k]}: <b>{n}</b></span>)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <p className="small muted">За последние сутки задач не было.</p>}
+      {v.failed.length > 0 && (
+        <>
+          <h3>Упавшие задачи</h3>
+          <div className="tbl-wrap">
+            <table className="tbl">
+              <thead><tr><th>Задача</th><th>Ошибка</th><th>Попыток</th><th>Когда</th><th /></tr></thead>
+              <tbody>
+                {v.failed.map((j) => (
+                  <tr key={j.id}>
+                    <td>{j.title}<div className="small muted">{what(j)}</div></td>
+                    <td className="small" style={{ maxWidth: 420, wordBreak: "break-word" }}>{j.error}</td>
+                    <td className="small">{j.attempts}</td>
+                    <td className="small muted">{fmt(j.finished)}</td>
+                    <td><button className="btn sm" onClick={async () => { try { await api("POST", `/api/admin/jobs/${j.id}/retry`, {}); toast("Задача поставлена в очередь"); setTimeout(load, 1500); } catch (e: any) { toast(e.message); } }}>Повторить</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      <div className="acts" style={{ justifyContent: "flex-start" }}><button className="btn ghost sm" onClick={load}>Обновить</button></div>
+    </section>
   );
 }
 

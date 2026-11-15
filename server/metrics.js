@@ -92,7 +92,11 @@ function gauges({ pool, live, version }) {
       `SELECT (SELECT count(*) FROM users WHERE NOT blocked)::int AS active, (SELECT count(*) FROM users WHERE blocked)::int AS blocked,
               (SELECT count(*) FROM projects WHERE deleted_at IS NULL)::int AS projects,
               (SELECT count(*) FROM sessions WHERE expires_at > now())::int AS sessions,
-              (SELECT count(*) FROM webhook_deliveries WHERE (status IS NULL OR status >= 400) AND created_at > now() - interval '1 hour')::int AS hooks_failed`
+              (SELECT count(*) FROM webhook_deliveries WHERE (status IS NULL OR status >= 400) AND created_at > now() - interval '1 hour')::int AS hooks_failed,
+              (SELECT count(*) FROM jobs WHERE status='queued')::int AS jobs_queued,
+              (SELECT count(*) FROM jobs WHERE status='running')::int AS jobs_running,
+              (SELECT count(*) FROM jobs WHERE status='failed')::int AS jobs_failed,
+              COALESCE((SELECT extract(epoch FROM now() - min(run_at)) FROM jobs WHERE status='queued' AND run_at <= now()), 0)::float AS jobs_lag`
     );
     cached = rows[0];
     at = Date.now();
@@ -104,6 +108,19 @@ function gauges({ pool, live, version }) {
   });
   new client.Gauge({ name: "testball_projects", help: "Проекты", registers: [register], async collect() { this.set((await fromDb()).projects); } });
   new client.Gauge({ name: "testball_sessions", help: "Действующие сессии", registers: [register], async collect() { this.set((await fromDb()).sessions); } });
+  new client.Gauge({
+    name: "testball_jobs", help: "Фоновые задачи по состоянию (упавшие хранятся 30 дней)", labelNames: ["status"], registers: [register],
+    async collect() {
+      const d = await fromDb();
+      this.set({ status: "queued" }, d.jobs_queued);
+      this.set({ status: "running" }, d.jobs_running);
+      this.set({ status: "failed" }, d.jobs_failed);
+    },
+  });
+  new client.Gauge({
+    name: "testball_jobs_lag_seconds", help: "Сколько ждёт самая старая задача, которой пора выполняться", registers: [register],
+    async collect() { this.set((await fromDb()).jobs_lag); },
+  });
   new client.Gauge({
     name: "testball_webhook_failed_last_hour", help: "Неудачные доставки вебхуков за последний час", registers: [register],
     async collect() { this.set((await fromDb()).hooks_failed); },

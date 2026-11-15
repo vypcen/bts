@@ -10,10 +10,13 @@ const { pool } = require("./db");
 const { broadcast } = require("./live");
 const secrets = require("./secrets");
 const events = require("./events");
+const jobs = require("./jobs");
 const { wrap, str, num } = require("./util");
 
 const METHODS = ["POST", "PUT", "PATCH", "GET"];
-const RETRIES = [5000, 30000]; // задержки перед 2-й и 3-й попыткой
+// задержки перед повторами: доставка идёт через очередь (server/jobs.js) и переживает перезапуск сервера
+// WEBHOOK_RETRIES — паузы перед повторами в миллисекундах через запятую (по умолчанию 5 с, 30 с, 5 мин, 30 мин)
+const RETRIES = (process.env.WEBHOOK_RETRIES || "5000,30000,300000,1800000").split(",").map(Number).filter((n) => n >= 0);
 const KEEP_DELIVERIES = 200;
 // В облачной установке запросы к внутренним адресам можно запретить (защита от SSRF).
 // По умолчанию разрешены: в своей инфраструктуре вебхуки обычно и ходят во внутренние системы
@@ -95,27 +98,33 @@ async function deliver(hook, event, attempt = 1) {
     `INSERT INTO webhook_deliveries(webhook_id, event, attempt, status, error, duration_ms, request, response) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [hook.id, event.event, attempt, status, error.slice(0, 1000), Date.now() - started, body.slice(0, 10000), response]
   ).catch(() => {});
-  // повторяем при сетевой ошибке и 5xx/429; 4xx — ошибка настройки, повтор не поможет
-  if (error && attempt <= RETRIES.length && (status === null || status >= 500 || status === 429)) {
-    setTimeout(() => deliver(hook, event, attempt + 1).catch(() => {}), RETRIES[attempt - 1]).unref();
-  }
   return { status, error, durationMs: Date.now() - started, response };
 }
 
+// Доставка через очередь: повтор при сетевой ошибке и 5xx/429; 4xx — ошибка настройки, повтор не поможет
+jobs.define("webhook.deliver", async ({ hookId, event }, job) => {
+  const { rows } = await pool.query("SELECT * FROM webhooks WHERE id=$1 AND active", [hookId]);
+  if (!rows[0]) return; // вебхук удалили или выключили, пока задача ждала
+  const r = await deliver(rows[0], event, job.attempt);
+  if (!r.error) return;
+  if (r.status === null || r.status >= 500 || r.status === 429) throw new Error(`${rows[0].name}: ${r.error}`);
+  throw jobs.permanent(`${rows[0].name}: ${r.error}`);
+}, { maxAttempts: RETRIES.length + 1, backoff: RETRIES, timeoutMs: TIMEOUT * 3, title: "Доставка вебхука" });
+
 events.subscribe(async (event) => {
   const { rows } = await pool.query("SELECT * FROM webhooks WHERE project_key=$1 AND active AND $2 = ANY(events)", [event.project.key, event.event]);
-  for (const hook of rows) if (matches(hook.filter, event)) deliver(hook, event).catch((e) => console.error("[webhooks]", e.message));
+  for (const hook of rows) if (matches(hook.filter, event)) await jobs.enqueue("webhook.deliver", { hookId: hook.id, event });
 });
 
-// раз в час журнал каждого вебхука обрезается до последних KEEP_DELIVERIES записей
-setInterval(() => {
-  pool.query(
+// журнал каждого вебхука обрезается до последних KEEP_DELIVERIES записей (из ежечасной уборки)
+async function trimDeliveries() {
+  await pool.query(
     `DELETE FROM webhook_deliveries d USING (
        SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY webhook_id ORDER BY created_at DESC) AS n FROM webhook_deliveries) x WHERE n > $1
      ) old WHERE d.id = old.id`,
     [KEEP_DELIVERIES]
-  ).catch(() => {});
-}, 3600e3).unref();
+  );
+}
 
 // ---------- API ----------
 const router = express.Router({ mergeParams: true });
@@ -230,4 +239,4 @@ router.post("/webhooks/:id/test", wrap(async (req, res) => {
   res.json(await deliver(rows[0], sample));
 }));
 
-module.exports = { router, render, matches };
+module.exports = { router, render, matches, trimDeliveries };

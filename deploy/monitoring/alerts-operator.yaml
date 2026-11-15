@@ -72,6 +72,14 @@ spec:
       annotations:
         summary: Вебхуки TestBall не доставляются
         description: Проверьте получателей во вкладке проекта «Настройки» → «Вебхуки» → «Журнал».
+    - alert: TestBallJobsStuck
+      expr: max(testball_jobs_lag_seconds) > 600
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: Фоновые задачи TestBall не выполняются больше 10 минут
+        description: Вебхуки, задачи в трекере и уборка ждут в очереди. Проверьте журнал (component=jobs) и «Лицензия и система» → «Фоновые задачи».
     - alert: TestBallErrorsLogged
       expr: sum by (component) (increase(testball_log_errors_total{level="error"}[15m])) > 20
       labels:

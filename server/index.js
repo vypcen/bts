@@ -2,6 +2,7 @@
 const log = require("./log");
 log.install();
 const metrics = require("./metrics");
+const jobs = require("./jobs");
 const path = require("path");
 const express = require("express");
 const compression = require("compression");
@@ -565,6 +566,15 @@ app.delete("/api/admin/license", auth.requireUser, access.requireAdmin, wrap(asy
   res.json({ ...licenseOut(l), seats: await seats.usage(pool) });
 }));
 
+// Фоновые задачи (админ): сводка по очереди, упавшие задачи, повтор
+app.get("/api/admin/jobs", auth.requireUser, access.requireAdmin, wrap(async (_req, res) => {
+  res.json(await jobs.overview());
+}));
+app.post("/api/admin/jobs/:id/retry", auth.requireUser, access.requireAdmin, wrap(async (req, res) => {
+  if (!(await jobs.retry(num(req.params.id)))) return res.status(404).json({ error: "Упавшая задача не найдена" });
+  res.json({ ok: true });
+}));
+
 // О системе (админ): версия, сборка, база, история обновлений
 app.get("/api/admin/system", auth.requireUser, access.requireAdmin, wrap(async (_req, res) => {
   const [pg, mig, vers] = await Promise.all([
@@ -632,11 +642,11 @@ app.use((err, req, res, _next) => {
   await require("./storage").check();
   await live.listen();
   attachments.startSweeper();
-  // корзина и журнал аудита: старое удаляется раз в час (на каждой реплике — запросы идемпотентны)
-  const housekeeping = () => Promise.all([trash.purgeExpired(), audit.purge()]).catch((e) => console.error("[housekeeping]", e.message));
-  setTimeout(housekeeping, 60 * 1000).unref();
-  setInterval(housekeeping, 60 * 60 * 1000).unref();
+  // уборка раз в час: корзина, журнал аудита, журнал вебхуков, выполненные фоновые задачи
+  jobs.define("housekeeping", () => Promise.all([trash.purgeExpired(), audit.purge(), webhooks.trimDeliveries(), jobs.cleanup()]), { maxAttempts: 1, title: "Уборка устаревших данных" });
+  jobs.every("housekeeping", 60 * 60 * 1000);
   trackers.startSync();
+  jobs.start();
   const server = app.listen(PORT, "0.0.0.0", () => {
     ready = true;
     console.log(`[server] TestBall QA ${version.VERSION}${version.COMMIT ? ` (${version.COMMIT.slice(0, 8)})` : ""} запущен: http://localhost:${PORT}`);
@@ -647,7 +657,9 @@ app.use((err, req, res, _next) => {
     stopping = true;
     console.log(`[server] ${signal}: останавливаемся`);
     live.closeAll();
-    server.close(() => pool.end().finally(() => process.exit(0)));
+    // фоновые задачи: новые не берём, текущие дожидаемся; невыполненные подхватит другая реплика
+    const jobsDone = jobs.stop(10000);
+    server.close(() => jobsDone.then(() => pool.end()).finally(() => process.exit(0)));
     setTimeout(() => process.exit(0), Number(process.env.SHUTDOWN_TIMEOUT_MS || 15000)).unref();
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));

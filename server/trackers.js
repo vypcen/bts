@@ -7,6 +7,7 @@ const { pool, tx } = require("./db");
 const { broadcast } = require("./live");
 const secrets = require("./secrets");
 const events = require("./events");
+const jobs = require("./jobs");
 const { wrap, str, num, HttpError } = require("./util");
 
 const KINDS = ["jira", "youtrack", "gitlab", "github", "redmine"];
@@ -158,14 +159,21 @@ async function createIssue(key, n, user) {
   return issue;
 }
 
-// автосоздание задачи для новых багов (настройка autoCreate, можно ограничить серьёзностью)
+// автосоздание задачи для новых багов (настройка autoCreate, можно ограничить серьёзностью).
+// Через очередь: трекер недоступен — задача создастся при повторе, а не потеряется
+jobs.define("tracker.create", async ({ key, num }) => {
+  const bug = await pool.query("SELECT external_key FROM bugs WHERE project_key=$1 AND num=$2", [key, num]);
+  if (!bug.rows[0] || bug.rows[0].external_key) return; // баг удалён или задачу уже создали вручную
+  await createIssue(key, num, null);
+}, { maxAttempts: 6, title: "Создание задачи в трекере" });
+
 events.subscribe(async (event) => {
   if (event.event !== "bug.created") return;
   const t = await trackerOf(pool, event.project.key);
   if (!t?.settings.autoCreate) return;
   const sev = t.settings.autoCreateSeverities;
   if (Array.isArray(sev) && sev.length && !sev.includes(event.bug.severity)) return;
-  await createIssue(event.project.key, event.bug.num, null).catch((e) => console.error("[trackers] автосоздание:", e.message));
+  await jobs.enqueue("tracker.create", { key: event.project.key, num: event.bug.num }, { key: `tracker.create:${event.project.key}:${event.bug.num}` });
 });
 
 // Фоновая синхронизация статусов открытых багов. Если реплик несколько — работает одна (advisory lock)
@@ -198,8 +206,10 @@ async function syncAll() {
     c.release();
   }
 }
+// Синхронизация — периодическая задача очереди: при нескольких репликах её выполняет одна
+jobs.define("tracker.sync", () => syncAll(), { maxAttempts: 1, title: "Синхронизация статусов с трекером" });
 function startSync() {
-  setInterval(() => syncAll().catch((e) => console.error("[trackers] синхронизация:", e.message)), SYNC_EVERY).unref();
+  jobs.every("tracker.sync", SYNC_EVERY);
 }
 
 // ---------- API ----------
