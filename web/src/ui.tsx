@@ -88,12 +88,13 @@ function useEscape(fn: () => void) {
   }, []);
 }
 
-export function Drawer(props: { label: string; idTag?: string; title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+// docked — панель встроена в страницу (режим выполнения прогона): без затемнения, рядом со списком
+export function Drawer(props: { label: string; idTag?: string; title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; docked?: boolean }) {
   useEscape(props.onClose);
   return (
     <>
-      <div className="scrim" onClick={props.onClose} />
-      <aside className="drawer" role="dialog" aria-label={props.label}>
+      {!props.docked && <div className="scrim" onClick={props.onClose} />}
+      <aside className={`drawer${props.docked ? " docked" : ""}`} role={props.docked ? "region" : "dialog"} aria-label={props.label}>
         <header>
           {props.idTag && <span className="mono muted">{props.idTag}</span>}
           <h2>{props.title}</h2>

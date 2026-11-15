@@ -423,3 +423,26 @@ test("релизы: создать релиз, прогон в релизе, с�
   await page.getByRole("button", { name: "+ Новый прогон" }).click();
   await expect(page.getByLabel("Релиз", { exact: true })).toBeVisible();
 });
+
+test("режим выполнения прогона: список и кейс рядом, отметки клавишами", async ({ page }) => {
+  await login(page);
+  const api = page.request;
+  const a = (await (await api.post("/api/projects/LK/cases", { data: { title: "Клавиши: первый", priority: "low", status: "ready", steps: "a" } })).json()).num;
+  const b = (await (await api.post("/api/projects/LK/cases", { data: { title: "Клавиши: второй", priority: "low", status: "ready", steps: "b" } })).json()).num;
+  const run = (await (await api.post("/api/projects/LK/runs", { data: { title: "Горячие клавиши", caseNums: [a, b] } })).json()).num;
+  await page.goto(`/#/p/LK/runs/${run}`);
+  await page.getByRole("button", { name: "Режим выполнения" }).click();
+  const panel = page.getByRole("region", { name: "Результат кейса" });
+  await expect(panel.getByRole("heading", { name: "Клавиши: первый" })).toBeVisible();
+  await page.keyboard.press("p");
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results.find((x) => x.caseNum === a).result).toBe("passed");
+  await page.keyboard.press("n");
+  await expect(panel.getByRole("heading", { name: "Клавиши: второй" })).toBeVisible();
+  await page.keyboard.press("f");
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results.find((x) => x.caseNum === b).result).toBe("failed");
+  // в поле комментария клавиши не срабатывают
+  await panel.getByLabel("Комментарий / фактический результат").fill("pfbs");
+  await expect.poll(async () => (await (await api.get(`/api/projects/LK/runs/${run}/results`)).json()).results.find((x) => x.caseNum === b).result).toBe("failed");
+  await page.getByRole("button", { name: "Обычный вид" }).click();
+  await expect(page.getByRole("table")).toBeVisible();
+});

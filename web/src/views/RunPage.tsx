@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, paths } from "../api";
 import { FieldsView, stepsOf, StepsView } from "../casekit";
 import { checkedCount, checklistItems, itemMark } from "../checklist";
@@ -39,6 +39,9 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const [who, setWho] = useState("");
   const nameOf = useNames();
   const [bugDraft, setBugDraft] = useState<BugDraft | null>(null);
+  // режим выполнения: список кейсов слева, карточка кейса справа, горячие клавиши; выбор запоминается в браузере
+  const [exec, setExecState] = useState(() => { try { return localStorage.getItem("tb.runExec") === "1"; } catch { return false; } });
+  const setExec = (v: boolean) => { setExecState(v); try { localStorage.setItem("tb.runExec", v ? "1" : "0"); } catch { /* приватный режим */ } };
   // результаты прогона грузятся отдельно и перечитываются вместе с данными проекта
   const loaded = useLoad<RunResults>(run ? paths.runResults(p, num) : null);
 
@@ -72,7 +75,15 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
   const bugsOf = (r: Result) => data.bugs.filter((b) => b.pid === p && (b.resultId === r.id || (b.caseNum === r.caseNum && b.runNum === num)));
   const mark = (r: Result, result: ResultValue) =>
     write(() => api("PATCH", paths.result(p, num, r.caseNum), { result: r.result === result ? "untested" : result }), undefined, { queue: true });
-  const sel = selected !== null ? results.find((r) => r.caseNum === selected) : undefined;
+  // в режиме выполнения без выбора открыт первый непроверенный кейс
+  const autoPick = exec && selected === null ? (rows.find(({ r }) => r.result === "untested") || rows[0])?.r.caseNum ?? null : null;
+  const selNum = selected ?? autoPick;
+  const sel = selNum !== null ? results.find((r) => r.caseNum === selNum) : undefined;
+  const move = (d: number) => {
+    const i = rows.findIndex(({ r }) => r.caseNum === selNum);
+    const next = rows[Math.min(rows.length - 1, Math.max(0, i + d))];
+    if (next) setSelected(next.r.caseNum);
+  };
   const done = results.length - counts.untested;
 
   const chip = (k: "all" | ResultValue, label: string, n: number) => (
@@ -100,6 +111,10 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
         <div className="spacer" />
         <div className="acts">
           {open ? <Pill tone="info" label="Идёт" /> : <Pill tone="neutral" label={`Закрыт ${fmt(run.closed)}`} />}
+          <button className={`btn${exec ? " primary" : ""}`} onClick={() => setExec(!exec)} aria-pressed={exec}
+            title="Список кейсов слева, кейс справа; отметки клавишами P, F, B, S, переход — N и стрелками">
+            {exec ? "Обычный вид" : "Режим выполнения"}
+          </button>
           <a className="btn" href={`${paths.run(p, num)}/report?format=pdf`} download style={{ textDecoration: "none" }} title="Отчёт для руководителя: сводка, упавшие кейсы, баги">Отчёт PDF</a>
           <a className="btn" href={`${paths.run(p, num)}/report?format=xlsx`} download style={{ textDecoration: "none" }}>Excel</a>
           {canEdit && (
@@ -146,6 +161,32 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
           ))}
         </select>
       </div>
+      {exec ? (
+        <div className="exec-layout">
+          <ul className="exec-list" aria-label="Кейсы прогона">
+            {rows.map(({ r, c }) => (
+              <li key={r.id}>
+                <button type="button" aria-current={selNum === r.caseNum ? "true" : undefined} onClick={() => setSelected(r.caseNum)}>
+                  <ResultPill r={r.result} sm />
+                  <span className="mono small muted">{c.id}</span>
+                  <span className="t">{c.kind === "checklist" ? "☑ " : ""}{c.title}</span>
+                </button>
+              </li>
+            ))}
+            {!rows.length && <li className="muted small" style={{ padding: 10 }}>Ничего не найдено.</li>}
+          </ul>
+          {sel && !bugDraft ? (
+            <FullCase c={caseOf(sel)}>{(full) => (
+              <ResultDrawer key={sel.id} docked run={run} r={sel} c={full} prev={prev.get(sel.caseNum)} files={runFiles}
+                onClose={() => setExec(false)} onBug={setBugDraft} onMove={move}
+                onNext={() => {
+                  const next = rows.find(({ r }) => r.result === "untested" && r.caseNum !== sel.caseNum);
+                  if (next) setSelected(next.r.caseNum);
+                }} />
+            )}</FullCase>
+          ) : !bugDraft && <div className="exec-empty muted">Выберите кейс в списке слева.</div>}
+        </div>
+      ) : (
       <div className="tbl-wrap">
         <table>
           <thead>
@@ -193,13 +234,15 @@ export function RunPage({ project, num }: { project: Project; num: number }) {
           </tbody>
         </table>
       </div>
+      )}
 
       {bugDraft ? (
         <BugEditor pid={p} draft={bugDraft} onClose={() => setBugDraft(null)} />
-      ) : sel ? (
+      ) : sel && !exec ? (
         <FullCase c={caseOf(sel)}>{(full) => (
         <ResultDrawer
           key={sel.id}
+          onMove={move}
           run={run}
           r={sel}
           c={full}
@@ -245,7 +288,10 @@ function ResultButtons({ value, onPick, lg, label = "Результат" }: { va
   );
 }
 
-function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; files: Attachment[]; onClose: () => void; onBug: (d: BugDraft) => void; onNext: () => void }) {
+function ResultDrawer(props: {
+  run: Run; r: Result; c: TestCase; prev?: Result; files: Attachment[]; onClose: () => void; onBug: (d: BugDraft) => void; onNext: () => void;
+  onMove?: (d: number) => void; docked?: boolean;
+}) {
   const { run, c, prev } = props;
   // кейс с параметрами: результат и шаги — по выбранному набору данных, итог кейса считается по всем наборам
   const iters = props.r.iterations;
@@ -304,8 +350,32 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
   };
   const people = executorsOf(data, p);
 
+  // горячие клавиши: P — пройден, F — упал, B — заблокирован, S — пропущен, N — следующий непроверенный, ↑/↓ (J/K) — соседний кейс.
+  // По физической клавише (e.code) — работают и в русской раскладке; не мешают вводу текста и окнам поверх
+  const keyRef = useRef({ pick, next: props.onNext, move: props.onMove, canMark: open && c.kind !== "checklist", result: r.result });
+  keyRef.current = { pick, next: props.onNext, move: props.onMove, canMark: open && c.kind !== "checklist", result: r.result };
+  useEffect(() => {
+    const MARK: Record<string, ResultValue> = { KeyP: "passed", KeyF: "failed", KeyB: "blocked", KeyS: "skipped" };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable=true]") || t.isContentEditable)) return;
+      if (document.querySelector(".modal")) return;
+      const k = keyRef.current;
+      if (MARK[e.code] && k.canMark) {
+        e.preventDefault();
+        if (k.result !== MARK[e.code]) k.pick(MARK[e.code]);
+      } else if (e.code === "KeyN") { e.preventDefault(); k.next(); }
+      else if ((e.code === "ArrowDown" || e.code === "KeyJ") && k.move) { e.preventDefault(); k.move(1); }
+      else if ((e.code === "ArrowUp" || e.code === "KeyK") && k.move) { e.preventDefault(); k.move(-1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <Drawer
+      docked={props.docked}
       label="Результат кейса"
       idTag={c.id}
       title={c.title}
@@ -317,6 +387,7 @@ function ResultDrawer(props: { run: Run; r: Result; c: TestCase; prev?: Result; 
           )}
           <a className="btn ghost" href={href("p", p, "cases", c.num)} style={{ textDecoration: "none" }}>Открыть кейс</a>
           <div className="spacer" />
+          {open && <span className="muted small kbd-hint" title="Горячие клавиши работают в любой раскладке">P F B S — отметить · N — следующий · ↑↓ — соседний</span>}
           <button className="btn primary" onClick={async () => { if (await saveComment()) props.onNext(); }}>Следующий непроверенный →</button>
         </>
       }
