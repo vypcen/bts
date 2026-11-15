@@ -36,6 +36,7 @@ const { Limiter, MIN } = require("./limits");
 const version = require("./version");
 const license = require("./license");
 const security = require("./security");
+const shared = require("./shared");
 
 const PORT = Number(process.env.PORT || 3000);
 // Статус готовности кейса. Результат прохождения хранится в прогонах (server/runs.js)
@@ -402,6 +403,8 @@ function readCase(body, prevSteps = [], stepListSent = body.stepList !== undefin
 app.post("/api/projects/:key/cases", auth.requireUser, wrap(async (req, res) => {
   const { c, error } = readCase(req.body);
   if (error) return res.status(400).json({ error });
+  const badRef = await shared.checkRefs(req.params.key, c.stepList);
+  if (badRef) return res.status(400).json({ error: badRef });
   const cf = await casemodel.readFields(pool, req.params.key, "case", req.body.fields, {}, { members: await memberLogins(req.params.key) });
   if (cf.error) return res.status(400).json({ error: cf.error });
   const folder = await folders.folderId(pool, req.params.key, req.body.folder);
@@ -437,6 +440,8 @@ app.patch("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, re
   const stepListSent = req.body.stepList !== undefined || req.body.steps === undefined;
   const { c, error } = readCase({ ...rows[0], stepList: rows[0].step_list, ...req.body }, rows[0].step_list, stepListSent);
   if (error) return res.status(400).json({ error });
+  const badRef = await shared.checkRefs(req.params.key, c.stepList);
+  if (badRef) return res.status(400).json({ error: badRef });
   const cf = await casemodel.readFields(pool, req.params.key, "case", req.body.fields, rows[0].fields, { members: await memberLogins(req.params.key) });
   if (cf.error) return res.status(400).json({ error: cf.error });
   // folder: null — в корень проекта; не прислали — остаётся где был
@@ -564,9 +569,9 @@ app.delete("/api/projects/:key/cases/:num", auth.requireUser, wrap(async (req, r
 // ---------- версии тест-кейса ----------
 const versionOut = (v) => ({
   version: v.version, kind: v.kind, title: v.title, priority: v.priority, status: v.status, pre: v.preconditions, steps: v.steps,
-  expected: v.expected, stepList: v.step_list, tags: v.tags, fields: v.fields, changedBy: v.changed_by_login, changed: v.changed_at.getTime(),
+  expected: v.expected, stepList: v.step_list_expanded || v.step_list, tags: v.tags, fields: v.fields, changedBy: v.changed_by_login, changed: v.changed_at.getTime(),
 });
-const versionSql = `SELECT v.*, u.login AS changed_by_login FROM test_case_versions v JOIN test_cases c ON c.id=v.case_id
+const versionSql = `SELECT v.*, expand_steps(v.step_list) AS step_list_expanded, u.login AS changed_by_login FROM test_case_versions v JOIN test_cases c ON c.id=v.case_id
   LEFT JOIN users u ON u.id=v.changed_by WHERE c.project_key=$1 AND c.num=$2`;
 
 app.get("/api/projects/:key/cases/:num/versions", auth.requireUser, wrap(async (req, res) => {
@@ -601,7 +606,7 @@ app.post("/api/projects/:key/cases/:num/versions/:v/restore", auth.requireUser, 
 // подсказки языковой модели в формах; запись (черновики бага и кейса) — только тестировщикам, как и сами формы
 app.use("/api/projects/:key/ai", auth.requireUser, require("./assist"));
 app.use("/api/projects/:key", auth.requireUser, require("./runs"), require("./bugs"), require("./comments"), folders.router, caseio.router, autotests.projectRouter, attachments.projectRouter);
-app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
+app.use("/api/projects/:key", auth.requireUser, require("./requirements").router, require("./templates").router, shared.router, plans.router, webhooks.router, trackers.router, ci.router, require("./analytics").router, projectio.projectRouter);
 app.use("/api/tokens", auth.requireUser, autotests.tokenRouter);
 app.use("/api/attachments", auth.requireUser, attachments.fileRouter);
 app.use("/api/admin", auth.requireUser, access.requireAdmin, require("./users"), require("./personal").router, audit.router, trash.adminRouter);

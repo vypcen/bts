@@ -33,7 +33,7 @@ async function runData(key, n) {
   if (!run) throw new HttpError(404, "Прогон не найден");
   const { rows: results } = await pool.query(
     `SELECT c.num, c.title, c.priority, c.kind, rr.result, rr.comment, rr.step_results, rr.executed_at, eu.name AS executor, au.name AS assignee,
-       COALESCE(v.step_list, c.step_list) AS step_list
+       expand_steps(COALESCE(v.step_list, c.step_list)) AS step_list
      FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
      LEFT JOIN test_case_versions v ON v.case_id=c.id AND v.version=rr.case_version
      LEFT JOIN users eu ON eu.id=rr.executed_by LEFT JOIN users au ON au.id=rr.assignee_id
@@ -61,7 +61,7 @@ async function planData(key, n) {
   // последний выполненный результат каждого кейса в прогонах этого плана
   const { rows: results } = await pool.query(
     `SELECT DISTINCT ON (c.id) c.num, c.title, c.priority, c.kind, COALESCE(rr.result, 'untested') AS result, rr.comment, rr.step_results,
-       rr.executed_at, eu.name AS executor, au.name AS assignee, c.step_list, t.num AS run_num
+       rr.executed_at, eu.name AS executor, au.name AS assignee, expand_steps(c.step_list) AS step_list, t.num AS run_num
      FROM run_results rr JOIN test_runs t ON t.id=rr.run_id JOIN test_cases c ON c.id=rr.case_id
      LEFT JOIN users eu ON eu.id=rr.executed_by LEFT JOIN users au ON au.id=rr.assignee_id
      WHERE t.plan_id=$1

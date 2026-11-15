@@ -8,13 +8,18 @@ const { wrap, str, num } = require("./util");
 // ---------- шаги ----------
 const MAX_STEPS = 200;
 
-// [{action, expected, data}] из того, что прислал клиент; пустые шаги отбрасываются
+// [{action, expected, data}] из того, что прислал клиент; пустые шаги отбрасываются.
+// {shared: id} — ссылка на общие шаги (server/shared.js), сохраняется как есть. Раскрытые шаги блока
+// (с полем shared и без признака ссылки) приходить не должны — их отбрасываем, чтобы не задвоить блок
 function normalizeSteps(list) {
   if (!Array.isArray(list)) return null;
   return list
     .map((s) => (typeof s === "string" ? { action: s } : s && typeof s === "object" ? s : {}))
-    .map((s) => ({ action: str(s.action, 2000), expected: str(s.expected, 2000), data: str(s.data, 2000) }))
-    .filter((s) => s.action || s.expected)
+    .filter((s) => !(s.shared && (s.action !== undefined || s.sharedTitle !== undefined) && !s.ref))
+    .map((s) => (s.shared && Number.isInteger(Number(s.shared)) && Number(s.shared) > 0
+      ? { shared: Number(s.shared) }
+      : { action: str(s.action, 2000), expected: str(s.expected, 2000), data: str(s.data, 2000) }))
+    .filter((s) => s.shared || s.action || s.expected)
     .slice(0, MAX_STEPS);
 }
 
@@ -25,7 +30,7 @@ function stepsFromText(text, prev = []) {
   return lines.map((action, i) => ({ action, expected: prev[i]?.action === action ? prev[i].expected : "", data: prev[i]?.action === action ? prev[i].data : "" }));
 }
 
-const stepsText = (list) => list.map((s) => s.action.replace(/\s*\n\s*/g, " ")).join("\n");
+const stepsText = (list) => list.map((s) => (s.shared ? "[общие шаги]" : s.action.replace(/\s*\n\s*/g, " "))).join("\n");
 
 // ---------- теги ----------
 const MAX_TAGS = 20;

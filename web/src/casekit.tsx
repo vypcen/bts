@@ -1,7 +1,7 @@
 // Общие части модели кейса и бага: структурные шаги, теги, пользовательские поля
 import { useState, type KeyboardEvent } from "react";
-import { useData } from "./store";
-import type { CustomField, FieldValue, FieldValues, Step } from "./types";
+import { useData, useLoad } from "./store";
+import type { CustomField, FieldValue, FieldValues, SharedStep, Step } from "./types";
 import { useNames } from "./ui";
 
 // ---------- шаги ----------
@@ -10,8 +10,28 @@ export const emptyStep = (): Step => ({ action: "", expected: "", data: "" });
 export const stepsOf = (c: { stepList?: Step[]; steps?: string }): Step[] =>
   c.stepList?.length ? c.stepList : (c.steps || "").split("\n").filter((l) => l.trim()).map((action) => ({ ...emptyStep(), action }));
 
-export function StepsEditor({ value, onChange }: { value: Step[]; onChange: (v: Step[]) => void }) {
-  const rows = value.length ? value : [emptyStep()];
+// Общие шаги проекта (для вставки в кейс)
+export function useSharedSteps(pid: string): SharedStep[] {
+  const { value } = useLoad<{ items: SharedStep[] }>(`/api/projects/${encodeURIComponent(pid)}/shared-steps`);
+  return value?.items || [];
+}
+
+// ссылка на общие шаги в редакторе: {shared: id} без текста
+export const isRef = (s: Partial<Step>) => Boolean(s.shared) && !s.action && !s.expected;
+
+export function StepsEditor({ value, onChange, shared = [] }: { value: Step[]; onChange: (v: Step[]) => void; shared?: SharedStep[] }) {
+  // шаги из шаблона или ссылки могут прийти без части полей
+  const rows = (value.length ? value : [emptyStep()]).map((s) => ({ ...emptyStep(), ...s }));
+  const [insert, setInsert] = useState("");
+  const blockOf = (id?: number) => shared.find((b) => b.id === id);
+  // номера шагов как при выполнении: блок занимает столько номеров, сколько в нём шагов
+  const numbers: string[] = [];
+  let n = 1;
+  for (const s of rows) {
+    const len = isRef(s) ? blockOf(s.shared)?.stepList.length || 0 : 1;
+    numbers.push(len > 1 ? `${n}–${n + len - 1}` : String(n));
+    n += len;
+  }
   const set = (i: number, k: keyof Step, v: string) => onChange(rows.map((s, n) => (n === i ? { ...s, [k]: v } : s)));
   const move = (i: number, d: number) => {
     const next = [...rows];
@@ -27,9 +47,28 @@ export function StepsEditor({ value, onChange }: { value: Step[]; onChange: (v: 
   };
   return (
     <div className="steps-editor">
-      {rows.map((s, i) => (
+      {rows.map((s, i) => isRef(s) ? (
+        <div className="step-row shared-ref" key={i}>
+          <span className="step-n" title="Общие шаги">{numbers[i]}</span>
+          <div className="step-cells">
+            <b>Общие шаги: {blockOf(s.shared)?.title || "блок удалён"}</b>
+            <span className="small muted">{blockOf(s.shared) ? `${blockOf(s.shared)!.stepList.length} шаг. — меняются в «Общих шагах» и сразу во всех кейсах` : ""}</span>
+          </div>
+          <div className="step-acts">
+            <button type="button" className="btn ghost sm" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Блок ${i + 1} выше`}>↑</button>
+            <button type="button" className="btn ghost sm" disabled={i === rows.length - 1} onClick={() => move(i, 1)} aria-label={`Блок ${i + 1} ниже`}>↓</button>
+            {blockOf(s.shared) && (
+              <button type="button" className="btn ghost sm" title="Заменить ссылку копией шагов — их можно будет менять только в этом кейсе"
+                onClick={() => onChange(rows.flatMap((x, n) => (n === i ? blockOf(s.shared)!.stepList.map((st) => ({ action: st.action, expected: st.expected, data: st.data || "" })) : [x])))}>
+                Развернуть
+              </button>
+            )}
+            <button type="button" className="btn ghost sm" onClick={() => onChange(rows.filter((_, n) => n !== i))} aria-label={`Убрать блок ${i + 1}`}>✕</button>
+          </div>
+        </div>
+      ) : (
         <div className="step-row" key={i}>
-          <span className="step-n">{i + 1}</span>
+          <span className="step-n">{numbers[i]}</span>
           <div className="step-cells">
             <textarea className="input" rows={1} aria-label={`Шаг ${i + 1}: действие`} placeholder="Действие" value={s.action}
               onChange={(e) => set(i, "action", e.target.value)} onKeyDown={onKey(i)} />
@@ -45,7 +84,23 @@ export function StepsEditor({ value, onChange }: { value: Step[]; onChange: (v: 
           </div>
         </div>
       ))}
-      <button type="button" className="btn sm" onClick={() => onChange([...rows, emptyStep()])}>+ Шаг</button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button type="button" className="btn sm" onClick={() => onChange([...rows, emptyStep()])}>+ Шаг</button>
+        {shared.length > 0 && (
+          <select className="input" style={{ width: "auto" }} aria-label="Вставить общие шаги" value={insert} onChange={(e) => {
+            const id = Number(e.target.value);
+            setInsert("");
+            if (!id) return;
+            // пустую последнюю строку заменяем блоком
+            const last = rows[rows.length - 1];
+            const base = last && !isRef(last) && !last.action.trim() && !last.expected.trim() ? rows.slice(0, -1) : rows;
+            onChange([...base, { action: "", expected: "", data: "", shared: id }]);
+          }}>
+            <option value="">+ Общие шаги…</option>
+            {shared.map((b) => <option key={b.id} value={b.id}>{b.title} ({b.stepList.length})</option>)}
+          </select>
+        )}
+      </div>
     </div>
   );
 }
@@ -57,6 +112,7 @@ export function StepsView({ steps, render }: { steps: Step[]; render?: (s: Step,
     <ol className="steps-view">
       {steps.map((s, i) => (
         <li key={i}>
+          {s.sharedTitle && (i === 0 || steps[i - 1].shared !== s.shared) && <div className="shared-label small">⧉ Общие шаги: {s.sharedTitle}</div>}
           <div className="step-main">
             <div>{s.action}</div>
             {s.data && <div className="small"><span className="muted">Данные:</span> <span className="mono">{s.data}</span></div>}

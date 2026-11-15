@@ -300,3 +300,28 @@ test("шаблоны: шаблон по умолчанию заполняет н
   expect(items[0].tags).toContain("e2e-шаблон");
   await page.request.delete(`/api/projects/LK/templates/${(await (await page.request.get("/api/projects/LK/templates?kind=case")).json()).templates.find((t) => t.name === "E2E шаблон").id}`, { data: {} });
 });
+
+test("общие шаги: создать блок, вставить в кейс, увидеть раскрытые шаги", async ({ page }) => {
+  await login(page);
+  await page.goto("/#/p/LK/cases");
+  await page.getByRole("button", { name: "Общие шаги" }).click();
+  await page.locator(".modal").getByRole("button", { name: "+ Блок" }).click();
+  const f = page.locator("#sharedForm");
+  await f.getByLabel("Название *").fill("E2E вход");
+  await f.getByLabel("Шаг 1: действие").fill("Открыть вход");
+  await f.getByLabel("Шаг 1: ожидаемый результат").fill("Форма входа");
+  await f.getByRole("button", { name: "Создать" }).click();
+  await expect(page.locator(".modal").getByText("E2E вход")).toBeVisible();
+  await page.locator(".modal").getByRole("button", { name: "Закрыть" }).click();
+  await page.getByRole("button", { name: "+ Тест-кейс" }).click();
+  const form = page.locator("aside.drawer");
+  await form.getByLabel("Название *").fill("Кейс с общими шагами");
+  await form.getByLabel("Вставить общие шаги").selectOption({ label: "E2E вход (1)" });
+  await expect(form.getByText("Общие шаги: E2E вход")).toBeVisible();
+  await form.getByRole("button", { name: "+ Шаг" }).click();
+  await form.getByLabel("Шаг 2: действие").fill("Открыть профиль");
+  await form.getByRole("button", { name: "Создать" }).click();
+  await expect(page.locator("aside.drawer").getByText("⧉ Общие шаги: E2E вход")).toBeVisible();
+  await expect(page.locator("aside.drawer").getByText("Открыть вход")).toBeVisible();
+  await expect(page.locator("aside.drawer").getByText("Открыть профиль")).toBeVisible();
+});

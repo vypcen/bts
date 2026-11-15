@@ -150,7 +150,7 @@ router.patch("/runs/:num/results/:case", wrap(async (req, res) => {
   if (run.state !== "open") return res.status(409).json({ error: "Прогон закрыт. Откройте его, чтобы менять результаты" });
   const { rows } = await pool.query(
     `SELECT rr.id, rr.result, rr.comment, rr.items, rr.step_results, rr.assignee_id, c.kind, c.steps,
-       COALESCE(v.step_list, c.step_list) AS step_list
+       expand_steps(COALESCE(v.step_list, c.step_list)) AS step_list
      FROM run_results rr JOIN test_cases c ON c.id=rr.case_id
      LEFT JOIN test_case_versions v ON v.case_id=c.id AND v.version=rr.case_version
      WHERE rr.run_id=$1 AND c.num=$2`,

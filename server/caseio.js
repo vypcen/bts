@@ -156,7 +156,7 @@ router.get("/cases/export", wrap(async (req, res) => {
   } else {
     const sel = String(req.query.folder || "all");
     const { rows: cases } = await pool.query(
-      "SELECT num, kind, folder_id, title, priority, status, preconditions, steps, expected, step_list, tags FROM test_cases WHERE project_key=$1 ORDER BY num", [key]
+      "SELECT num, kind, folder_id, title, priority, status, preconditions, steps, expected, expand_steps(step_list) AS step_list, tags FROM test_cases WHERE project_key=$1 ORDER BY num", [key]
     );
     // папка вместе со всеми вложенными
     const inside = (id) => {

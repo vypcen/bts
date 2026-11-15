@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { AI_NOTE, AiBar, useAi, useAiReady } from "../ai";
-import { emptyStep, FieldsEditor, FieldsView, missingRequired, StepsEditor, StepsView, stepsOf, TagInput, Tags, useFields, useProjectTags } from "../casekit";
+import { emptyStep, isRef, useSharedSteps, FieldsEditor, FieldsView, missingRequired, StepsEditor, StepsView, stepsOf, TagInput, Tags, useFields, useProjectTags } from "../casekit";
 import { api, paths } from "../api";
 import { checklistItems, doneCount, itemsWord } from "../checklist";
 import { BUG_STATUSES, CASE_STATUSES, find, isOpenBug, PRIORITIES, RESULTS } from "../labels";
@@ -10,6 +10,7 @@ import { useCan, useData, useLoad, useStore } from "../store";
 import type { CaseKind, CaseVersion, Project, Result, ResultValue, TestCase } from "../types";
 import { CaseRequirements } from "./Requirements";
 import { SaveAsTemplate, TemplatePicker } from "./Templates";
+import { SharedStepsModal } from "./SharedSteps";
 import { CommentCount, Confirm, Drawer, Empty, fmt, FullCase, Modal, PagedRows, Pill, Prio, ResultPill, TextBlock, useNames, Who } from "../ui";
 import { BugEditor, draftFromCase, type BugDraft } from "./Bugs";
 import { ImportModal } from "./CaseImport";
@@ -43,6 +44,7 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [moveTo, setMoveTo] = useState("");
   const [bulk, setBulk] = useState<"edit" | "delete" | null>(null);
+  const [sharedOpen, setSharedOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const { write, toast } = useStore();
   const canEdit = useCan("cases.edit");
@@ -101,9 +103,11 @@ export function CasesTab({ project, openNum }: { project: Project; openNum?: num
           <a className="btn" href={`${paths.casesExport(p)}?folder=${sel}`} style={{ textDecoration: "none" }}
             title={sel === "all" ? "Все кейсы проекта в CSV" : "Кейсы выбранной папки в CSV"}>Экспорт</a>
         )}
+        <button className="btn" onClick={() => setSharedOpen(true)} title="Блоки шагов, которые повторяются в разных кейсах">Общие шаги</button>
         {canEdit && <button className="btn" onClick={() => setImporting(true)}>Импорт</button>}
         {canEdit && <button className="btn primary" onClick={() => setEditing("case")}>+ Тест-кейс</button>}
       </div>
+      {sharedOpen && <SharedStepsModal pid={p} onClose={() => setSharedOpen(false)} />}
       {bulk === "edit" && <BulkEditModal pid={p} nums={shown.map((c) => c.num)} tags={projectTags} onClose={(done) => { setBulk(null); if (done) setPicked(new Set()); }} />}
       {bulk === "delete" && (
         <Confirm
@@ -465,10 +469,11 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
   const [f, setF] = useState({
     kind, title: c?.title || "", priority: c?.priority || "medium", status: c?.status || "draft",
     pre: c?.pre || "", steps: c?.steps || "", expected: c?.expected || "", folder: String((c ? c.folder : folder) ?? ""),
-    stepList: c ? stepsOf(c) : [emptyStep()], tags: c?.tags || [], fields: c?.fields || {},
+    stepList: c ? c.stepSource || stepsOf(c) : [emptyStep()], tags: c?.tags || [], fields: c?.fields || {},
   });
   const fieldDefs = useFields("case");
   const tagSuggestions = useProjectTags("cases");
+  const sharedSteps = useSharedSteps(pid);
   const [err, setErr] = useState("");
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const list = f.kind === "checklist";
@@ -494,7 +499,7 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
     if (missing) return setErr(missing);
     // у тест-кейса шаги уходят структурой, у чек-листа — пункты текстом
     const { stepList, ...rest } = f;
-    const body = { ...rest, ...(list ? {} : { stepList: stepList.filter((s) => s.action.trim() || s.expected.trim()) }), folder: f.folder ? Number(f.folder) : null };
+    const body = { ...rest, ...(list ? {} : { stepList: stepList.filter((s) => isRef(s) || s.action.trim() || s.expected.trim()).map((s) => (isRef(s) ? { shared: s.shared } : s)) }), folder: f.folder ? Number(f.folder) : null };
     if (c) {
       // baseVersion: если кейс успели поменять, сервер не даст затереть чужую правку
       if (await write(() => api("PATCH", paths.testCase(pid, c.num), { ...body, baseVersion: c.version }), "Изменения сохранены")) {
@@ -518,7 +523,7 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
         <button className="btn primary" type="submit" form="caseForm">{c ? "Сохранить" : "Создать"}</button>
         <button className="btn" type="button" onClick={onClose}>Отмена</button>
         <div className="spacer" />
-        <SaveAsTemplate pid={pid} kind="case" data={{ priority: f.priority, status: f.status, pre: f.pre, expected: f.expected, tags: f.tags, fields: f.fields, ...(list ? { steps: f.steps } : { stepList: f.stepList }) }} />
+        <SaveAsTemplate pid={pid} kind="case" data={{ priority: f.priority, status: f.status, pre: f.pre, expected: f.expected, tags: f.tags, fields: f.fields, ...(list ? { steps: f.steps } : { stepList: f.stepList.map((st) => (isRef(st) ? { shared: st.shared } : st)) }) }} />
       </>}>
       <form id="caseForm" onSubmit={submit} noValidate>
         <div className="field"><label htmlFor="c-title">Название *</label><input className="input" id="c-title" value={f.title} onChange={set("title")}
@@ -552,7 +557,7 @@ function CaseEditor({ pid, c, kind, folder, onClose }: { pid: string; c?: TestCa
           <>
             <div className="field"><label htmlFor="c-pre">Предусловия</label><textarea className="input" id="c-pre" rows={2} value={f.pre} onChange={set("pre")} /></div>
             <div className="field"><span className="label-like">Шаги</span>
-              <StepsEditor value={f.stepList} onChange={(stepList) => setF({ ...f, stepList })} />
+              <StepsEditor value={f.stepList} onChange={(stepList) => setF({ ...f, stepList })} shared={sharedSteps} />
               <span className="muted" style={{ fontSize: 12 }}>Enter в последнем шаге добавляет следующий. В прогоне каждый шаг отмечается отдельно</span></div>
             <div className="field"><label htmlFor="c-exp">Итоговый ожидаемый результат</label><textarea className="input" id="c-exp" rows={2} value={f.expected} onChange={set("expected")} /></div>
           </>

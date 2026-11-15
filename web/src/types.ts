@@ -97,6 +97,7 @@ export interface TestCase {
   // В состоянии проекта у тест-кейса нет текстов (pre, steps, expected): light — нужно взять кейс целиком (useFullCase)
   light?: boolean;
   stepCount?: number; // число шагов, когда текстов нет
+  stepSource?: Step[]; // шаги со ссылками на общие шаги — для редактора
 }
 
 export interface Run {
@@ -121,7 +122,12 @@ export interface Step {
   action: string;
   expected: string;
   data: string; // тестовые данные шага
+  // общие шаги: в редакторе — ссылка {shared: id} без текста; в раскрытом виде — id и название блока
+  shared?: number;
+  sharedTitle?: string;
 }
+
+export interface SharedStep { id: number; num: number; title: string; stepList: Step[]; usedIn?: number; updatedBy: string | null; updated: number }
 
 export interface StepResult {
   result: ResultValue;

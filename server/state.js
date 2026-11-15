@@ -13,13 +13,15 @@ const roles = require("./roles");
 const { wrap, num, ms } = require("./util");
 
 const caseSql = `SELECT c.project_key, c.num, c.kind, c.checked, c.folder_id, c.title, c.priority, c.status, c.preconditions, c.steps, c.expected, c.version,
-  c.step_list, c.tags, c.fields,
+  expand_steps(c.step_list) AS step_list, c.step_list AS step_source, c.tags, c.fields,
   EXISTS (SELECT 1 FROM auto_tests a WHERE a.case_id=c.id) AS automated,
   cu.login AS created_by, uu.login AS updated_by, c.created_at, c.updated_at
   FROM test_cases c LEFT JOIN users cu ON cu.id=c.created_by LEFT JOIN users uu ON uu.id=c.updated_by`;
 const toCase = (r) => ({
   id: `${r.project_key}-${r.num}`, pid: r.project_key, num: r.num, kind: r.kind, checked: r.checked, folder: r.folder_id, title: r.title, priority: r.priority, status: r.status,
   pre: r.preconditions, steps: r.steps, expected: r.expected, stepList: r.step_list, tags: r.tags, fields: r.fields,
+  // шаги для редактора: со ссылками на общие шаги вместо их содержимого
+  stepSource: r.step_source && r.step_source.some((s) => s.shared) ? r.step_source : undefined,
   createdBy: r.created_by, updatedBy: r.updated_by, version: r.version, automated: r.automated,
   created: r.created_at.getTime(), updated: r.updated_at.getTime(),
 });

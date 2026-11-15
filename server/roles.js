@@ -69,6 +69,7 @@ const RULES = [
   [/^\/(bugs|cases)\/\d+\/comments$|^\/comments\/\d+$/, "comments"],
   [/^\/requirements(\/.*)?$/, "requirements.edit"],
   [/^\/templates(\/\d+)?$/, ["cases.edit", "settings"]],
+  [/^\/shared-steps(\/\d+)?$/, "cases.edit"],
   [/^\/plans\/preview$/, ["plans.edit", "runs.manage"]],
   [/^\/plans\/\d+\/runs$/, "runs.manage"],
   [/^\/plans(\/.*)?$/, "plans.edit"],

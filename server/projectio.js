@@ -28,10 +28,11 @@ async function exportProject(key, withFiles) {
   // значения пользовательских полей — по названию поля: id в другой установке будут другими
   const fieldName = new Map(customFields.map((f) => [String(f.id), f.name]));
   const byName = (vals) => Object.fromEntries(Object.entries(vals || {}).filter(([id]) => fieldName.has(id)).map(([id, v]) => [fieldName.get(id), v]));
-  const [requirements, reqCases, templates] = await Promise.all([
+  const [requirements, reqCases, templates, sharedSteps] = await Promise.all([
     q("SELECT r.*, u.login AS cb FROM requirements r LEFT JOIN users u ON u.id=r.created_by WHERE r.project_key=$1 ORDER BY r.num"),
     q("SELECT r.num AS req, c.num FROM requirement_cases rc JOIN requirements r ON r.id=rc.requirement_id JOIN test_cases c ON c.id=rc.case_id WHERE r.project_key=$1"),
     q("SELECT kind, name, data, is_default FROM templates WHERE project_key=$1 ORDER BY id"),
+    q("SELECT id, num, title, step_list FROM shared_steps WHERE project_key=$1 ORDER BY num"),
   ]);
   // в шаблонах пользовательские поля — по названию, как в кейсах
   const tplData = (d) => (d.fields ? { ...d, fields: byName(d.fields) } : d);
@@ -97,6 +98,8 @@ async function exportProject(key, withFiles) {
         expected: v.expected, stepList: v.step_list, tags: v.tags, fields: byName(v.fields), changedBy: v.by, changed: iso(v.changed_at),
       })),
     })),
+    // общие шаги: в кейсах ссылки {shared: id} — при импорте id пересчитываются
+    sharedSteps: sharedSteps.map((s) => ({ id: s.id, num: s.num, title: s.title, stepList: s.step_list })),
     templates: templates.map((t) => ({ kind: t.kind, name: t.name, data: tplData(t.data), isDefault: t.is_default })),
     requirements: requirements.map((r) => ({
       num: r.num, title: r.title, description: r.description, status: r.status, priority: r.priority, extRef: r.ext_ref, url: r.url, tags: r.tags,
@@ -207,7 +210,23 @@ async function importProject(data, { key, name }, user) {
       }
       const fieldsOf = (entity, vals) =>
         Object.fromEntries(Object.entries(vals && typeof vals === "object" ? vals : {}).filter(([n]) => fieldIds[entity].has(n)).map(([n, v]) => [fieldIds[entity].get(n), v]));
-      const stepListOf = (c, kind) => (kind === "checklist" ? [] : casemodel.normalizeSteps(c.stepList) || casemodel.stepsFromText(str(c.steps)));
+      // общие шаги создаются до кейсов: ссылки в кейсах переводятся на новые id
+      const sharedId = new Map();
+      const sharedList = arr(data.sharedSteps);
+      if (sharedList.length) await db.query("UPDATE projects SET shared_seq=$2 WHERE key=$1", [key, sharedList.reduce((m, x) => Math.max(m, num(x.num) || 0), 0)]);
+      for (const s of sharedList) {
+        const steps = (casemodel.normalizeSteps(s.stepList) || []).filter((x) => !x.shared);
+        if (!str(s.title, 300) || !steps.length) continue;
+        const { rows } = await db.query("INSERT INTO shared_steps(project_key, num, title, step_list, created_by, updated_by) VALUES ($1,$2,$3,$4,$5,$5) RETURNING id",
+          [key, num(s.num), str(s.title, 300), JSON.stringify(steps), user.id]);
+        sharedId.set(num(s.id), rows[0].id);
+      }
+      const remapShared = (list) => list.map((x) => (x.shared ? { shared: sharedId.get(num(x.shared)) } : x)).filter((x) => !("shared" in x) || x.shared);
+      const stepListOf = (c, kind) => {
+        if (kind === "checklist") return [];
+        const list = casemodel.normalizeSteps(c.stepList);
+        return list ? remapShared(list) : casemodel.stepsFromText(str(c.steps));
+      };
 
       // кейсы: текущая версия создаётся триггером, прошлые версии — отдельно
       const caseId = new Map();

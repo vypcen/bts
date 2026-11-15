@@ -235,7 +235,7 @@ router.get("/plans/:num/export", wrap(async (req, res) => {
   const key = plan.project_key;
   const list = await planCases(pool, plan);
   const { rows } = await pool.query(
-    `SELECT c.num, c.folder_id, v.version, v.kind, v.title, v.priority, v.status, v.preconditions, v.steps, v.expected, v.step_list, v.tags
+    `SELECT c.num, c.folder_id, v.version, v.kind, v.title, v.priority, v.status, v.preconditions, v.steps, v.expected, expand_steps(v.step_list) AS step_list, v.tags
      FROM unnest($1::int[], $2::int[]) AS x(id, ver) JOIN test_cases c ON c.id=x.id
      JOIN test_case_versions v ON v.case_id=x.id AND v.version=x.ver ORDER BY c.num`,
     [list.map((c) => c.id), list.map((c) => c.version)]

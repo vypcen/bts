@@ -386,3 +386,8 @@ label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;font-
 .menu-list>button,.menu-list>a{all:unset;cursor:pointer;padding:7px 10px;border-radius:4px;font-size:14px;color:var(--fg)}
 .menu-list>button:hover,.menu-list>a:hover{background:var(--sunken)}
 .menu-list>.c-crit{color:var(--crit)}
+
+/* общие шаги */
+.step-row.shared-ref{background:var(--accent-soft);border-radius:var(--r)}
+.step-row.shared-ref .step-cells{display:flex;flex-direction:column;gap:2px;justify-content:center}
+.shared-label{color:var(--accent);font-weight:600;margin:6px 0 2px}
